@@ -16,7 +16,7 @@ BreakBeforeBraces: Attach
 # Argumentos e parâmetros
 AlignAfterOpenBracket: BlockIndent
 BinPackArguments: false
-BinPackParameters: OnePerLine
+BinPackParameters: false
 
 # Evitar blocos compactados
 AllowShortFunctionsOnASingleLine: None
