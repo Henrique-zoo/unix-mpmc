@@ -1,0 +1,36 @@
+
+{
+  // C
+  "[c]": {
+    "editor.defaultFormatter": "ms-vscode.cpptools",
+    "editor.formatOnSave": true,
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true
+  },
+
+  // Reconhecer headers como C
+  "files.associations": {
+    "*.h": "c"
+  },
+
+  // Clang-Format
+  "C_Cpp.formatting": "clangFormat",
+  "C_Cpp.clang_format_style": "file",
+
+  // Makefile
+  "[makefile]": {
+    "editor.defaultFormatter": "tooark.ark-format-makefile",
+    "editor.formatOnSave": true,
+    "editor.insertSpaces": false,
+    "editor.tabSize": 2
+  },
+
+  // Configuração do formatador de Makefile
+  "arkFormatMakefile.indentConditionals": true,
+  "arkFormatMakefile.normalizeRecipePrefix": true,
+  "arkFormatMakefile.alignAssignments": true,
+
+  // Configurações gerais
+  "files.insertFinalNewline": true,
+  "files.trimTrailingWhitespace": true
+}

@@ -1,0 +1,40 @@
+
+BasedOnStyle: LLVM
+
+# Indentação
+IndentWidth: 4
+ContinuationIndentWidth: 4
+UseTab: Never
+TabWidth: 4
+
+# Comprimento das linhas
+ColumnLimit: 100
+
+# Chaves no estilo Rust
+BreakBeforeBraces: Attach
+
+# Argumentos e parâmetros
+AlignAfterOpenBracket: BlockIndent
+BinPackArguments: false
+BinPackParameters: OnePerLine
+
+# Evitar blocos compactados
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+
+# Condicionais e switch
+SpaceBeforeParens: ControlStatements
+IndentCaseLabels: true
+
+# Ponteiros
+PointerAlignment: Right
+DerivePointerAlignment: false
+
+# Includes
+SortIncludes: CaseSensitive
+
+# Alinhamentos
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None

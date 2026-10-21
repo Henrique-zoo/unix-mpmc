@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  formatting:
+    name: C formatting (clang-format 18)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Check C formatting
+        run: |
+          find src include -type f \( -name '*.c' -o -name '*.h' \) -print0 \
+            | xargs -0 -r clang-format-18 --dry-run --Werror
+
+  compilation:
+    name: Compile objects (${{ matrix.mode }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [debug, release]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Show compiler version
+        run: clang-18 --version
+
+      - name: Build modules (C23)
+        run: make MODE=${{ matrix.mode }} CC=clang-18 all
+
+  documentation:
+    name: Generate Doxygen documentation
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Doxygen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y doxygen
+
+      - name: Generate HTML documentation
+        run: |
+          make docs
+          test -f build/docs/html/index.html
+
+      - name: Upload HTML documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: doxygen-html
+          path: build/docs/html/
+          if-no-files-found: error

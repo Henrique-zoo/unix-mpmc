@@ -1,0 +1,18 @@
+# Build artifacts
+/build/
+/mpmc
+
+# Compiled files
+*.o
+*.d
+
+# Debugging
+core
+core.*
+
+# Editor files
+.vscode/*
+!.vscode/settings.json
+.idea/
+*.swp
+.cache
