@@ -8,6 +8,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include "mpmc/ipc/transport.h"
 #include "mpmc/status.h"
 
@@ -26,10 +27,10 @@ typedef enum {
 
 /** @brief Dados imutáveis de uma operação de produção. */
 typedef struct {
-    size_t producer_id;      /**< 1..p, ou 0 para distribuição striped. */
-    unsigned message_count; /**< Quantidade de mensagens, 1..1024. */
+    size_t producer_id;           /**< 1..p, ou 0 para distribuição striped. */
+    unsigned message_count;       /**< Quantidade de mensagens, 1..1024. */
     producer_ack_mode_t ack_mode; /**< Com ou sem espera por confirmações. */
-    uint64_t operation_id;  /**< Identificador único gerado no supervisor. */
+    uint64_t operation_id;        /**< Identificador único gerado no supervisor. */
 } producer_job_t;
 
 /**

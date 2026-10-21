@@ -34,11 +34,11 @@
  * inclusive em comandos striped. `sent_at` usa CLOCK_REALTIME.
  */
 typedef struct {
-    pid_t sender_pid;         /**< PID real do processo produtor que enviou a mensagem. */
-    uint32_t sequence;        /**< Sequência do processo produtor, iniciando em 1. */
-    struct timespec sent_at;  /**< Instante do envio (relógio de calendário). */
-    uint64_t operation_id;    /**< Identificador único do comando atribuído pelo supervisor. */
-    bool ack_required;        /**< Se o consumo deve confirmar a entrega ao produtor. */
+    pid_t sender_pid;        /**< PID real do processo produtor que enviou a mensagem. */
+    uint32_t sequence;       /**< Sequência do processo produtor, iniciando em 1. */
+    struct timespec sent_at; /**< Instante do envio (relógio de calendário). */
+    uint64_t operation_id;   /**< Identificador único do comando atribuído pelo supervisor. */
+    bool ack_required;       /**< Se o consumo deve confirmar a entrega ao produtor. */
 } message_t;
 
 /** @} */

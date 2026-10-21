@@ -16,15 +16,15 @@
 
 /** @brief Resultado tipado das operações do projeto. */
 typedef enum {
-    MPMC_OK = 0,              /**< Operação concluída normalmente. */
-    MPMC_ERR_INVALID_ARG,     /**< Argumento ou comando malformado. */
-    MPMC_ERR_INVALID_INDEX,   /**< Estrutura lógica inexistente. */
-    MPMC_ERR_WOULD_BLOCK,     /**< Sem mensagem no recebimento não bloqueante. */
-    MPMC_ERR_NO_SPACE,        /**< Falta de capacidade em operação não bloqueante. */
-    MPMC_ERR_INTERRUPTED,     /**< Operação interrompida por sinal/cancelamento. */
-    MPMC_ERR_SHUTDOWN,        /**< Aplicação está encerrando. */
-    MPMC_ERR_SYS,             /**< Falha em chamada de sistema; consultar errno. */
-    MPMC_ERR_STATE           /**< Violação de estado ou contrato interno. */
+    MPMC_OK = 0,            /**< Operação concluída normalmente. */
+    MPMC_ERR_INVALID_ARG,   /**< Argumento ou comando malformado. */
+    MPMC_ERR_INVALID_INDEX, /**< Estrutura lógica inexistente. */
+    MPMC_ERR_WOULD_BLOCK,   /**< Sem mensagem no recebimento não bloqueante. */
+    MPMC_ERR_NO_SPACE,      /**< Falta de capacidade em operação não bloqueante. */
+    MPMC_ERR_INTERRUPTED,   /**< Operação interrompida por sinal/cancelamento. */
+    MPMC_ERR_SHUTDOWN,      /**< Aplicação está encerrando. */
+    MPMC_ERR_SYS,           /**< Falha em chamada de sistema; consultar errno. */
+    MPMC_ERR_STATE          /**< Violação de estado ou contrato interno. */
 } mpmc_status_t;
 
 /**

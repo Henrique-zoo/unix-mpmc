@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
 #include "mpmc/message.h"
 #include "mpmc/status.h"
 
@@ -49,11 +50,8 @@ mpmc_status_t msg_backend_create(msg_backend_t **out, size_t producer_count);
  * @warning Um ACK por mensagem em fila auxiliar limitada pode causar
  * deadlock por contrapressão. Ver docs/protocol.md para mitigação exigida.
  */
-mpmc_status_t msg_backend_send(
-    msg_backend_t *backend,
-    size_t producer_id,
-    const message_t *message
-);
+mpmc_status_t
+msg_backend_send(msg_backend_t *backend, size_t producer_id, const message_t *message);
 
 /**
  * @brief Retira uma mensagem, contabiliza e encaminha seu ACK se necessário.
@@ -68,12 +66,8 @@ mpmc_status_t msg_backend_send(
  * @details A remoção de dados e a publicação de eventos/ACKs não são uma
  * transação atômica de kernel; especificar recuperação antes de implementar.
  */
-mpmc_status_t msg_backend_receive(
-    msg_backend_t *backend,
-    size_t producer_id,
-    message_t *out,
-    bool blocking
-);
+mpmc_status_t
+msg_backend_receive(msg_backend_t *backend, size_t producer_id, message_t *out, bool blocking);
 
 /**
  * @brief Prepara rastreamento de ACK por operação produtora.
@@ -84,7 +78,8 @@ mpmc_status_t msg_backend_receive(
  * @retval MPMC_ERR_SYS Falha em msgget() ou registro de controle.
  * @note O canal deve distinguir a operação, e não apenas o índice da fila.
  */
-mpmc_status_t msg_backend_ack_begin(msg_backend_t *backend, uint64_t operation_id, unsigned expected);
+mpmc_status_t
+msg_backend_ack_begin(msg_backend_t *backend, uint64_t operation_id, unsigned expected);
 
 /**
  * @brief Aguarda ACKs de todas as mensagens da operação indicada.
@@ -127,11 +122,8 @@ mpmc_status_t msg_backend_poll_events(msg_backend_t *backend);
  * @retval MPMC_ERR_SYS Erro ao consultar estado interno.
  * @pre Chamar msg_backend_poll_events() antes do relatório final.
  */
-mpmc_status_t msg_backend_consumed_count(
-    msg_backend_t *backend,
-    size_t producer_id,
-    uint64_t *out_count
-);
+mpmc_status_t
+msg_backend_consumed_count(msg_backend_t *backend, size_t producer_id, uint64_t *out_count);
 
 /**
  * @brief Libera somente o estado local do processo filho.

@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <sys/types.h>
+
 #include "mpmc/status.h"
 
 /** @ingroup sysv_primitives
@@ -38,13 +39,7 @@ mpmc_status_t sysv_msg_create(int *out_msqid);
  * @details Wrapper monta internamente o envelope `{long mtype; unsigned char[]}`
  * necessário para a chamada de sistema. Não pode serializar ponteiros locais.
  */
-mpmc_status_t sysv_msg_send(
-    int msqid,
-    long type,
-    const void *payload,
-    size_t size,
-    bool nowait
-);
+mpmc_status_t sysv_msg_send(int msqid, long type, const void *payload, size_t size, bool nowait);
 
 /**
  * @brief Recebe o corpo de uma mensagem da fila.
@@ -63,12 +58,7 @@ mpmc_status_t sysv_msg_send(
  * @note O valor retornado em out_size exclui `long mtype`.
  */
 mpmc_status_t sysv_msg_receive(
-    int msqid,
-    long desired_type,
-    void *out_payload,
-    size_t capacity,
-    bool nowait,
-    ssize_t *out_size
+    int msqid, long desired_type, void *out_payload, size_t capacity, bool nowait, ssize_t *out_size
 );
 
 /**

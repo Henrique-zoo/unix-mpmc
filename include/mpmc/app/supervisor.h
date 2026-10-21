@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+
 #include "mpmc/app/command.h"
 #include "mpmc/ipc/transport.h"
 #include "mpmc/status.h"

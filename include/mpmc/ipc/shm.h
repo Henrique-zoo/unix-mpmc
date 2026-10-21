@@ -7,6 +7,7 @@
 #define MPMC_IPC_SHM_H
 
 #include <stddef.h>
+
 #include "mpmc/status.h"
 
 /**

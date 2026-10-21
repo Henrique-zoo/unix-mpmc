@@ -7,6 +7,7 @@
 #define MPMC_IPC_SEM_H
 
 #include <stdbool.h>
+
 #include "mpmc/status.h"
 
 /** @ingroup sysv_primitives
@@ -49,12 +50,7 @@ mpmc_status_t sysv_sem_set(int semid, unsigned index, unsigned value);
  * @warning Não aplicar SEM_UNDO indiscriminadamente em semáforos de contagem
  * dos itens/vagas de um produtor-consumidor; a recuperação exige protocolo.
  */
-mpmc_status_t sysv_sem_change(
-    int semid,
-    unsigned index,
-    short delta,
-    bool nowait
-);
+mpmc_status_t sysv_sem_change(int semid, unsigned index, short delta, bool nowait);
 
 /**
  * @brief Remove um conjunto de semáforos com semctl(IPC_RMID).

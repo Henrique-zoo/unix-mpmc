@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
 #include "mpmc/message.h"
 #include "mpmc/status.h"
 
@@ -67,11 +68,7 @@ size_t ipc_producer_count(const ipc_context_t *context);
  * são independentes da conclusão desta função: envio != consumo.
  * @pre message->ack_required exige um ipc_ack_begin() válido para operation_id.
  */
-mpmc_status_t ipc_send(
-    ipc_context_t *context,
-    size_t producer_id,
-    const message_t *message
-);
+mpmc_status_t ipc_send(ipc_context_t *context, size_t producer_id, const message_t *message);
 
 /**
  * @brief Retira uma única mensagem de uma estrutura lógica.
@@ -89,12 +86,8 @@ mpmc_status_t ipc_send(
  * @warning A contagem e a publicação do ACK exigem desenho à prova de falhas
  * para evitar consumo contado mas não confirmado.
  */
-mpmc_status_t ipc_receive(
-    ipc_context_t *context,
-    size_t producer_id,
-    message_t *out,
-    bool blocking
-);
+mpmc_status_t
+ipc_receive(ipc_context_t *context, size_t producer_id, message_t *out, bool blocking);
 
 /**
  * @brief Prepara o contexto de ACK de uma operação produtora.
@@ -106,11 +99,7 @@ mpmc_status_t ipc_receive(
  * @retval MPMC_ERR_SYS Falha de alocação de recurso de confirmação.
  * @pre Deve ser chamada ANTES do primeiro envio marcado com ack_required.
  */
-mpmc_status_t ipc_ack_begin(
-    ipc_context_t *context,
-    uint64_t operation_id,
-    unsigned expected
-);
+mpmc_status_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsigned expected);
 
 /**
  * @brief Espera o consumo efetivo de todas as mensagens de uma operação.
@@ -158,11 +147,7 @@ mpmc_status_t ipc_poll_events(ipc_context_t *context);
  * @retval MPMC_ERR_SYS Falha ao ler/obter contador.
  * @pre No modo 2, chamar ipc_poll_events() antes de obter números finais.
  */
-mpmc_status_t ipc_consumed_count(
-    ipc_context_t *context,
-    size_t producer_id,
-    uint64_t *out_count
-);
+mpmc_status_t ipc_consumed_count(ipc_context_t *context, size_t producer_id, uint64_t *out_count);
 
 /**
  * @brief Libera vínculos e estruturas locais do contexto em um worker.

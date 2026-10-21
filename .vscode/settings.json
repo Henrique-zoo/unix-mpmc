@@ -1,16 +1,15 @@
-
 {
-  // C
-  "[c]": {
-    "editor.defaultFormatter": "ms-vscode.cpptools",
-    "editor.formatOnSave": true,
-    "editor.tabSize": 4,
-    "editor.insertSpaces": true
-  },
-
   // Reconhecer headers como C
   "files.associations": {
     "*.h": "c"
+  },
+
+  // C
+  "[c]": {
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+    "editor.formatOnSave": true,
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true
   },
 
   // Clang-Format
@@ -32,5 +31,20 @@
 
   // Configurações gerais
   "files.insertFinalNewline": true,
-  "files.trimTrailingWhitespace": true
+  "files.trimTrailingWhitespace": true,
+
+  "json.format.keepLines": true,
+
+  "[json][jsonc]": {
+    "editor.detectIndentation": false,
+    "editor.tabSize": 2,
+    "editor.indentSize": 2,
+    "editor.insertSpaces": true,
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "vscode.json-language-features",
+    "editor.quickSuggestions": {
+      "strings": true
+    },
+    "editor.suggest.insertMode": "replace"
+  }
 }

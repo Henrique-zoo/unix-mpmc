@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
 #include "mpmc/message.h"
 #include "mpmc/status.h"
 
@@ -50,11 +51,8 @@ mpmc_status_t shm_backend_create(shm_backend_t **out, size_t producer_count);
  * @details Reserva `empty`, adquire `mutex`, escreve e atualiza `tail`,
  * solta `mutex` e sinaliza `full`. Não mantém mutex enquanto espera espaço.
  */
-mpmc_status_t shm_backend_send(
-    shm_backend_t *backend,
-    size_t producer_id,
-    const message_t *message
-);
+mpmc_status_t
+shm_backend_send(shm_backend_t *backend, size_t producer_id, const message_t *message);
 
 /**
  * @brief Retira mensagem de um buffer circular.
@@ -70,12 +68,8 @@ mpmc_status_t shm_backend_send(
  * contabiliza, solta mutex, sinaliza `empty`, confirma consumo se solicitado.
  * A confirmação não deve depender de mutex do buffer ainda adquirido.
  */
-mpmc_status_t shm_backend_receive(
-    shm_backend_t *backend,
-    size_t producer_id,
-    message_t *out,
-    bool blocking
-);
+mpmc_status_t
+shm_backend_receive(shm_backend_t *backend, size_t producer_id, message_t *out, bool blocking);
 
 /**
  * @brief Reserva mecanismo de confirmação para uma operação produtora.
@@ -87,7 +81,8 @@ mpmc_status_t shm_backend_receive(
  * @note Consumidores podem precisar de um identificador de ACK no envelope
  * físico do buffer; a codificação é detalhe privado deste backend.
  */
-mpmc_status_t shm_backend_ack_begin(shm_backend_t *backend, uint64_t operation_id, unsigned expected);
+mpmc_status_t
+shm_backend_ack_begin(shm_backend_t *backend, uint64_t operation_id, unsigned expected);
 
 /**
  * @brief Aguarda confirmação de todos os consumos de uma operação.
@@ -118,11 +113,8 @@ mpmc_status_t shm_backend_ack_end(shm_backend_t *backend, uint64_t operation_id)
  * @retval MPMC_OK Valor lido de forma consistente.
  * @retval MPMC_ERR_SYS Falha ao obter sincronização.
  */
-mpmc_status_t shm_backend_consumed_count(
-    shm_backend_t *backend,
-    size_t producer_id,
-    uint64_t *out_count
-);
+mpmc_status_t
+shm_backend_consumed_count(shm_backend_t *backend, size_t producer_id, uint64_t *out_count);
 
 /**
  * @brief Desanexa mapeamentos herdados pelo processo filho.

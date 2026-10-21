@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+
 #include "mpmc/status.h"
 
 /**
@@ -20,9 +21,9 @@
 
 /** @brief Tipo sintático do comando interativo. */
 typedef enum {
-    COMMAND_PRODUCE,  /**< `produz i n ack` — cria trabalho de produção. */
-    COMMAND_CONSUME,  /**< `consome i n ack` — cria trabalho de consumo. */
-    COMMAND_SHUTDOWN  /**< `shutdown` — termina a aplicação. */
+    COMMAND_PRODUCE, /**< `produz i n ack` — cria trabalho de produção. */
+    COMMAND_CONSUME, /**< `consome i n ack` — cria trabalho de consumo. */
+    COMMAND_SHUTDOWN /**< `shutdown` — termina a aplicação. */
 } command_kind_t;
 
 /**
@@ -32,11 +33,11 @@ typedef enum {
  * o supervisor sempre cria um processo filho para os dois tipos de trabalho.
  */
 typedef struct {
-    command_kind_t kind;   /**< Operação reconhecida. */
-    size_t producer_id;    /**< Índice 1..p; 0 permitido apenas para COMMAND_PRODUCE. */
-    unsigned message_count;/**< Quantidade de mensagens, 1..1024. */
-    unsigned ack_mode;     /**< 1 ou 2; semântica depende do tipo do comando. */
-    bool background_token; /**< Indica presença de '&' ao fim da linha. */
+    command_kind_t kind;    /**< Operação reconhecida. */
+    size_t producer_id;     /**< Índice 1..p; 0 permitido apenas para COMMAND_PRODUCE. */
+    unsigned message_count; /**< Quantidade de mensagens, 1..1024. */
+    unsigned ack_mode;      /**< 1 ou 2; semântica depende do tipo do comando. */
+    bool background_token;  /**< Indica presença de '&' ao fim da linha. */
 } command_t;
 
 /**
