@@ -43,6 +43,7 @@ typedef struct {
 /**
  * @brief Converte uma linha de entrada em um comando normalizado.
  * @param line Linha terminada em NUL, possivelmente com espaços e '\n'.
+ * @param producers Número de produtores disponíveis.
  * @param out Destino do comando; só é válido quando retornar MPMC_OK.
  * @retval MPMC_OK Sintaxe reconhecida e tipos numéricos convertidos.
  * @retval MPMC_ERR_INVALID_ARG Comando desconhecido, tokens inesperados,
@@ -52,7 +53,7 @@ typedef struct {
  * @par Concorrência
  * Reentrante, sem estado global.
  */
-mpmc_status_t command_parse(const char *line, command_t *out);
+mpmc_status_t command_parse(const char *line, unsigned producers, command_t *out);
 
 /**
  * @brief Valida as regras semânticas de um comando.
