@@ -6,8 +6,15 @@
  * @details
  * O parsing está dividido em duas etapas com contratos distintos:
  *
- * - command_parse(line, out)               — sintaxe
- * - command_validate(&cmd, producer_count) — semântica
+ * - command_parse(line, out)                — sintaxe
+ * - command_validate(&cmd, producer_count)  — semântica
+ *
+ * Os testes de overflow distinguem três situações diferentes:
+ *   1. valor que excede uintmax_t             → parse rejeita
+ *   2. valor que cabe em uintmax_t mas não
+ *      no tipo do campo (size_t/unsigned)     → parse rejeita
+ *   3. valor que cabe no campo mas excede
+ *      a faixa normativa (p, 1024, 2)         → validate rejeita
  *
  * Retorna 0 se todos os casos passarem; 1 caso contrário.
  */
@@ -15,6 +22,8 @@
 #include "mpmc/app/command.h"
 #include "mpmc/status.h"
 
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -300,30 +309,27 @@ static void test_ampersand_suffix(void)
     expect_parse_error("produz 1 5 1 &&");
     expect_parse_error("& produz 1 5 1");
 
-    /* '&' não preenche argumento ausente: falta o ack, erro de aridade */
+    /* '&' não preenche argumento ausente: sem o quarto campo o erro é
+     * de aridade, não de índice. */
     expect_parse_error("produz 1 5 &");
 }
 
 /* ------------------------------------------------------------------ */
-/* U08 — overflow numérico (command_parse)                            */
+/* U08 — overflow e limites de tipo (command_parse)                   */
 /* ------------------------------------------------------------------ */
 
 static void test_overflow(void)
 {
     /*
-     * 2^64 - 1: maior uintmax_t. Cabe no tipo, logo é aceito por
-     * command_parse e rejeitado por command_validate contra p.
+     * --- 1. Valores que excedem uintmax_t em qualquer plataforma ---
+     * 2^64 = 18446744073709551616
      */
-    expect_validate_error("produz 18446744073709551615 1 1", 4,
-                          MPMC_ERR_INVALID_INDEX);
-
-    /* 2^64: estoura uintmax_t */
     expect_parse_error("produz 18446744073709551616 1 1");
+    expect_parse_error("produz 1 18446744073709551616 1");
+    expect_parse_error("produz 1 5 18446744073709551616");
 
-    /* 2^64 + 1: regressão — antes fazia wrap e virava índice 1 */
+    /* 2^64 + 1: regressão */
     expect_parse_error("produz 18446744073709551617 1 1");
-
-    /* overflow nos demais campos */
     expect_parse_error("produz 1 18446744073709551617 1");
     expect_parse_error("produz 1 5 18446744073709551617");
 
@@ -331,6 +337,43 @@ static void test_overflow(void)
     expect_parse_error("produz 999999999999999999999999999999 1 1");
     expect_parse_error("produz 1 999999999999999999999999999999 1");
     expect_parse_error("produz 1 5 999999999999999999999999999999");
+
+    /*
+     * --- 2. Valores que cabem em uintmax_t mas não no tipo do campo ---
+     * Guardas de pré-processador mantêm o teste portável.
+     */
+#if UINT_MAX == 4294967295u
+    /* unsigned de 32 bits: 2^32 excede o campo */
+    expect_parse_error("produz 1 4294967296 1");
+    expect_parse_error("produz 1 5 4294967296");
+
+    /* limite exato de unsigned: cabe no campo, excede a faixa */
+    expect_validate_error("produz 1 4294967295 1", 4, MPMC_ERR_INVALID_ARG);
+    expect_validate_error("produz 1 5 4294967295", 4, MPMC_ERR_INVALID_ARG);
+#endif
+
+#if SIZE_MAX == 18446744073709551615ULL
+    /*
+     * size_t de 64 bits: 2^64 - 1 é exatamente SIZE_MAX, logo cabe no
+     * campo. O parse aceita e a validação rejeita por exceder p.
+     */
+    expect_validate_error("produz 18446744073709551615 1 1", 4,
+                          MPMC_ERR_INVALID_INDEX);
+#endif
+
+#if SIZE_MAX == 4294967295u
+    /* size_t de 32 bits: 2^32 excede o campo, então o parse rejeita */
+    expect_parse_error("produz 4294967296 1 1");
+    expect_validate_error("produz 4294967295 1 1", 4,
+                          MPMC_ERR_INVALID_INDEX);
+#endif
+
+    /*
+     * --- 3. Valores que cabem no campo mas excedem a faixa normativa ---
+     * Ponto de controle da separação entre as duas etapas: o parse
+     * aceita, a validação rejeita.
+     */
+    expect_validate_error("produz 1 65535 1", 4, MPMC_ERR_INVALID_ARG);
 }
 
 /* ------------------------------------------------------------------ */
@@ -359,7 +402,7 @@ static void test_stage_separation(void)
     CHECK(command_validate(&c, 0) == MPMC_ERR_INVALID_ARG,
           "validate deveria rejeitar producer_count 0");
 
-    /* shutdown é aceito por validate independentemente dos campos numéricos */
+    /* shutdown é aceito por validate independentemente dos campos */
     CHECK(command_parse("shutdown", &c) == MPMC_OK, "shutdown parse");
     c.producer_id = 999;
     c.message_count = 999;

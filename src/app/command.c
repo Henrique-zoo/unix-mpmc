@@ -14,18 +14,16 @@
  *                         (1..1024, ack 1/2) e a existência do índice
  *                         lógico contra a quantidade de produtores.
  *
- * A separação permite que o REPL reporte qual etapa rejeitou a linha e
- * que os testes exercitem cada regra isoladamente.
- *
  * Nenhuma das duas funções cria processos, aloca memória, realiza I/O
  * ou mantém estado global.
  */
 
 #include "mpmc/app/command.h"
 
+#include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdint.h>
+#include <stdint.h>    
 
 #define CMD_MAX_TOKENS 5u
 #define CMD_NMSGS_MIN 1u
@@ -98,7 +96,10 @@ static bool token_equals(token_t token, const char *text)
  *
  * Aceita somente [0-9]+. Rejeita sinal, separador, notação hexadecimal e
  * qualquer caractere não numérico. Rejeita, ainda, valores que excedam
- * @p limit — inclusive quando excedem a capacidade de uintmax_t.
+ * @p limit, inclusive quando excedem a capacidade de uintmax_t.
+ *
+ * A comparação precede a multiplicação e usa apenas divisão e resto, de
+ * modo que nunca ocorre wrap, qualquer que seja @p limit.
  *
  * @param[in]  token Token de origem.
  * @param[in]  limit Maior valor aceito.
@@ -221,9 +222,9 @@ mpmc_status_t command_parse(const char *line, command_t *out)
         return MPMC_ERR_INVALID_ARG;
     }
 
-    if (!parse_unsigned(tokens[1], UINTMAX_MAX, &index) ||
-        !parse_unsigned(tokens[2], UINTMAX_MAX, &message_count) ||
-        !parse_unsigned(tokens[3], UINTMAX_MAX, &ack)) {
+    if (!parse_unsigned(tokens[1], (uintmax_t)SIZE_MAX, &index) ||
+        !parse_unsigned(tokens[2], (uintmax_t)UINT_MAX, &message_count) ||
+        !parse_unsigned(tokens[3], (uintmax_t)UINT_MAX, &ack)) {
         return MPMC_ERR_INVALID_ARG;
     }
 

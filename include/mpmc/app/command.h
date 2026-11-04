@@ -63,11 +63,15 @@ typedef struct {
  *   aridade incorreta, números inválidos ou argumentos NULL.
  *
  * @par Overflow
- * Um campo numérico cujo valor excede a capacidade de uintmax_t é
- * rejeitado com MPMC_ERR_INVALID_ARG. A verificação precede a
- * multiplicação e nunca sofre wrap. Note a distinção: um valor que cabe
- * em uintmax_t mas excede p é aceito aqui e rejeitado por
- * command_validate() com MPMC_ERR_INVALID_INDEX.
+ * Cada campo é convertido com o limite do seu tipo de destino:
+ * producer_id usa SIZE_MAX, message_count e ack_mode usam UINT_MAX.
+ * Um valor acima desse limite, inclusive quando excede a capacidade
+ * de uintmax_t, é rejeitado com MPMC_ERR_INVALID_ARG. A verificação
+ * precede a multiplicação e nunca sofre wrap.
+ *
+ * Note a distinção: um valor que cabe no tipo do campo mas excede a
+ * faixa normativa (p, 1024, ack 2) é aceito aqui e rejeitado por
+ * command_validate().
  *
  * @pre line e out não podem ser NULL.
  * @post Em caso de erro, o conteúdo de *out permanece inalterado.
