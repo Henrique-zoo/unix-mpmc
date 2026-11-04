@@ -23,7 +23,7 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdint.h>    
+#include <stdint.h>
 
 #define CMD_MAX_TOKENS 5u
 #define CMD_NMSGS_MIN 1u
@@ -39,12 +39,9 @@ typedef struct {
 
 /**
  * @brief Testa se o caractere separa tokens em uma linha do REPL. */
-static bool is_blank(unsigned char character)
-{
-    return character == (unsigned char)' '  ||
-           character == (unsigned char)'\t' ||
-           character == (unsigned char)'\r' ||
-           character == (unsigned char)'\n';
+static bool is_blank(unsigned char character) {
+    return character == (unsigned char)' ' || character == (unsigned char)'\t'
+        || character == (unsigned char)'\r' || character == (unsigned char)'\n';
 }
 
 /**
@@ -54,8 +51,7 @@ static bool is_blank(unsigned char character)
  * @param[out]    token  Fatia preenchida em caso de sucesso.
  * @return true se um token foi lido; false no fim da linha.
  */
-static bool next_token(const char **cursor, token_t *token)
-{
+static bool next_token(const char **cursor, token_t *token) {
     const char *start;
 
     while (is_blank((unsigned char)**cursor)) {
@@ -77,8 +73,7 @@ static bool next_token(const char **cursor, token_t *token)
 }
 
 /** @brief Compara um token com um literal, sem exigir terminador no token. */
-static bool token_equals(token_t token, const char *text)
-{
+static bool token_equals(token_t token, const char *text) {
     size_t index = 0;
 
     while (text[index] != '\0') {
@@ -106,8 +101,7 @@ static bool token_equals(token_t token, const char *text)
  * @param[out] value Valor convertido; escrito apenas em caso de sucesso.
  * @return true se o token é um decimal válido dentro de @p limit.
  */
-static bool parse_unsigned(token_t token, uintmax_t limit, uintmax_t *value)
-{
+static bool parse_unsigned(token_t token, uintmax_t limit, uintmax_t *value) {
     uintmax_t parsed = 0;
 
     if (token.length == 0u) {
@@ -124,8 +118,7 @@ static bool parse_unsigned(token_t token, uintmax_t limit, uintmax_t *value)
 
         digit = (uintmax_t)(character - (unsigned char)'0');
 
-        if (parsed > limit / 10u ||
-            (parsed == limit / 10u && digit > limit % 10u)) {
+        if (parsed > limit / 10u || (parsed == limit / 10u && digit > limit % 10u)) {
             return false;
         }
 
@@ -146,8 +139,7 @@ static bool parse_unsigned(token_t token, uintmax_t limit, uintmax_t *value)
  * @param[in,out] token Token a encurtar.
  * @return true se um '&' foi removido.
  */
-static bool strip_ampersand(token_t *token)
-{
+static bool strip_ampersand(token_t *token) {
     if (token->length > 0u && token->text[token->length - 1u] == '&') {
         --token->length;
         return true;
@@ -156,8 +148,7 @@ static bool strip_ampersand(token_t *token)
     return false;
 }
 
-mpmc_status_t command_parse(const char *line, command_t *out)
-{
+mpmc_status_t command_parse(const char *line, command_t *out) {
     token_t tokens[CMD_MAX_TOKENS];
     token_t extra;
     const char *cursor;
@@ -173,8 +164,7 @@ mpmc_status_t command_parse(const char *line, command_t *out)
     }
 
     cursor = line;
-    while (count < (size_t)CMD_MAX_TOKENS &&
-           next_token(&cursor, &tokens[count])) {
+    while (count < (size_t)CMD_MAX_TOKENS && next_token(&cursor, &tokens[count])) {
         ++count;
     }
     if (next_token(&cursor, &extra)) {
@@ -222,9 +212,9 @@ mpmc_status_t command_parse(const char *line, command_t *out)
         return MPMC_ERR_INVALID_ARG;
     }
 
-    if (!parse_unsigned(tokens[1], (uintmax_t)SIZE_MAX, &index) ||
-        !parse_unsigned(tokens[2], (uintmax_t)UINT_MAX, &message_count) ||
-        !parse_unsigned(tokens[3], (uintmax_t)UINT_MAX, &ack)) {
+    if (!parse_unsigned(tokens[1], (uintmax_t)SIZE_MAX, &index)
+        || !parse_unsigned(tokens[2], (uintmax_t)UINT_MAX, &message_count)
+        || !parse_unsigned(tokens[3], (uintmax_t)UINT_MAX, &ack)) {
         return MPMC_ERR_INVALID_ARG;
     }
 
@@ -236,8 +226,7 @@ mpmc_status_t command_parse(const char *line, command_t *out)
     return MPMC_OK;
 }
 
-mpmc_status_t command_validate(const command_t *command, size_t producer_count)
-{
+mpmc_status_t command_validate(const command_t *command, size_t producer_count) {
     if (command == NULL || producer_count == 0u) {
         return MPMC_ERR_INVALID_ARG;
     }
@@ -250,8 +239,7 @@ mpmc_status_t command_validate(const command_t *command, size_t producer_count)
         return MPMC_ERR_INVALID_ARG;
     }
 
-    if (command->message_count < CMD_NMSGS_MIN ||
-        command->message_count > CMD_NMSGS_MAX) {
+    if (command->message_count < CMD_NMSGS_MIN || command->message_count > CMD_NMSGS_MAX) {
         return MPMC_ERR_INVALID_ARG;
     }
 
@@ -260,9 +248,7 @@ mpmc_status_t command_validate(const command_t *command, size_t producer_count)
     }
 
     if (command->producer_id == 0u) {
-        return command->kind == COMMAND_PRODUCE
-                   ? MPMC_OK
-                   : MPMC_ERR_INVALID_INDEX;
+        return command->kind == COMMAND_PRODUCE ? MPMC_OK : MPMC_ERR_INVALID_INDEX;
     }
 
     if (command->producer_id > producer_count) {
