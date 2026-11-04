@@ -1,3 +1,4 @@
+
 name: CI
 
 on:
@@ -10,21 +11,39 @@ permissions:
 
 jobs:
   formatting:
-    name: C formatting (clang-format 18)
+    name: C formatting (clang-format 23)
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Install Clang-Format 23
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates curl
+
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /usr/share/keyrings/llvm-archive-keyring.asc > /dev/null
+
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-23.list
+
+          sudo apt-get update
+          sudo apt-get install -y clang-format-23
+
+      - name: Show formatter version
+        run: clang-format-23 --version
+
       - name: Check C formatting
         run: |
           find src include -type f \( -name '*.c' -o -name '*.h' \) -print0 \
-            | xargs -0 -r clang-format-18 --dry-run --Werror
+            | xargs -0 -r clang-format-23 --style=file --dry-run --Werror
 
   compilation:
-    name: Compile objects (${{ matrix.mode }})
+    name: Build application (${{ matrix.mode }})
     runs-on: ubuntu-24.04
+
     strategy:
       fail-fast: false
       matrix:
@@ -34,11 +53,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Show compiler version
-        run: clang-18 --version
+      - name: Install Clang 23
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates curl
 
-      - name: Build modules (C23)
-        run: make MODE=${{ matrix.mode }} CC=clang-18 all
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /usr/share/keyrings/llvm-archive-keyring.asc > /dev/null
+
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-23.list
+
+          sudo apt-get update
+          sudo apt-get install -y clang-23
+
+      - name: Show compiler version
+        run: clang-23 --version
+
+      - name: Build application (C23)
+        run: make MODE=${{ matrix.mode }} CC=clang-23 all
 
   documentation:
     name: Generate Doxygen documentation
