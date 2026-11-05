@@ -1,4 +1,9 @@
 /**
+ * @defgroup tests Testes
+ * @brief Testes unitários e de integração do projeto.
+ */
+
+/**
  * @file test_command.c
  * @brief Testes unitários de command_parse() e command_validate().
  * @ingroup tests
