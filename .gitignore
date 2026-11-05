@@ -1,16 +1,16 @@
-# Build artifacts
+# Artefatos de compilação
 /build/
 /mpmc
 
-# Compiled files
+# Arquivos compilados
 *.o
 *.d
 
-# Debugging
+# Depuração
 core
 core.*
 
-# Editor files
+# Arquivos do editor
 .vscode/*
 !.vscode/settings.json
 .idea/

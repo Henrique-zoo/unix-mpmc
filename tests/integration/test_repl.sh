@@ -1,4 +1,35 @@
 #!/bin/sh
+## @file test_repl.sh
+## @brief Testes de integração do terminal interativo do mpmc.
+##
+## @details Verifica a recuperação após comandos inválidos, a exibição do prompt,
+## o encerramento por EOF (com entrada vazia ou comando sem newline final), o
+## sufixo opcional `&` e a coleta de um filho terminado enquanto stdin permanece
+## aberto e ocioso. Esse último cenário confirma que SIGCHLD desperta o REPL pelo
+## self-pipe e que a coleta não depende de o usuário enviar outra linha.
+##
+## Dois cenários adicionais mantêm um filho bloqueado por meio da variável
+## MPMC_TEST_WORKER_HANG. Eles verificam que o REPL continua aceitando comandos,
+## que `shutdown` recolhe o filho bloqueado e que SIGTERM enviado ao próprio REPL
+## também encerra o filho. O gancho de bloqueio existe apenas em builds de
+## depuração (`-DDEBUG`); em builds release esses cenários são ignorados. O teste
+## depende dos utilitários `ps` e `pgrep` para observar os processos.
+##
+## Para exercitar os casos, execute o script a partir da raiz do repositório,
+## informando o binário como primeiro argumento. A entrada é fornecida por pipes
+## ou FIFOs para testar o comportamento sem interação manual.
+##
+## Também devem ser verificados manualmente estes casos de job control:
+##
+## - iniciar `mpmc` em primeiro plano e enviar vários comandos, inclusive enquanto há filhos;
+## - enviar EOF com e sem uma linha final terminada por `\n` e confirmar encerramento ordenado;
+## - executar com stdin redirecionado para arquivo/pipe; essa fonte não terminal é permitida mesmo
+##   quando o processo foi iniciado em background pelo shell;
+## - colocar o processo em background mantendo stdin ligado ao terminal e confirmar diagnóstico
+##   imediato, sem suspensão por `SIGTTIN`;
+## - deixar a entrada ociosa com filhos ativos e verificar que `waitpid(..., WNOHANG)` e o ponto de
+##   drenagem de eventos do supervisor continuam sendo chamados periodicamente.
+
 set -eu
 
 binary=${1:-./mpmc}

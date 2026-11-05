@@ -7,11 +7,11 @@
 **Linguagem:** C23. **Ambiente-alvo:** Linux/Unix com IPC System V e compilação via GNU Make.
 
 > [!IMPORTANT]
-> **Estado deste material:** este repositório de documentação contém o desenho da arquitetura,
-> as *interfaces propostas* (`.h`) documentadas com Doxygen, os documentos de projeto e o Makefile.
-> **As implementações em `src/*.c` ainda não foram escritas.** Os exemplos de execução abaixo
-> descrevem a interface especificada, não funcionalidades já implementadas. A compilação de `mpmc`
-> passará a funcionar quando as implementações correspondentes forem adicionadas.
+> **Estado deste material:** parser, REPL e gerenciamento básico do ciclo de vida do supervisor
+> estão implementados. Os módulos de workers e IPC ainda estão pendentes; por isso, comandos
+> `produz` e `consome` são despachados para filhos, mas esses filhos informam que a execução do
+> trabalho ainda não está disponível. Os exemplos de produção/consumo abaixo descrevem a interface
+> prevista, não uma funcionalidade já completa.
 
 ## Sumário
 
@@ -64,7 +64,12 @@ O `&` final exibido nos exemplos do enunciado é opcional. No REPL do `mpmc`, el
 como sufixo sintático permitido: os trabalhos **sempre** rodam em processos filhos concorrentes.
 O `&` informado ao iniciar o programa (`./mpmc ... &`) é um operador do *shell*, não um
 argumento do `mpmc`. Um REPL em segundo plano pode ser suspenso pelo controle de tarefas do
-terminal ao tentar ler de `stdin`; para uso interativo, inicie o programa em primeiro plano.
+terminal ao tentar ler de `stdin` (sinal `SIGTTIN`). Para uso interativo, inicie o programa em
+primeiro plano. O programa detecta essa condição antes de ler e encerra com diagnóstico, sem
+ficar suspenso. Um processo em background pode receber comandos de uma fonte não terminal, por
+exemplo `./mpmc 4 1 < comandos.txt` ou `printf 'shutdown\n' | ./mpmc 4 1`; EOF encerra os
+trabalhos e remove os recursos pelo mesmo caminho ordenado de `shutdown`. Linhas inválidas são
+informadas e não encerram o REPL.
 
 ## Compilação e execução
 
@@ -75,7 +80,7 @@ IPC System V disponível. O Doxygen é opcional para compilar a aplicação.
 make                  # build/debug/mpmc e link ./mpmc
 make debug            # compilação para depuração
 make release          # build/release/mpmc, otimizado
-make test             # smoke tests (após implementar os módulos)
+make test             # smoke tests e testes básicos do REPL
 make clean            # remove binários e objetos
 ```
 

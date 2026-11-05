@@ -49,11 +49,17 @@ fork e na coleta do término. Processos que saíram espontaneamente devem ser re
 sem esperar pelo shutdown. No modo de filas, a implementação também precisa
 receber eventos de estatísticas **mesmo quando não há novos comandos**: o REPL não
 pode permanecer indefinidamente em uma leitura bloqueante de `stdin` enquanto uma
-fila de controle fica cheia. Uma estratégia possível usa notificação por sinal e
-`pselect`/self-pipe; outra usa um coletor dedicado. O ponto essencial é continuar
-drenando eventos sem depender de novas linhas do usuário. `SIGCHLD` pode ser tratado com um *flag* `volatile sig_atomic_t`
-e `waitpid(..., WNOHANG)` fora do tratador; não chamar `printf`, `malloc` ou rotinas de
-IPC não assíncronas dentro do tratador de sinal.
+fila de controle fica cheia. O ponto essencial é continuar drenando eventos sem
+depender de novas linhas do usuário.
+
+A implementação usa o padrão *self-pipe*: o supervisor cria um pipe não bloqueante e o
+tratador de `SIGCHLD` apenas escreve um byte nele (`supervisor_notify_signal`). O REPL espera
+com `poll()` em `stdin` e na ponta de leitura do pipe (`supervisor_event_fd`), de modo que o
+término de um filho acorda o loop imediatamente. `supervisor_poll_events` drena o pipe e, só
+depois, `supervisor_reap` executa `waitpid(..., WNOHANG)` fora do tratador; essa ordem
+impede perda de sinais que cheguem durante a coleta. O filho fecha sua cópia do pipe após o
+`fork`. Não chamar `printf`, `malloc` ou rotinas de IPC não assíncronas dentro do tratador
+de sinal.
 
 ## Interface pública versus backends
 
