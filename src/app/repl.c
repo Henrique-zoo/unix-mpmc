@@ -11,14 +11,16 @@
 #include <unistd.h>
 
 #define REPL_MAX_LINE 4096u
+/* Rede de segurança: SIGCHLD acorda o loop pelo self-pipe, mas o tempo limite garante
+ * que eventos sem sinal (ex.: filas do backend IPC) e SIGINT/SIGTERM recebidos entre a
+ * checagem da flag e o poll() sejam tratados rapidamente. */
 #define REPL_POLL_INTERVAL_MS 100
 
-static volatile sig_atomic_t child_event_pending;
 static volatile sig_atomic_t termination_requested;
 
 static void handle_child_signal(int signal_number) {
 	(void)signal_number;
-	child_event_pending = 1;
+	supervisor_notify_signal();
 }
 
 static void handle_termination_signal(int signal_number) {
@@ -57,11 +59,8 @@ static mpmc_status_t check_foreground_stdin(void) {
 }
 
 static mpmc_status_t service_supervisor(supervisor_t *supervisor) {
-	if (child_event_pending) {
-		child_event_pending = 0;
-	}
-	mpmc_status_t status = supervisor_reap(supervisor, false);
-	return status;
+	/* supervisor_reap() drena o self-pipe antes de chamar waitpid(). */
+	return supervisor_reap(supervisor, false);
 }
 
 static void dispatch_line(supervisor_t *supervisor, char *line, bool *shutdown) {
@@ -102,7 +101,6 @@ mpmc_status_t repl_run(supervisor_t *supervisor) {
 		return result;
 	}
 
-	child_event_pending = 0;
 	termination_requested = 0;
 	result = install_signal_handler(SIGCHLD, handle_child_signal, &previous_chld);
 	if (result != MPMC_OK) {
@@ -136,12 +134,13 @@ mpmc_status_t repl_run(supervisor_t *supervisor) {
 			break;
 		}
 
-		struct pollfd input = {
-			.fd = STDIN_FILENO,
-			.events = POLLIN | POLLHUP,
-			.revents = 0,
+		struct pollfd fds[2] = {
+			{.fd = STDIN_FILENO, .events = POLLIN | POLLHUP, .revents = 0},
+			{.fd = supervisor_event_fd(supervisor), .events = POLLIN, .revents = 0},
 		};
-		int ready = poll(&input, 1u, REPL_POLL_INTERVAL_MS);
+		struct pollfd *input = &fds[0];
+		const struct pollfd *wake = &fds[1];
+		int ready = poll(fds, 2u, REPL_POLL_INTERVAL_MS);
 		if (ready == -1) {
 			if (errno == EINTR) {
 				continue;
@@ -152,9 +151,13 @@ mpmc_status_t repl_run(supervisor_t *supervisor) {
 		if (ready == 0) {
 			continue;
 		}
-		if ((input.revents & (POLLERR | POLLNVAL)) != 0) {
+		if (((input->revents | wake->revents) & (POLLERR | POLLNVAL)) != 0) {
 			result = MPMC_ERR_SYS;
 			break;
+		}
+		if (input->revents == 0) {
+			/* Despertado apenas pelo self-pipe: o topo do loop recolhe os filhos. */
+			continue;
 		}
 
 		char buffer[512];

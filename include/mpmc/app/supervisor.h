@@ -31,6 +31,8 @@ typedef struct supervisor supervisor_t;
  * @retval MPMC_OK Supervisor criado.
  * @retval MPMC_ERR_INVALID_ARG Parâmetros inválidos.
  * @retval MPMC_ERR_SYS Falha de alocação ou de chamada de sistema.
+ * @details Também cria o canal de eventos (self-pipe) não bloqueante usado para
+ * acordar o loop de controle; veja supervisor_event_fd().
  * @note A inicialização dos backends IPC ainda não está conectada nesta
  * implementação.
  * @par Propriedade
@@ -90,11 +92,37 @@ size_t supervisor_producer_count(const supervisor_t *supervisor);
  * @param supervisor Instância viva do supervisor.
  * @retval MPMC_OK Eventos drenados ou nenhum evento disponível.
  * @retval MPMC_ERR_SYS Falha ao processar o canal de controle.
- * @details Este ponto deve ser chamado periodicamente mesmo sem comandos
- * novos. A implementação atual mantém o ponto de integração; o backend de
- * IPC pode conectar aqui a drenagem de suas filas de eventos.
+ * @details Drena por completo o self-pipe (veja supervisor_event_fd()),
+ * descartando os bytes de despertar acumulados por supervisor_notify_signal().
+ * Deve ser chamada antes de waitpid(): um sinal que chegue depois da drenagem
+ * deixa um novo byte pendente e provoca outra iteração, sem perder o evento.
+ * Também é o ponto em que o backend de IPC pode conectar a drenagem de suas
+ * filas de eventos.
  */
 mpmc_status_t supervisor_poll_events(supervisor_t *supervisor);
+
+/**
+ * @brief Retorna o descritor de leitura do canal de eventos (self-pipe).
+ * @param supervisor Instância viva do supervisor.
+ * @return Descritor não bloqueante para poll()/select() com POLLIN, ou -1 para
+ * NULL.
+ * @details Fica legível quando supervisor_notify_signal() foi chamada desde a
+ * última supervisor_poll_events(). O descritor pertence ao supervisor: o
+ * chamador não deve fechá-lo nem lê-lo diretamente.
+ */
+int supervisor_event_fd(const supervisor_t *supervisor);
+
+/**
+ * @brief Acorda o loop de controle a partir de um tratador de sinal.
+ * @details Escreve um byte no self-pipe da instância ativa (a criada mais
+ * recentemente). É async-signal-safe: usa apenas write(2), não bloqueia e
+ * preserva errno. Se o pipe estiver cheio já há despertar pendente, e o byte é
+ * descartado. Sem instância ativa não faz nada. Pode ser chamada diretamente
+ * do tratador de SIGCHLD.
+ * @note O processo filho fecha sua cópia do pipe após fork(), portanto sinais
+ * recebidos em workers não acordam o supervisor.
+ */
+void supervisor_notify_signal(void);
 
 /**
  * @brief Libera memória local do supervisor após o encerramento.
