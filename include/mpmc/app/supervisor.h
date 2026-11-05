@@ -48,9 +48,10 @@ mpmc_status_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_m
  * @retval MPMC_ERR_INVALID_ARG Comando não válido.
  * @retval MPMC_ERR_SYS Falha de fork ou outra operação do sistema.
  * @retval MPMC_ERR_SHUTDOWN Instância já está encerrando.
- * @details Comandos de trabalho são encaminhados por fork() sem bloquear o
- * pai. Até a implementação dos módulos workers/IPC, o filho reporta que a
- * operação não está disponível e termina com erro.
+ * @details Cada comando de trabalho recebe um operation_id não nulo antes de
+ * fork(); o pai registra PID, tipo e identidade da operação sem executar o
+ * trabalho. Até a implementação dos módulos workers/IPC, o filho reporta que
+ * a operação não está disponível e termina com erro.
  * @note COMMAND_SHUTDOWN delega a supervisor_shutdown().
  */
 mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *command);
@@ -61,7 +62,10 @@ mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *com
  * @param blocking Se false, usa waitpid(..., WNOHANG) repetidamente; se true,
  * espera até não haver mais filhos registrados (utilizar após cancelamento).
  * @retval MPMC_OK Recolhimento realizado ou nenhum filho pendente.
- * @retval MPMC_ERR_SYS Erro irrecuperável em waitpid().
+ * @retval MPMC_ERR_SYS Erro irrecuperável em waitpid() ou registro de filho
+ * cujo estado já foi coletado por outro processo.
+ * @details EINTR é repetido; término natural, falha e sinal são associados ao
+ * PID, tipo de trabalho e operation_id registrados.
  * @note Tratadores SIGCHLD só sinalizam a necessidade de coleta; waitpid()
  * é executado fora do contexto de sinal.
  */

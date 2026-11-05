@@ -13,6 +13,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -21,9 +22,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/** @brief Registro local do PID de um processo filho supervisionado. */
+/** @brief Registro de identidade e estado de um processo filho supervisionado. */
 typedef struct {
-    pid_t pid;
+    pid_t pid;                 /**< PID retornado por fork(). */
+    command_kind_t kind;       /**< Tipo de trabalho executado pelo filho. */
+    uint64_t operation_id;     /**< Identidade única atribuída antes de fork(). */
 } child_record_t;
 
 /** @brief Estado privado mantido exclusivamente pelo processo supervisor. */
@@ -32,6 +35,7 @@ struct supervisor {
     child_record_t *children; /**< Vetor dinâmico de filhos ativos. */
     size_t child_count;       /**< Número de registros ocupados. */
     size_t child_capacity;    /**< Capacidade alocada do vetor. */
+    uint64_t next_operation_id; /**< Próximo identificador; zero indica esgotamento. */
     bool shutting_down;       /**< Impede novos despachos após shutdown. */
     int event_pipe[2];        /**< Self-pipe: leitura em [0], escrita em [1]. */
     size_t notice_count;      /**< Avisos impressos em stderr desde a última consulta. */
@@ -173,6 +177,7 @@ mpmc_status_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_m
     }
 
     supervisor->producer_count = producer_count;
+    supervisor->next_operation_id = 1u;
     if (open_event_pipe(supervisor) != MPMC_OK) {
         free(supervisor);
         return MPMC_ERR_SYS;
@@ -252,18 +257,21 @@ mpmc_status_t supervisor_poll_events(supervisor_t *supervisor) {
  * @details Remove os tratadores herdados do REPL para que sinais de término,
  * em particular SIGTERM, tenham o comportamento esperado no worker.
  */
-static void reset_child_signals(void) {
+static bool reset_child_signals(void) {
     static const int signals[] = {SIGCHLD, SIGINT, SIGTERM};
     struct sigaction action = {0};
     action.sa_handler = SIG_DFL;
     sigemptyset(&action.sa_mask);
     for (size_t index = 0u; index < sizeof(signals) / sizeof(signals[0]); ++index) {
-        (void)sigaction(signals[index], &action, NULL);
+        if (sigaction(signals[index], &action, NULL) == -1) {
+            return false;
+        }
     }
+    return true;
 }
 
-/** @details O pai registra o PID sem aguardar; o filho fecha o self-pipe,
- * restaura os sinais e inicia o worker (ainda não conectado nesta versão).
+/** @details O pai registra PID, tipo e identidade da operação sem aguardar; o
+ * filho recebe uma cópia imutável do comando, fecha o self-pipe e restaura os sinais.
  * Os sinais de término ficam bloqueados durante o fork() e só são liberados no
  * filho depois de restaurar as ações padrão, evitando perder um SIGTERM de
  * shutdown enviado imediatamente após o despacho.
@@ -281,6 +289,9 @@ mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *com
     if (command->kind != COMMAND_PRODUCE && command->kind != COMMAND_CONSUME) {
         return MPMC_ERR_INVALID_ARG;
     }
+    if (supervisor->next_operation_id == 0u) {
+        return MPMC_ERR_STATE;
+    }
 
     mpmc_status_t status = ensure_child_capacity(supervisor);
     if (status != MPMC_OK) {
@@ -297,15 +308,19 @@ mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *com
         return MPMC_ERR_SYS;
     }
 
+    const uint64_t operation_id = supervisor->next_operation_id;
     pid_t child = fork();
     if (child == -1) {
+        int fork_error = errno;
         (void)sigprocmask(SIG_SETMASK, &old_set, NULL);
+        errno = fork_error;
         return MPMC_ERR_SYS;
     }
     if (child == 0) {
         close_event_pipe(supervisor);
-        reset_child_signals();
-        (void)sigprocmask(SIG_SETMASK, &old_set, NULL);
+        if (!reset_child_signals() || sigprocmask(SIG_SETMASK, &old_set, NULL) == -1) {
+            _exit(EXIT_FAILURE);
+        }
 #ifdef DEBUG
         if (getenv("MPMC_TEST_WORKER_HANG") != NULL) {
             for (;;) {
@@ -315,15 +330,23 @@ mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *com
 #endif
         (void)dprintf(
             STDERR_FILENO,
-            "mpmc: comando recebido, mas a execução de workers/IPC ainda não está implementada.\n"
+            "mpmc: operação %" PRIu64 " (%s) recebida; execução de workers/IPC "
+            "ainda não está implementada.\n",
+            operation_id,
+            command->kind == COMMAND_PRODUCE ? "produz" : "consome"
         );
         _exit(EXIT_FAILURE);
     }
 
     supervisor->children[supervisor->child_count++] = (child_record_t){
         .pid = child,
+        .kind = command->kind,
+        .operation_id = operation_id,
     };
-    (void)sigprocmask(SIG_SETMASK, &old_set, NULL);
+    supervisor->next_operation_id = operation_id == UINT64_MAX ? 0u : operation_id + 1u;
+    if (sigprocmask(SIG_SETMASK, &old_set, NULL) == -1) {
+        return MPMC_ERR_SYS;
+    }
     return MPMC_OK;
 }
 
@@ -337,7 +360,14 @@ static void remove_child(supervisor_t *supervisor, size_t index) {
     --supervisor->child_count;
 }
 
-/** @details EINTR em waitpid() é repetido; ECHILD remove registros obsoletos.
+/** @brief Retorna a forma textual curta do tipo registrado para um filho. */
+static const char *child_kind_name(command_kind_t kind) {
+    return kind == COMMAND_PRODUCE ? "produz" : "consome";
+}
+
+/** @details EINTR em waitpid() é repetido; cada estado coletado é correlacionado
+ * ao registro original antes da remoção. ECHILD indica perda externa da
+ * propriedade do filho, é reportado como erro e também limpa o registro obsoleto.
  * Eventos do canal são drenados antes da coleta, fora do contexto de sinal.
  */
 mpmc_status_t supervisor_reap(supervisor_t *supervisor, bool blocking) {
@@ -346,6 +376,7 @@ mpmc_status_t supervisor_reap(supervisor_t *supervisor, bool blocking) {
     }
 
     mpmc_status_t event_status = supervisor_poll_events(supervisor);
+    mpmc_status_t reap_status = MPMC_OK;
 
     size_t index = 0u;
     while (index < supervisor->child_count) {
@@ -362,32 +393,63 @@ mpmc_status_t supervisor_reap(supervisor_t *supervisor, bool blocking) {
         }
         if (waited == -1) {
             if (errno == ECHILD) {
+                child_record_t lost = supervisor->children[index];
+                ++supervisor->notice_count;
+                fprintf(
+                    stderr,
+                    "mpmc: estado do filho %ld (%s, operação %" PRIu64
+                    ") não está mais disponível (ECHILD).\n",
+                    (long)lost.pid,
+                    child_kind_name(lost.kind),
+                    lost.operation_id
+                );
+                reap_status = MPMC_ERR_SYS;
                 remove_child(supervisor, index);
                 continue;
             }
-            return MPMC_ERR_SYS;
+            reap_status = MPMC_ERR_SYS;
+            ++index;
+            continue;
         }
 
-        if (WIFEXITED(wait_status) && WEXITSTATUS(wait_status) != EXIT_SUCCESS) {
+        child_record_t finished = supervisor->children[index];
+        if (WIFEXITED(wait_status)) {
             ++supervisor->notice_count;
-            fprintf(
-                stderr,
-                "mpmc: processo filho %ld terminou com código %d.\n",
+            int exit_code = WEXITSTATUS(wait_status);
+            fprintf(stderr,
+                "mpmc: filho %ld (%s, operação %" PRIu64 ") terminou com código %d%s.\n",
                 (long)waited,
-                WEXITSTATUS(wait_status)
+                child_kind_name(finished.kind),
+                finished.operation_id,
+                exit_code,
+                exit_code == EXIT_SUCCESS ? " (sucesso)" : " (falha)"
             );
-        } else if (WIFSIGNALED(wait_status) && !supervisor->shutting_down) {
+        } else if (WIFSIGNALED(wait_status)
+            && (!supervisor->shutting_down || WTERMSIG(wait_status) != SIGTERM)) {
             ++supervisor->notice_count;
             fprintf(
                 stderr,
-                "mpmc: processo filho %ld terminou pelo sinal %d.\n",
+                "mpmc: filho %ld (%s, operação %" PRIu64 ") terminou pelo sinal %d.\n",
                 (long)waited,
+                child_kind_name(finished.kind),
+                finished.operation_id,
                 WTERMSIG(wait_status)
             );
+            reap_status = MPMC_ERR_SYS;
+        } else if (!WIFSIGNALED(wait_status)) {
+            ++supervisor->notice_count;
+            fprintf(
+                stderr,
+                "mpmc: estado inesperado para o filho %ld (%s, operação %" PRIu64 ").\n",
+                (long)waited,
+                child_kind_name(finished.kind),
+                finished.operation_id
+            );
+            reap_status = MPMC_ERR_SYS;
         }
         remove_child(supervisor, index);
     }
-    return event_status;
+    return reap_status != MPMC_OK ? reap_status : event_status;
 }
 
 /** @details Marca a instância como encerrando, envia SIGTERM aos filhos e

@@ -101,6 +101,7 @@ until grep -q 'terminou com código' "$tmp_dir/idle_err"; do
 	fi
 	sleep 0.1
 done
+grep -Eq 'filho [0-9]+ \(produz, operação [1-9][0-9]*\) terminou com código' "$tmp_dir/idle_err"
 printf 'shutdown\n' >&3
 exec 3>&-
 wait "$repl_pid"
