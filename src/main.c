@@ -55,8 +55,9 @@ int main(int argc, char *argv[]) {
     supervisor_t *supervisor = NULL;
     status = supervisor_create(&supervisor, config.producer_count, config.mode);
     if (status != MPMC_OK) {
-        fprintf(stderr, "mpmc: não foi possível inicializar o supervisor: %s\n",
-                mpmc_status_str(status));
+        fprintf(
+            stderr, "mpmc: não foi possível inicializar o supervisor: %s\n", mpmc_status_str(status)
+        );
         return EXIT_FAILURE;
     }
 
