@@ -16,3 +16,4 @@ core.*
 .idea/
 *.swp
 .cache
+.DS_Store
