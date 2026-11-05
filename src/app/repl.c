@@ -1,3 +1,13 @@
+/**
+ * @file repl.c
+ * @brief Implementação do terminal interativo e despacho de comandos.
+ * @ingroup application
+ *
+ * @details Lê linhas de stdin sem bloquear o ciclo de supervisão, integra o
+ * descritor de despertar do supervisor com poll(), recupera-se de entradas
+ * inválidas e encaminha EOF e sinais de término pelo shutdown ordenado.
+ */
+
 #include "mpmc/app/repl.h"
 
 #include "mpmc/app/command.h"
@@ -10,21 +20,44 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+/** @brief Comprimento máximo aceito para uma linha de comando. */
 #define REPL_MAX_LINE 4096u
+/** @brief Intervalo máximo de espera para manutenção periódica (ms). */
 #define REPL_POLL_INTERVAL_MS 100
 
+/** @brief Indica que SIGINT ou SIGTERM solicitou o encerramento do REPL. */
 static volatile sig_atomic_t termination_requested;
 
+/**
+ * @brief Acorda o supervisor quando um processo filho altera seu estado.
+ * @param signal_number Número do sinal recebido; não utilizado.
+ * @details Apenas escreve no canal async-signal-safe do supervisor. A coleta
+ * dos filhos é feita posteriormente fora do contexto do tratador.
+ */
 static void handle_child_signal(int signal_number) {
 	(void)signal_number;
 	supervisor_notify_signal();
 }
 
+/**
+ * @brief Marca o pedido de encerramento vindo do processo ou terminal.
+ * @param signal_number Número do sinal recebido; não utilizado.
+ * @details Não executa limpeza nem operações não seguras em contexto de sinal;
+ * o loop principal observa a flag e inicia o shutdown ordenado.
+ */
 static void handle_termination_signal(int signal_number) {
 	(void)signal_number;
 	termination_requested = 1;
 }
 
+/**
+ * @brief Instala um tratador de sinal e preserva a ação anterior.
+ * @param signal_number Sinal cuja ação será alterada.
+ * @param handler Função tratadora a instalar.
+ * @param previous Destino da ação anterior, restaurável por sigaction().
+ * @retval MPMC_OK Tratador instalado.
+ * @retval MPMC_ERR_SYS Falha em sigaction().
+ */
 static mpmc_status_t install_signal_handler(int signal_number,
 											void (*handler)(int),
 											struct sigaction *previous) {
@@ -37,6 +70,13 @@ static mpmc_status_t install_signal_handler(int signal_number,
 	return MPMC_OK;
 }
 
+/**
+ * @brief Evita tentativa de leitura de terminal por um job em background.
+ * @retval MPMC_OK stdin não é terminal ou o grupo do processo está em primeiro plano.
+ * @retval MPMC_ERR_SYS Falha ao consultar o terminal ou processo em background.
+ * @details Entrada redirecionada por pipe ou arquivo continua permitida. A
+ * verificação evita que a leitura de stdin suspenda o programa com SIGTTIN.
+ */
 static mpmc_status_t check_foreground_stdin(void) {
 	if (!isatty(STDIN_FILENO)) {
 		return MPMC_OK;
@@ -55,10 +95,25 @@ static mpmc_status_t check_foreground_stdin(void) {
 	return MPMC_OK;
 }
 
+/**
+ * @brief Executa uma rodada não bloqueante de manutenção do supervisor.
+ * @param supervisor Instância ativa do supervisor.
+ * @return Status retornado por supervisor_reap().
+ * @details A chamada também drena o canal de despertar e serve de ponto para
+ * processar eventos de controle associados ao supervisor.
+ */
 static mpmc_status_t service_supervisor(supervisor_t *supervisor) {
 	return supervisor_reap(supervisor, false);
 }
 
+/**
+ * @brief Analisa, valida e despacha uma linha completa do REPL.
+ * @param supervisor Supervisor responsável por validar configuração e executar.
+ * @param line Linha terminada em NUL, sem newline final.
+ * @param[out] shutdown Recebe true quando o comando aceito solicita shutdown.
+ * @details Erros sintáticos, semânticos ou de despacho são informados em
+ * stderr; a linha inválida não encerra o loop nem modifica o estado de saída.
+ */
 static void dispatch_line(supervisor_t *supervisor, char *line, bool *shutdown) {
 	command_t command;
 	mpmc_status_t status = command_parse(line, &command);
@@ -77,6 +132,12 @@ static void dispatch_line(supervisor_t *supervisor, char *line, bool *shutdown) 
 	*shutdown = command.kind == COMMAND_SHUTDOWN;
 }
 
+/**
+ * @details A implementação monitora stdin e o descritor de eventos do
+ * supervisor com poll(), acumula linhas limitadas a REPL_MAX_LINE e trata EOF
+ * como pedido de encerramento ordenado. O contrato público está documentado
+ * na declaração de repl_run() em repl.h.
+ */
 mpmc_status_t repl_run(supervisor_t *supervisor) {
 	struct sigaction previous_chld;
 	struct sigaction previous_int;
