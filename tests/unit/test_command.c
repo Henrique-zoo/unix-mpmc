@@ -60,7 +60,7 @@ static command_t make_sentinel(void)
     command_t c;
 
     memset(&c, 0, sizeof c);
-    c.kind = COMMAND_SHUTDOWN;   /* distinto dos valores esperados */
+    c.kind = COMMAND_SHUTDOWN;   /* diferente dos valores esperados */
     c.producer_id = SENTINEL_INDEX;
     c.message_count = SENTINEL_COUNT;
     c.ack_mode = SENTINEL_ACK;
@@ -75,7 +75,7 @@ static int sentinel_intact(const command_t *c)
 }
 
 /* ------------------------------------------------------------------ */
-/* Helpers                                                            */
+/* Funções auxiliares                                                 */
 /* ------------------------------------------------------------------ */
 
 /* Caso feliz: parse aceita e validate aprova, com os campos esperados. */
@@ -180,7 +180,7 @@ static void test_syntax_errors(void)
     expect_parse_error("   ");
     expect_parse_error("\t\n");
 
-    /* verbo desconhecido — case sensitive */
+    /* verbo desconhecido — diferencia maiúsculas de minúsculas */
     expect_parse_error("xyz 1 2 3");
     expect_parse_error("PRODUZ 1 1 1");
     expect_parse_error("Produz 1 1 1");
@@ -523,7 +523,7 @@ static void test_no_side_effects_on_input(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Runner                                                             */
+/* Execução dos testes                                                */
 /* ------------------------------------------------------------------ */
 
 int main(void)

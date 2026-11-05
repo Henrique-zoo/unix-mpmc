@@ -23,11 +23,6 @@ struct supervisor {
 	int event_pipe[2]; /* self-pipe: [0] leitura (poll), [1] escrita (tratador de sinal) */
 };
 
-/*
- * Extremidade de escrita do self-pipe da instância ativa. Um tratador de sinal
- * não recebe contexto, então o descritor precisa ser alcançável globalmente; o
- * tipo sig_atomic_t garante leitura/escrita atômica em relação ao tratador.
- */
 static volatile sig_atomic_t wake_write_fd = -1;
 
 static mpmc_status_t set_nonblocking_cloexec(int fd) {
@@ -62,8 +57,7 @@ static mpmc_status_t open_event_pipe(supervisor_t *supervisor) {
 		supervisor->event_pipe[1] = -1;
 		return MPMC_ERR_SYS;
 	}
-	/* As duas pontas são não bloqueantes: o tratador nunca pode travar em write()
-	 * e a drenagem termina em EAGAIN. */
+
 	for (size_t end = 0u; end < 2u; ++end) {
 		if (set_nonblocking_cloexec(supervisor->event_pipe[end]) != MPMC_OK) {
 			close_event_pipe(supervisor);
@@ -125,7 +119,6 @@ int supervisor_event_fd(const supervisor_t *supervisor) {
 }
 
 void supervisor_notify_signal(void) {
-	/* Somente chamadas assíncrono-seguras: write(2) e acesso a errno. */
 	int saved_errno = errno;
 	int fd = wake_write_fd;
 	if (fd != -1) {
@@ -134,7 +127,6 @@ void supervisor_notify_signal(void) {
 		do {
 			written = write(fd, &wake, sizeof(wake));
 		} while (written == -1 && errno == EINTR);
-		/* EAGAIN significa pipe cheio: já existe um despertar pendente. */
 	}
 	errno = saved_errno;
 }
@@ -144,9 +136,6 @@ mpmc_status_t supervisor_poll_events(supervisor_t *supervisor) {
 		return MPMC_ERR_INVALID_ARG;
 	}
 
-	/* Drena todos os bytes pendentes: o conteúdo não importa, apenas o despertar.
-	 * Deve ocorrer antes de waitpid(), pois um SIGCHLD que chegue depois da drenagem
-	 * deixa um novo byte e provoca outra iteração, sem perder o término do filho. */
 	unsigned char sink[64];
 	for (;;) {
 		ssize_t count = read(supervisor->event_pipe[0], sink, sizeof(sink));
@@ -154,7 +143,7 @@ mpmc_status_t supervisor_poll_events(supervisor_t *supervisor) {
 			continue;
 		}
 		if (count == 0) {
-			return MPMC_ERR_SYS; /* a ponta de escrita nunca deveria fechar */
+			return MPMC_ERR_SYS;
 		}
 		if (errno == EINTR) {
 			continue;
@@ -163,6 +152,16 @@ mpmc_status_t supervisor_poll_events(supervisor_t *supervisor) {
 			return MPMC_OK;
 		}
 		return MPMC_ERR_SYS;
+	}
+}
+
+static void reset_child_signals(void) {
+	static const int signals[] = {SIGCHLD, SIGINT, SIGTERM};
+	struct sigaction action = {0};
+	action.sa_handler = SIG_DFL;
+	sigemptyset(&action.sa_mask);
+	for (size_t index = 0u; index < sizeof(signals) / sizeof(signals[0]); ++index) {
+		(void)sigaction(signals[index], &action, NULL);
 	}
 }
 
@@ -190,9 +189,15 @@ mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *com
 		return MPMC_ERR_SYS;
 	}
 	if (child == 0) {
-		/* O filho não deve acordar o loop do pai (ex.: SIGCHLD de netos). */
 		close_event_pipe(supervisor);
-		/* Worker/IPC implementations are separate modules and are not present yet. */
+		reset_child_signals();
+#ifdef DEBUG
+		if (getenv("MPMC_TEST_WORKER_HANG") != NULL) {
+			for (;;) {
+				(void)pause();
+			}
+		}
+#endif
 		(void)dprintf(STDERR_FILENO,
 					  "mpmc: comando recebido, mas a execução de workers/IPC ainda não está implementada.\n");
 		_exit(EXIT_FAILURE);

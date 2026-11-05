@@ -11,9 +11,6 @@
 #include <unistd.h>
 
 #define REPL_MAX_LINE 4096u
-/* Rede de segurança: SIGCHLD acorda o loop pelo self-pipe, mas o tempo limite garante
- * que eventos sem sinal (ex.: filas do backend IPC) e SIGINT/SIGTERM recebidos entre a
- * checagem da flag e o poll() sejam tratados rapidamente. */
 #define REPL_POLL_INTERVAL_MS 100
 
 static volatile sig_atomic_t termination_requested;
@@ -59,7 +56,6 @@ static mpmc_status_t check_foreground_stdin(void) {
 }
 
 static mpmc_status_t service_supervisor(supervisor_t *supervisor) {
-	/* supervisor_reap() drena o self-pipe antes de chamar waitpid(). */
 	return supervisor_reap(supervisor, false);
 }
 
@@ -156,7 +152,6 @@ mpmc_status_t repl_run(supervisor_t *supervisor) {
 			break;
 		}
 		if (input->revents == 0) {
-			/* Despertado apenas pelo self-pipe: o topo do loop recolhe os filhos. */
 			continue;
 		}
 
