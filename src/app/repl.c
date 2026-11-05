@@ -108,14 +108,33 @@ static mpmc_status_t service_supervisor(supervisor_t *supervisor) {
 }
 
 /**
+ * @brief Indica se a linha só contém espaços, tabulações ou CR.
+ * @param line Linha terminada em NUL.
+ * @return true se não há nenhum caractere de comando na linha.
+ */
+static bool is_blank_line(const char *line) {
+    for (; *line != '\0'; ++line) {
+        if (*line != ' ' && *line != '\t' && *line != '\r') {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
  * @brief Analisa, valida e despacha uma linha completa do REPL.
  * @param supervisor Supervisor responsável por validar configuração e executar.
  * @param line Linha terminada em NUL, sem newline final.
  * @param[out] shutdown Recebe true quando o comando aceito solicita shutdown.
- * @details Erros sintáticos, semânticos ou de despacho são informados em
- * stderr; a linha inválida não encerra o loop nem modifica o estado de saída.
+ * @details Linhas em branco são ignoradas sem erro. Erros sintáticos,
+ * semânticos ou de despacho são informados em stderr; a linha inválida não
+ * encerra o loop nem modifica o estado de saída.
  */
 static void dispatch_line(supervisor_t *supervisor, char *line, bool *shutdown) {
+    if (is_blank_line(line)) {
+        return;
+    }
+
     command_t command;
     mpmc_status_t status = command_parse(line, &command);
     if (status == MPMC_OK) {
@@ -147,6 +166,7 @@ mpmc_status_t repl_run(supervisor_t *supervisor) {
     size_t line_length = 0u;
     bool line_too_long = false;
     bool need_prompt = true;
+    const bool tty_output = isatty(STDOUT_FILENO) == 1;
     bool shutdown = false;
     mpmc_status_t result;
 
@@ -184,17 +204,6 @@ mpmc_status_t repl_run(supervisor_t *supervisor) {
             need_prompt = false;
         }
 
-        mpmc_status_t service_status = service_supervisor(supervisor);
-        if (service_status != MPMC_OK) {
-            fprintf(
-                stderr,
-                "mpmc: falha ao processar eventos dos processos filhos: %s\n",
-                mpmc_status_str(service_status)
-            );
-            result = service_status;
-            break;
-        }
-
         struct pollfd fds[2] = {
             {.fd = STDIN_FILENO, .events = POLLIN | POLLHUP, .revents = 0},
             {.fd = supervisor_event_fd(supervisor), .events = POLLIN, .revents = 0},
@@ -209,14 +218,27 @@ mpmc_status_t repl_run(supervisor_t *supervisor) {
             result = MPMC_ERR_SYS;
             break;
         }
-        if (ready == 0) {
-            continue;
-        }
-        if (((input->revents | wake->revents) & (POLLERR | POLLNVAL)) != 0) {
+        if (ready > 0 && ((input->revents | wake->revents) & (POLLERR | POLLNVAL)) != 0) {
             result = MPMC_ERR_SYS;
             break;
         }
-        if (input->revents == 0) {
+
+        if (ready == 0 || (wake->revents & POLLIN) != 0) {
+            mpmc_status_t service_status = service_supervisor(supervisor);
+            if (service_status != MPMC_OK) {
+                fprintf(
+                    stderr,
+                    "mpmc: falha ao processar eventos dos processos filhos: %s\n",
+                    mpmc_status_str(service_status)
+                );
+                result = service_status;
+                break;
+            }
+            if (supervisor_take_notices(supervisor) > 0u && tty_output) {
+                need_prompt = true;
+            }
+        }
+        if (ready == 0 || input->revents == 0) {
             continue;
         }
 

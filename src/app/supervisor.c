@@ -34,6 +34,7 @@ struct supervisor {
     size_t child_capacity;    /**< Capacidade alocada do vetor. */
     bool shutting_down;       /**< Impede novos despachos após shutdown. */
     int event_pipe[2];        /**< Self-pipe: leitura em [0], escrita em [1]. */
+    size_t notice_count;      /**< Avisos impressos em stderr desde a última consulta. */
 };
 
 /** @brief Descritor usado pelo tratador para acordar o loop ativo. */
@@ -54,6 +55,27 @@ static mpmc_status_t set_nonblocking_cloexec(int fd) {
     if (flags == -1 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == -1) {
         return MPMC_ERR_SYS;
     }
+    return MPMC_OK;
+}
+
+/**
+ * @brief Move um descritor para fora da faixa 0..2 (stdin/stdout/stderr).
+ * @param fd Descritor a mover; atualizado em caso de sucesso.
+ * @retval MPMC_OK Descritor já era > 2 ou foi duplicado com sucesso.
+ * @retval MPMC_ERR_SYS Falha em fcntl().
+ * @details Se o processo iniciou com stdin fechado, pipe() devolveria o fd 0 e o
+ * REPL passaria a ler do próprio self-pipe, sem nunca observar EOF.
+ */
+static mpmc_status_t move_above_stdio(int *fd) {
+    if (*fd > STDERR_FILENO) {
+        return MPMC_OK;
+    }
+    int moved = fcntl(*fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+    if (moved == -1) {
+        return MPMC_ERR_SYS;
+    }
+    (void)close(*fd);
+    *fd = moved;
     return MPMC_OK;
 }
 
@@ -89,6 +111,13 @@ static mpmc_status_t open_event_pipe(supervisor_t *supervisor) {
         supervisor->event_pipe[0] = -1;
         supervisor->event_pipe[1] = -1;
         return MPMC_ERR_SYS;
+    }
+
+    for (size_t end = 0u; end < 2u; ++end) {
+        if (move_above_stdio(&supervisor->event_pipe[end]) != MPMC_OK) {
+            close_event_pipe(supervisor);
+            return MPMC_ERR_SYS;
+        }
     }
 
     for (size_t end = 0u; end < 2u; ++end) {
@@ -150,6 +179,18 @@ mpmc_status_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_m
     }
     *out = supervisor;
     return MPMC_OK;
+}
+
+/** @details Devolve e zera o contador incrementado por supervisor_reap() a cada
+ * mensagem de término de filho impressa em stderr.
+ */
+size_t supervisor_take_notices(supervisor_t *supervisor) {
+    if (supervisor == NULL) {
+        return 0u;
+    }
+    size_t count = supervisor->notice_count;
+    supervisor->notice_count = 0u;
+    return count;
 }
 
 /** @details Consulta simples do valor armazenado na criação da instância. */
@@ -223,6 +264,9 @@ static void reset_child_signals(void) {
 
 /** @details O pai registra o PID sem aguardar; o filho fecha o self-pipe,
  * restaura os sinais e inicia o worker (ainda não conectado nesta versão).
+ * Os sinais de término ficam bloqueados durante o fork() e só são liberados no
+ * filho depois de restaurar as ações padrão, evitando perder um SIGTERM de
+ * shutdown enviado imediatamente após o despacho.
  */
 mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *command) {
     if (supervisor == NULL || command == NULL) {
@@ -243,13 +287,25 @@ mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *com
         return status;
     }
 
+    sigset_t block_set;
+    sigset_t old_set;
+    sigemptyset(&block_set);
+    sigaddset(&block_set, SIGCHLD);
+    sigaddset(&block_set, SIGINT);
+    sigaddset(&block_set, SIGTERM);
+    if (sigprocmask(SIG_BLOCK, &block_set, &old_set) == -1) {
+        return MPMC_ERR_SYS;
+    }
+
     pid_t child = fork();
     if (child == -1) {
+        (void)sigprocmask(SIG_SETMASK, &old_set, NULL);
         return MPMC_ERR_SYS;
     }
     if (child == 0) {
         close_event_pipe(supervisor);
         reset_child_signals();
+        (void)sigprocmask(SIG_SETMASK, &old_set, NULL);
 #ifdef DEBUG
         if (getenv("MPMC_TEST_WORKER_HANG") != NULL) {
             for (;;) {
@@ -267,6 +323,7 @@ mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *com
     supervisor->children[supervisor->child_count++] = (child_record_t){
         .pid = child,
     };
+    (void)sigprocmask(SIG_SETMASK, &old_set, NULL);
     return MPMC_OK;
 }
 
@@ -312,6 +369,7 @@ mpmc_status_t supervisor_reap(supervisor_t *supervisor, bool blocking) {
         }
 
         if (WIFEXITED(wait_status) && WEXITSTATUS(wait_status) != EXIT_SUCCESS) {
+            ++supervisor->notice_count;
             fprintf(
                 stderr,
                 "mpmc: processo filho %ld terminou com código %d.\n",
@@ -319,6 +377,7 @@ mpmc_status_t supervisor_reap(supervisor_t *supervisor, bool blocking) {
                 WEXITSTATUS(wait_status)
             );
         } else if (WIFSIGNALED(wait_status) && !supervisor->shutting_down) {
+            ++supervisor->notice_count;
             fprintf(
                 stderr,
                 "mpmc: processo filho %ld terminou pelo sinal %d.\n",

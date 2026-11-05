@@ -28,6 +28,10 @@
  * supervisor_reap() e supervisor_poll_events(). Um tempo limite curto no poll()
  * serve como rede de segurança para eventos que não geram sinal.
  *
+ * Linhas em branco são ignoradas. Quando supervisor_take_notices() indica que o
+ * supervisor imprimiu um aviso e a saída padrão é um terminal, o prompt é
+ * redesenhado sem esperar nova entrada.
+ *
  * `EOF` sem `shutdown` deve iniciar o mesmo caminho de encerramento ordenado.
  * Leituras interrompidas por sinal exigem tratamento explícito de `EINTR`.
  *

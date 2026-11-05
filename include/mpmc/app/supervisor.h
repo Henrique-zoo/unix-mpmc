@@ -81,6 +81,16 @@ mpmc_status_t supervisor_reap(supervisor_t *supervisor, bool blocking);
 mpmc_status_t supervisor_shutdown(supervisor_t *supervisor);
 
 /**
+ * @brief Informa quantos avisos o supervisor imprimiu desde a última consulta.
+ * @param supervisor Instância viva do supervisor; NULL devolve zero.
+ * @return Número de mensagens de término de filho escritas em stderr por
+ * supervisor_reap(); o contador é zerado pela chamada.
+ * @details Permite ao REPL redesenhar o prompt depois de uma saída assíncrona,
+ * sem precisar que o usuário pressione Enter.
+ */
+size_t supervisor_take_notices(supervisor_t *supervisor);
+
+/**
  * @brief Retorna a quantidade de estruturas configuradas no supervisor.
  * @param supervisor Instância inicializada.
  * @return Quantidade configurada, ou zero para NULL.
