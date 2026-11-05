@@ -61,6 +61,13 @@ impede perda de sinais que cheguem durante a coleta. O filho fecha sua cópia do
 `fork`. Não chamar `printf`, `malloc` ou rotinas de IPC não assíncronas dentro do tratador
 de sinal.
 
+Durante `fork()`, `supervisor_dispatch` bloqueia `SIGCHLD`, `SIGINT` e `SIGTERM`. O filho só
+os libera depois de restaurar as ações padrão, e o pai os libera após registrar o PID. Sem isso,
+um `SIGTERM` enviado por `shutdown` imediatamente após o despacho cairia no tratador herdado do
+REPL (que apenas marca uma flag) e o filho o ignoraria, travando o `waitpid()` bloqueante. O
+descritor de leitura/escrita do self-pipe é movido para fora de 0..2, para não colidir com
+`stdin` quando o processo é iniciado com descritores padrão fechados.
+
 ## Interface pública versus backends
 
 Os workers usam somente `ipc/transport.h`; a fachada redireciona os métodos para o

@@ -68,7 +68,8 @@ terminal ao tentar ler de `stdin` (sinal `SIGTTIN`). Para uso interativo, inicie
 primeiro plano. O programa detecta essa condição antes de ler e encerra com diagnóstico, sem
 ficar suspenso. Um processo em background pode receber comandos de uma fonte não terminal, por
 exemplo `./mpmc 4 1 < comandos.txt` ou `printf 'shutdown\n' | ./mpmc 4 1`; EOF encerra os
-trabalhos e remove os recursos pelo mesmo caminho ordenado de `shutdown`. Linhas inválidas são
+trabalhos pelo mesmo caminho ordenado de `shutdown` (a remoção dos recursos IPC faz parte desse
+caminho, mas só terá efeito quando os módulos `ipc/` forem implementados). Linhas inválidas são
 informadas e não encerram o REPL.
 
 ## Compilação e execução
@@ -142,6 +143,32 @@ $ ./mpmc 2 2
 >> produz 2 5 2
 >> shutdown
 ```
+
+### Entrada por `stdin`, pipes e EOF
+
+O REPL aceita `stdin` interativo (terminal), arquivo (`./mpmc 4 1 < comandos.txt`) ou pipe
+(`printf 'produz 1 2 2\nshutdown\n' | ./mpmc 4 1`). O comportamento é o mesmo nos três casos:
+
+- O prompt `>>` é exibido no início e depois de cada linha processada, válida ou não.
+- Quando o supervisor informa em `stderr` o término anormal de um filho, o prompt é redesenhado
+  em seguida, **somente se a saída padrão for um terminal**. Texto parcialmente digitado continua
+  no buffer do terminal e é executado normalmente ao pressionar Enter, embora possa deixar de
+  aparecer na tela. Mensagens que o próprio filho escreve em `stderr` não passam pelo supervisor
+  e podem ficar na mesma linha do prompt.
+- Linhas em branco (vazias ou só com espaços/tabulações) são ignoradas, sem erro.
+- Comando desconhecido, aridade ou valores inválidos e linhas com mais de **4096 caracteres** são
+  informados em `stderr` e **não** encerram o REPL.
+- A última linha sem `\n` final é processada normalmente ao chegar o EOF.
+- **EOF equivale a `shutdown`:** o REPL recusa novos trabalhos, envia `SIGTERM` aos filhos vivos,
+  recolhe todos e sai com código `0`. A remoção dos recursos IPC faz parte desse caminho, mas ainda
+  não está implementada (os módulos `ipc/` estão pendentes). Ele **não** espera os trabalhos
+  terminarem. Em scripts, um `produz` seguido do fim da entrada interrompe o filho imediatamente;
+  para aguardar, mantenha a entrada aberta pelo tempo necessário.
+- Comandos após `shutdown` na mesma entrada são ignorados.
+- Se `stdin` estiver fechado (`<&-`) ou ocorrer erro de leitura, o REPL encerra com código
+  diferente de zero, após o mesmo encerramento ordenado.
+- Filhos terminados são recolhidos e informados assim que terminam, **sem** exigir nova linha
+  do usuário (`SIGCHLD` acorda o `poll()` por um self-pipe; há ainda uma verificação a cada 100 ms).
 
 A aplicação deve continuar aceitando comandos enquanto os trabalhos concorrentes executam.
 A ordem real de execução, a ordem de término e a interposição das mensagens no terminal são
