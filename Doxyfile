@@ -1,4 +1,4 @@
-# Doxygen configuration for unix-mpmc documentation.
+# Configuração do Doxygen para a documentação do unix-mpmc.
 PROJECT_NAME           = unix-mpmc
 PROJECT_BRIEF          = "Múltiplos produtores e consumidores com IPC System V"
 OUTPUT_DIRECTORY       = build/docs
@@ -6,7 +6,7 @@ OUTPUT_LANGUAGE        = Brazilian
 INPUT_ENCODING         = UTF-8
 
 INPUT                  = README.md docs include src tests
-FILE_PATTERNS          = *.c *.h *.md
+FILE_PATTERNS          = *.c *.h *.md *.sh
 RECURSIVE              = YES
 USE_MDFILE_AS_MAINPAGE = README.md
 MARKDOWN_SUPPORT       = YES

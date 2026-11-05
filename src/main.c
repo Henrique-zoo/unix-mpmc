@@ -3,14 +3,14 @@
  * @brief Ponto de entrada e validação dos argumentos de inicialização.
  *
  * @details
- * Responsável por interpretar os argumentos fornecidos na invocação
- * do executável, validar a configuração solicitada e iniciar a aplicação.
+ * Responsável por interpretar os argumentos, validar a configuração,
+ * inicializar o supervisor e executar o terminal interativo.
  *
  * A validação é realizada por funções privadas, independentes dos
  * mecanismos de comunicação entre processos.
  *
- * Este módulo não implementa os comandos interativos, a supervisão
- * dos processos ou as operações de IPC.
+ * O parsing de comandos e o ciclo de vida dos processos pertencem aos
+ * módulos app/repl e app/supervisor; os backends de IPC são independentes.
  */
 
 #include <errno.h>
@@ -18,6 +18,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "mpmc/app/repl.h"
+#include "mpmc/app/supervisor.h"
 #include "mpmc/config.h"
 #include "mpmc/status.h"
 
@@ -50,7 +52,22 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    return 0;
+    supervisor_t *supervisor = NULL;
+    status = supervisor_create(&supervisor, config.producer_count, config.mode);
+    if (status != MPMC_OK) {
+        fprintf(
+            stderr, "mpmc: não foi possível inicializar o supervisor: %s\n", mpmc_status_str(status)
+        );
+        return EXIT_FAILURE;
+    }
+
+    status = repl_run(supervisor);
+    if (status != MPMC_OK) {
+        fprintf(stderr, "mpmc: REPL encerrado com erro: %s\n", mpmc_status_str(status));
+        (void)supervisor_shutdown(supervisor);
+    }
+    supervisor_destroy(supervisor);
+    return status == MPMC_OK ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 /**

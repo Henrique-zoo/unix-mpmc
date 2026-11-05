@@ -19,7 +19,18 @@
  * novos comandos enquanto existem workers vivos e precisa permitir que o
  * supervisor recolha filhos terminados periodicamente, sem criar zumbis.
  * No modo de filas, não pode interromper o escoamento de eventos de consumo
- * enquanto aguarda stdin; considerar notificação por sinal + pselect/self-pipe.
+ * enquanto aguarda stdin.
+ *
+ * O loop espera com poll() em `stdin` e no self-pipe do supervisor
+ * (supervisor_event_fd()). O tratador de `SIGCHLD` apenas chama
+ * supervisor_notify_signal(), que acorda o loop imediatamente; a coleta com
+ * waitpid() e a drenagem de eventos ocorrem fora do contexto de sinal, via
+ * supervisor_reap() e supervisor_poll_events(). Um tempo limite curto no poll()
+ * serve como rede de segurança para eventos que não geram sinal.
+ *
+ * Linhas em branco são ignoradas. Quando supervisor_take_notices() indica que o
+ * supervisor imprimiu um aviso e a saída padrão é um terminal, o prompt é
+ * redesenhado sem esperar nova entrada.
  *
  * `EOF` sem `shutdown` deve iniciar o mesmo caminho de encerramento ordenado.
  * Leituras interrompidas por sinal exigem tratamento explícito de `EINTR`.

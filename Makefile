@@ -1,5 +1,5 @@
-# unix-mpmc — multiple producers/consumers with System V IPC
-# Usage: make | make debug | make release | make test | make docs | make docs-clean | make clean
+# unix-mpmc — múltiplos produtores/consumidores com IPC System V
+# Uso: make | make debug | make release | make test | make docs | make docs-clean | make clean
 
 CC   := clang
 MODE ?= debug
@@ -41,11 +41,12 @@ debug:
 release:
 	$(MAKE) MODE=release all
 
-# Smoke tests: the interactive loop must accept the shutdown command.
+# Testes básicos: o loop interativo deve aceitar o comando shutdown.
 test: all
 	@printf 'shutdown\n' | ./mpmc 2 1 > /dev/null
 	@printf 'shutdown\n' | ./mpmc 2 2 > /dev/null
-	@echo 'Smoke tests passed (shared memory and message queues).'
+	@sh tests/integration/test_repl.sh ./mpmc
+	@echo 'Startup/REPL smoke tests passed (modes 1 and 2).'
 
 docs:
 	@mkdir -p build/docs
