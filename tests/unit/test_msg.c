@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
 #include <sys/wait.h>
@@ -281,6 +282,94 @@ static void test_blocking_receive_wakes_on_send_from_child(void) {
     drop_queue(msqid);
 }
 
+/* Lê um limite do kernel em /proc/sys/kernel; devolve `fallback` se indisponível. */
+static size_t kernel_limit(const char *path, size_t fallback) {
+    FILE *file = fopen(path, "r");
+    unsigned long value = 0;
+
+    if (file == NULL) {
+        return fallback;
+    }
+    if (fscanf(file, "%lu", &value) != 1 || value == 0) {
+        value = fallback;
+    }
+    fclose(file);
+    return (size_t)value;
+}
+
+static void test_message_size_limit(void) {
+    int msqid = new_queue();
+    size_t msgmax = kernel_limit("/proc/sys/kernel/msgmax", 8192);
+    size_t msgmnb = kernel_limit("/proc/sys/kernel/msgmnb", 16384);
+    unsigned char *sent = malloc(msgmax + 1);
+    unsigned char *got = malloc(msgmax + 1);
+    ssize_t size = 0;
+
+    CHECK(sent != NULL && got != NULL, "malloc falhou");
+    if (sent == NULL || got == NULL) {
+        free(sent);
+        free(got);
+        drop_queue(msqid);
+        return;
+    }
+    memset(sent, 0xA5, msgmax + 1);
+
+    /* Acima de MSGMAX o kernel recusa, e o wrapper propaga a falha. */
+    CHECK_STATUS(sysv_msg_send(msqid, 1, sent, msgmax + 1, true), MPMC_ERR_SYS);
+
+    /* Exatamente MSGMAX é aceito, desde que a fila comporte (MSGMNB). */
+    if (msgmax <= msgmnb) {
+        CHECK_STATUS(sysv_msg_send(msqid, 1, sent, msgmax, true), MPMC_OK);
+        CHECK_STATUS(sysv_msg_receive(msqid, 1, got, msgmax, true, &size), MPMC_OK);
+        CHECK(
+            size == (ssize_t)msgmax && memcmp(sent, got, msgmax) == 0,
+            "mensagem de tamanho MSGMAX corrompida (size=%zd)",
+            size
+        );
+    }
+
+    free(sent);
+    free(got);
+    drop_queue(msqid);
+}
+
+/* Envio bloqueado numa fila cheia é liberado quando outro processo consome. */
+static void test_blocked_send_wakes_on_receive_from_child(void) {
+    int msqid = new_queue();
+    char block[1024] = {0};
+    struct timespec start;
+    struct timespec end;
+    int wstatus = 0;
+    pid_t child;
+
+    CHECK_STATUS(fill_queue(msqid), MPMC_ERR_WOULD_BLOCK);
+
+    child = fork();
+    CHECK(child >= 0, "fork falhou");
+    if (child == 0) {
+        char buffer[1024];
+        ssize_t size = 0;
+
+        nanosleep(&(struct timespec){.tv_nsec = 100000000L}, NULL);
+        _exit(sysv_msg_receive(msqid, 0, buffer, sizeof buffer, false, &size) == MPMC_OK ? 0 : 1);
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    CHECK_STATUS(sysv_msg_send(msqid, 1, block, sizeof block, false), MPMC_OK);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+
+    /* O envio realmente esperou pelo filho (que dorme 100 ms antes de consumir). */
+    long elapsed_ms =
+        (end.tv_sec - start.tv_sec) * 1000L + (end.tv_nsec - start.tv_nsec) / 1000000L;
+
+    CHECK(elapsed_ms >= 50, "envio não bloqueou: levou apenas %ld ms", elapsed_ms);
+
+    waitpid(child, &wstatus, 0);
+    CHECK(WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0, "filho falhou ao consumir");
+
+    drop_queue(msqid);
+}
+
 int main(void) {
     test_create_remove();
     test_failures_are_propagated();
@@ -294,6 +383,8 @@ int main(void) {
     test_blocking_receive_interrupted();
     test_blocking_send_interrupted();
     test_blocking_receive_wakes_on_send_from_child();
+    test_blocked_send_wakes_on_receive_from_child();
+    test_message_size_limit();
 
     printf("%u verificações, %u falhas\n", g_checks, g_failures);
 
