@@ -16,7 +16,7 @@ sempre para baixo:
 7. `ipc/shm_backend` / `ipc/msg_backend` implementam as políticas de cada paradigma.
 8. `ipc/shm`, `ipc/sem` e `ipc/msg` encapsulam chamadas de sistema.
 
-`message.h` e `status.h` são tipos transversais e não dependem de outros módulos da aplicação.
+`message.h` e `error.h` são tipos transversais e não dependem de outros módulos da aplicação.
 
 ## Matriz de responsabilidades
 
@@ -76,8 +76,10 @@ implementação, mesmo quando seus protótipos são publicados em `include/` par
 facilitar a documentação técnica.
 
 Os wrappers `sysv_*` preservam os contratos das chamadas de sistema, verificam
-resultados e traduzem falhas em `mpmc_status_t`. Não devem silenciar permanentemente
-erros nem abstrair semânticas diferentes de `IPC_NOWAIT`, `EINTR` e `IPC_RMID`.
+resultados e retornam `mpmc_result_t`, com a categoria em `status` e a causa original em
+`system_errno`. A causa é capturada antes de qualquer limpeza e propagada sem depender
+do valor corrente de `errno`. Não devem silenciar permanentemente erros nem abstrair
+semânticas diferentes de `IPC_NOWAIT`, `EINTR` e `IPC_RMID`.
 
 ## Falhas e recuperação
 

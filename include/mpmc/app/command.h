@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "mpmc/status.h"
+#include "mpmc/error.h"
 
 /**
  * @defgroup application Aplicação e gerenciamento de processos
@@ -58,8 +58,12 @@ typedef struct {
  * @param line Linha terminada em NUL, possivelmente com espaços e '\n'.
  * @param out Destino do comando; só é escrito quando retornar MPMC_OK.
  *
- * @retval MPMC_OK Sintaxe reconhecida e campos numéricos convertidos.
- * @retval MPMC_ERR_INVALID_ARG Comando desconhecido, tokens inesperados,
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: verbo, aridade e números reconhecidos; comando normalizado escrito em out.
+ * - MPMC_ERR_INVALID_ARG: line ou out nulo, linha vazia, verbo desconhecido, aridade incorreta,
+ *   token inesperado, número malformado ou não representável no campo de destino.
+ *
+ * system_errno é zero em todos os resultados; a conversão numérica não usa errno.
  *   aridade incorreta, números inválidos ou argumentos NULL.
  *
  * @par Overflow
@@ -80,7 +84,7 @@ typedef struct {
  * @par Concorrência
  * Reentrante, sem estado global.
  */
-mpmc_status_t command_parse(const char *line, command_t *out);
+mpmc_result_t command_parse(const char *line, command_t *out);
 
 /**
  * @brief Valida as regras semânticas de um comando.
@@ -97,17 +101,21 @@ mpmc_status_t command_parse(const char *line, command_t *out);
  * @param command Comando retornado por command_parse().
  * @param producer_count Número de estruturas inicializadas (deve ser > 0).
  *
- * @retval MPMC_OK Parâmetros válidos para esta instância.
- * @retval MPMC_ERR_INVALID_ARG Quantidade fora de 1..1024, ack diferente
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: comando shutdown ou parâmetros válidos para a quantidade de estruturas informada.
+ * - MPMC_ERR_INVALID_ARG: command nulo, producer_count zero, tipo de comando desconhecido,
+ *   quantidade fora de 1..1024 ou ack diferente de 1/2.
+ * - MPMC_ERR_INVALID_INDEX: índice acima de producer_count ou índice zero em consome.
+ *
+ * system_errno é zero em todos os resultados.
  *   de 1/2, discriminante fora do enum, ou producer_count igual a zero.
- * @retval MPMC_ERR_INVALID_INDEX Índice fora de 1..p (exceto produção striped=0).
  *
  * @pre command não é NULL.
  * @note `consome 0` é inválido; `produz 0` é válido.
  * @par Concorrência
  * Reentrante, sem estado global.
  */
-mpmc_status_t command_validate(const command_t *command, size_t producer_count);
+mpmc_result_t command_validate(const command_t *command, size_t producer_count);
 
 /** @} */
 #endif

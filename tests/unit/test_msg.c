@@ -10,7 +10,7 @@
  * Compilação e execução (a partir da raiz do repositório):
  *
  *     cc -std=c23 -Wall -Wextra -Iinclude -D_POSIX_C_SOURCE=200809L \
- *        tests/unit/test_msg.c src/ipc/msg.c src/status.c -o build/test_msg
+ *        tests/unit/test_msg.c src/ipc/msg.c src/error.c -o build/test_msg
  *     ./build/test_msg
  *
  * Retorna 0 se todos os casos passarem; 1 caso contrário.
@@ -29,7 +29,7 @@
 #include <unistd.h>
 
 #include "mpmc/ipc/msg.h"
-#include "mpmc/status.h"
+#include "mpmc/error.h"
 
 static unsigned g_checks;
 static unsigned g_failures;
@@ -47,21 +47,34 @@ static unsigned g_failures;
 
 #define CHECK_STATUS(call, expected)                                                               \
     do {                                                                                           \
-        mpmc_status_t status_ = (call);                                                            \
+        mpmc_result_t status_ = (call);                                                            \
         CHECK(                                                                                     \
-            status_ == (expected),                                                                 \
+            status_.status == (expected),                                                          \
             "%s retornou '%s', esperado '%s'",                                                     \
             #call,                                                                                 \
-            mpmc_status_str(status_),                                                              \
+            mpmc_status_str(status_.status),                                                              \
             mpmc_status_str(expected)                                                              \
         );                                                                                         \
+        CHECK(status_.status != MPMC_OK || status_.system_errno == 0,                              \
+              "%s: sucesso deve ter system_errno zero", #call);                                   \
+    } while (0)
+
+#define CHECK_ERROR(call, expected, expected_errno)                                                 \
+    do {                                                                                           \
+        mpmc_result_t error_ = (call);                                                              \
+        CHECK(error_.status == (expected), "%s: categoria inesperada", #call);                     \
+        CHECK(error_.system_errno == (expected_errno),                                             \
+              "%s: system_errno=%d, esperado %d", #call, error_.system_errno, (expected_errno));   \
     } while (0)
 
 static int new_queue(void) {
     int msqid = -1;
 
-    if (sysv_msg_create(&msqid) != MPMC_OK) {
-        perror("sysv_msg_create");
+    mpmc_result_t error = sysv_msg_create(&msqid);
+    if (error.status != MPMC_OK) {
+        char description[256];
+        (void)mpmc_error_format(error, description, sizeof description);
+        fprintf(stderr, "sysv_msg_create: %s\n", description);
         _exit(2);
     }
     return msqid;
@@ -91,23 +104,34 @@ static void arm_alarm(long millis) {
     setitimer(ITIMER_REAL, &timer, NULL);
 }
 
-/* Enche a fila com mensagens de 1 KiB, sem bloquear; retorna o status final. */
-static mpmc_status_t fill_queue(int msqid) {
+/**
+ * @brief Enche a fila com mensagens de 1 KiB, sem bloquear; retorna o resultado completo.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: mil envios concluídos sem atingir o limite da fila; system_errno é zero.
+ * - MPMC_ERR_WOULD_BLOCK: fila ficou sem capacidade em um envio não bloqueante; system_errno
+ *   contém EAGAIN.
+ * - MPMC_ERR_INTERRUPTED: msgsnd() retornou EINTR, preservado em system_errno.
+ * - MPMC_ERR_SYS: falha em malloc() ou msgsnd() por outra causa; system_errno contém o errno
+ *   capturado na operação que falhou.
+ *
+ * O resultado do último sysv_msg_send() é propagado integralmente.
+ */
+static mpmc_result_t fill_queue(int msqid) {
     char block[1024];
-    mpmc_status_t status = MPMC_OK;
+    mpmc_result_t error = (mpmc_result_t){.status = MPMC_OK};
 
     memset(block, 0x5A, sizeof block);
-    for (int i = 0; i < 1000 && status == MPMC_OK; ++i) {
-        status = sysv_msg_send(msqid, 1, block, sizeof block, true);
+    for (int i = 0; i < 1000 && error.status == MPMC_OK; ++i) {
+        error = sysv_msg_send(msqid, 1, block, sizeof block, true);
     }
-    return status;
+    return error;
 }
 
 static void test_create_remove(void) {
     int a = -1;
     int b = -1;
 
-    CHECK_STATUS(sysv_msg_create(NULL), MPMC_ERR_INVALID_ARG);
+    CHECK_ERROR(sysv_msg_create(NULL), MPMC_ERR_INVALID_ARG, 0);
     CHECK_STATUS(sysv_msg_create(&a), MPMC_OK);
     CHECK_STATUS(sysv_msg_create(&b), MPMC_OK);
     CHECK(a >= 0 && b >= 0 && a != b, "IDs inválidos ou repetidos (%d, %d)", a, b);
@@ -122,9 +146,9 @@ static void test_failures_are_propagated(void) {
     char out;
     ssize_t size = 0;
 
-    CHECK_STATUS(sysv_msg_send(-1, 1, &byte, 1, true), MPMC_ERR_SYS);
-    CHECK_STATUS(sysv_msg_receive(-1, 0, &out, 1, true, &size), MPMC_ERR_SYS);
-    CHECK_STATUS(sysv_msg_remove(-1), MPMC_ERR_SYS);
+    CHECK_ERROR(sysv_msg_send(-1, 1, &byte, 1, true), MPMC_ERR_SYS, EINVAL);
+    CHECK_ERROR(sysv_msg_receive(-1, 0, &out, 1, true, &size), MPMC_ERR_SYS, EINVAL);
+    CHECK_ERROR(sysv_msg_remove(-1), MPMC_ERR_SYS, EINVAL);
 }
 
 static void test_roundtrip_preserves_payload(void) {
@@ -138,7 +162,9 @@ static void test_roundtrip_preserves_payload(void) {
     }
     memset(got, 0xEE, sizeof got);
 
+    errno = EACCES;
     CHECK_STATUS(sysv_msg_send(msqid, 7, sent, sizeof sent, false), MPMC_OK);
+    errno = EACCES;
     CHECK_STATUS(sysv_msg_receive(msqid, 7, got, sizeof got, false, &size), MPMC_OK);
     CHECK(size == (ssize_t)sizeof sent, "msgsz deve excluir mtype: recebido %zd", size);
     CHECK(memcmp(sent, got, sizeof sent) == 0, "payload alterado no trânsito");
@@ -203,7 +229,10 @@ static void test_receive_nowait_empty(void) {
     char got;
     ssize_t size = 0;
 
-    CHECK_STATUS(sysv_msg_receive(msqid, 0, &got, 1, true, &size), MPMC_ERR_WOULD_BLOCK);
+    mpmc_result_t error = sysv_msg_receive(msqid, 0, &got, 1, true, &size);
+    errno = EACCES;
+    CHECK(error.status == MPMC_ERR_WOULD_BLOCK, "fila vazia deve retornar WOULD_BLOCK");
+    CHECK(error.system_errno == ENOMSG, "causa ENOMSG deve sobreviver à mudança de errno");
 
     drop_queue(msqid);
 }
@@ -213,7 +242,7 @@ static void test_send_nowait_full(void) {
     unsigned char got[1024];
     ssize_t size = 0;
 
-    CHECK_STATUS(fill_queue(msqid), MPMC_ERR_WOULD_BLOCK);
+    CHECK_ERROR(fill_queue(msqid), MPMC_ERR_WOULD_BLOCK, EAGAIN);
 
     /* Após consumir uma mensagem, o envio volta a funcionar. */
     CHECK_STATUS(sysv_msg_receive(msqid, 0, got, sizeof got, true, &size), MPMC_OK);
@@ -228,7 +257,7 @@ static void test_message_too_big_is_not_truncated(void) {
     ssize_t size = 77;
 
     CHECK_STATUS(sysv_msg_send(msqid, 1, "0123456789", 10, false), MPMC_OK);
-    CHECK_STATUS(sysv_msg_receive(msqid, 1, got, 4, true, &size), MPMC_ERR_SYS);
+    CHECK_ERROR(sysv_msg_receive(msqid, 1, got, 4, true, &size), MPMC_ERR_SYS, E2BIG);
     CHECK(size == 77, "out_size não deve ser alterado em falha");
 
     /* A mensagem continua na fila, íntegra. */
@@ -244,7 +273,7 @@ static void test_blocking_receive_interrupted(void) {
     ssize_t size = 0;
 
     arm_alarm(50);
-    CHECK_STATUS(sysv_msg_receive(msqid, 0, &got, 1, false, &size), MPMC_ERR_INTERRUPTED);
+    CHECK_ERROR(sysv_msg_receive(msqid, 0, &got, 1, false, &size), MPMC_ERR_INTERRUPTED, EINTR);
 
     drop_queue(msqid);
 }
@@ -256,7 +285,7 @@ static void test_blocking_send_interrupted(void) {
     CHECK_STATUS(fill_queue(msqid), MPMC_ERR_WOULD_BLOCK);
 
     arm_alarm(50);
-    CHECK_STATUS(sysv_msg_send(msqid, 1, block, sizeof block, false), MPMC_ERR_INTERRUPTED);
+    CHECK_ERROR(sysv_msg_send(msqid, 1, block, sizeof block, false), MPMC_ERR_INTERRUPTED, EINTR);
 
     drop_queue(msqid);
 }
@@ -272,7 +301,7 @@ static void test_blocking_receive_wakes_on_send_from_child(void) {
     CHECK(child >= 0, "fork falhou");
     if (child == 0) {
         nanosleep(&(struct timespec){.tv_nsec = 100000000L}, NULL);
-        _exit(sysv_msg_send(msqid, 4, "filho", 5, false) == MPMC_OK ? 0 : 1);
+        _exit(sysv_msg_send(msqid, 4, "filho", 5, false).status == MPMC_OK ? 0 : 1);
     }
 
     CHECK_STATUS(sysv_msg_receive(msqid, 4, got, sizeof got, false, &size), MPMC_OK);
@@ -353,7 +382,7 @@ static void test_blocked_send_wakes_on_receive_from_child(void) {
         ssize_t size = 0;
 
         nanosleep(&(struct timespec){.tv_nsec = 100000000L}, NULL);
-        _exit(sysv_msg_receive(msqid, 0, buffer, sizeof buffer, false, &size) == MPMC_OK ? 0 : 1);
+        _exit(sysv_msg_receive(msqid, 0, buffer, sizeof buffer, false, &size).status == MPMC_OK ? 0 : 1);
     }
 
     clock_gettime(CLOCK_MONOTONIC, &start);
