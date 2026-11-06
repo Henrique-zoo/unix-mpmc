@@ -58,7 +58,7 @@ size_t ipc_producer_count(const ipc_context_t *context);
 /**
  * @brief Envia uma mensagem a uma estrutura lógica.
  * @param context Transporte inicializado e válido no processo atual.
- * @param producer_id Índice de destino, no intervalo 1..p.
+ * @param producer_id Índice lógico da fila de destino, no intervalo 1..p; não é PID.
  * @param message Mensagem lógica; a implementação não altera o objeto passado.
  * @retval MPMC_OK Mensagem inserida no backend.
  * @retval MPMC_ERR_INVALID_INDEX Índice de destino fora do intervalo.
@@ -73,7 +73,7 @@ mpmc_status_t ipc_send(ipc_context_t *context, size_t producer_id, const message
 /**
  * @brief Retira uma única mensagem de uma estrutura lógica.
  * @param context Transporte inicializado.
- * @param producer_id Índice de origem, no intervalo 1..p.
+ * @param producer_id Índice lógico da fila de origem, no intervalo 1..p; não é PID do emissor.
  * @param out Recebe a mensagem removida se retornar MPMC_OK.
  * @param blocking Se true, aguarda um item; se false, não espera.
  * @retval MPMC_OK Mensagem efetivamente consumida.

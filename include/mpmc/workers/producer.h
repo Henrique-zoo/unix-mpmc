@@ -28,7 +28,7 @@ typedef enum {
 
 /** @brief Dados imutáveis de uma operação de produção. */
 typedef struct {
-    size_t producer_id;           /**< 1..p, ou 0 para distribuição striped. */
+    size_t producer_id;           /**< Índice lógico da fila destino (1..p); 0 distribui em striped. */
     unsigned message_count;       /**< Quantidade de mensagens, 1..1024. */
     producer_ack_mode_t ack_mode; /**< Com ou sem espera por confirmações. */
     uint64_t operation_id;        /**< Identificador único gerado no supervisor. */
@@ -66,9 +66,12 @@ mpmc_status_t producer_message_next(
  * @retval MPMC_ERR_INTERRUPTED Produção ou espera cancelada por sinal.
  * @retval MPMC_ERR_SYS Falha de relógio, IPC ou tratamento de ACK.
  * @retval MPMC_ERR_STATE Contrato do job violado.
- * @details Gera sender_pid=getpid(), sequência iniciando em 1 e sent_at
- * do CLOCK_REALTIME. Usa ipc_send() para o destino selecionado; para
- * producer_id=0, alterna destinos `1 + ((seq-1) % p)`. Na opção ack=1,
+ * @details `job->producer_id` é um índice lógico de fila, não um PID. O
+ * processo filho é o emissor físico: sender_pid recebe getpid(), independente
+ * do índice lógico. A sequência inicia em 1 por processo e sent_at usa
+ * CLOCK_REALTIME. Usa ipc_send() para o destino selecionado; para
+ * producer_id=0, alterna destinos `1 + ((seq-1) % p)` sem mudar sender_pid.
+ * Na opção ack=1,
  * executa begin/wait/end; na opção ack=2, não solicita confirmação.
  * @pre Deve ser chamada em um filho do supervisor, não no processo principal.
  * @post O worker deve liberar recursos locais usando ipc_worker_close() antes

@@ -30,11 +30,14 @@
  * confirmações. Um backend de filas System V adicionará separadamente
  * seu envelope `long mtype`; `mtype` não faz parte desta estrutura.
  *
- * `sequence` começa em 1 para cada processo produtor e avança por envio,
+ * `sender_pid` identifica o processo físico que envia (getpid()), enquanto
+ * `producer_id` é o índice lógico da fila destino e não faz parte deste
+ * registro. Em produção striped, um único PID envia para vários índices.
+ * `sequence` começa em 1 para cada processo emissor e avança por envio,
  * inclusive em comandos striped. `sent_at` usa CLOCK_REALTIME.
  */
 typedef struct {
-    pid_t sender_pid;        /**< PID real do processo produtor que enviou a mensagem. */
+    pid_t sender_pid;        /**< PID físico real do processo que enviou a mensagem (getpid()). */
     uint32_t sequence;       /**< Sequência do processo produtor, iniciando em 1. */
     struct timespec sent_at; /**< Instante do envio (relógio de calendário). */
     uint64_t operation_id;   /**< Identificador único do comando atribuído pelo supervisor. */
