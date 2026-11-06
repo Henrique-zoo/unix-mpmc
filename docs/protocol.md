@@ -120,13 +120,220 @@ retornar `MPMC_ERR_WOULD_BLOCK`, finaliza com erro de quantidade insuficiente e
 informa quantas mensagens conseguiu remover. As mensagens já consumidas **não**
 são repostas na fila ou buffer.
 
+## Formato físico e protocolo por backend {#ipc_wire_formats}
+
+Esta seção fixa o que cada backend grava e troca, byte a byte e semáforo a semáforo.
+Ela é o contrato que `shm_backend` e `msg_backend` devem implementar; o restante do
+documento descreve as propriedades que esse contrato precisa garantir. Os tamanhos
+abaixo foram obtidos com `sizeof`/`offsetof` em Linux LP64 (x86-64 e aarch64) e a
+implementação deve confirmá-los com `static_assert`, recusando-se a compilar se divergirem.
+
+### Representação comum de `message_t`
+
+Os dois backends transportam a mesma estrutura, copiada com `memcpy` e sem ponteiros.
+A cópia bruta é válida porque todos os processos executam o mesmo binário na mesma
+máquina e, portanto, compartilham o mesmo ABI.
+
+| Campo | Deslocamento | Bytes | Observação |
+|---|---:|---:|---|
+| `sender_pid` | 0 | 4 | `getpid()` do filho emissor |
+| `sequence` | 4 | 4 | Começa em 1 por processo emissor |
+| `sent_at` | 8 | 16 | `struct timespec`, `CLOCK_REALTIME` |
+| `operation_id` | 24 | 8 | ID do trabalho **produtor**, atribuído pelo supervisor |
+| `ack_required` | 32 | 1 | Seguido de 7 bytes de preenchimento |
+| **Total** | | **40** | Alinhamento 8 |
+
+Regras comuns aos dois backends:
+
+- `sent_at` é gravado pelo produtor imediatamente antes da chamada a `ipc_send()` daquela
+  mensagem e nunca é reescrito por backend ou consumidor. É o instante em que o produtor
+  inicia o envio, e não o instante em que o comando foi criado nem o da inserção: se o
+  envio esperar vaga, a inserção ocorre depois do `sent_at`.
+- O backend não altera `sender_pid`, `sequence`, `sent_at`, `operation_id` nem
+  `ack_required`. O consumidor recebe a mensagem exatamente como o produtor a enviou.
+- O índice lógico `producer_id` nunca é gravado na mensagem; ele é o endereço (segmento
+  ou fila) onde a mensagem fica.
+
+### Backend 1: memória compartilhada e semáforos
+
+**Recursos criados pelo supervisor em `ipc_init()`:**
+
+| Recurso | Quantidade | Conteúdo |
+|---|---:|---|
+| Segmento `S_i` | `p` | Exatamente 2048 bytes, buffer circular da estrutura `i` |
+| Conjunto de semáforos `M_i` | `p` | 3 semáforos da estrutura `i` |
+| Segmento de controle `C` | 1 | Tabela de operações com ACK pendente |
+| Conjunto de semáforos `K` | 1 | `1 + 64` semáforos de ACK |
+
+**Layout de `S_i` (2048 bytes):**
+
+| Faixa | Conteúdo |
+|---|---|
+| 0–3 | `head` (`uint32_t`): próxima posição de retirada |
+| 4–7 | `tail` (`uint32_t`): próxima posição de inserção |
+| 8–11 | `count` (`uint32_t`): entradas ocupadas |
+| 12–15 | `capacity` (`uint32_t`): gravado em `ipc_init()`, vale 50 |
+| 16–23 | `consumed_total` (`uint64_t`): mensagens retiradas desta estrutura |
+| 24–2023 | 50 entradas de 40 bytes (`message_t`); a entrada `j` começa em `24 + 40·j` |
+| 2024–2047 | Reservado, zerado |
+
+A capacidade segue a fórmula da seção anterior: `(2048 − 24) / 40 = 50`. Uma estrutura
+comporta no máximo 50 mensagens pendentes; um `produz i 1024 2` sem consumidores bloqueia
+na 51ª, e isso é o comportamento previsto (backpressure), não um erro.
+
+**Semáforos de `M_i`:** índice 0 = `mutex` (inicial 1); índice 1 = `empty` (inicial 50);
+índice 2 = `full` (inicial 0). Os índices valem 0, 1 e 2 em todas as estruturas.
+
+**Envio (`shm_backend_send`):**
+
+1. `P(empty)` bloqueante. Se interrompido, nada foi reservado e retorna `MPMC_ERR_INTERRUPTED`.
+2. Bloqueia `SIGTERM` e `SIGINT` com `sigprocmask()`.
+3. `P(mutex)`; grava a entrada em `tail`; `tail = (tail + 1) % capacity`; `count++`; `V(mutex)`.
+4. `V(full)`; restaura a máscara de sinais (um término pendente é entregue agora).
+
+Se a obtenção de `mutex` falhar depois de `P(empty)`, o backend executa `V(empty)` para
+devolver a vaga antes de retornar o erro. Nenhuma espera bloqueante ocorre com `mutex`
+adquirido, e `SEM_UNDO` não é usado.
+
+**Recebimento (`shm_backend_receive`):**
+
+1. `P(full)` (com `IPC_NOWAIT` se `blocking=false`; `EAGAIN` vira `MPMC_ERR_WOULD_BLOCK`).
+2. Bloqueia `SIGTERM` e `SIGINT`.
+3. `P(mutex)`; copia a entrada de `head`; `head = (head + 1) % capacity`; `count--`;
+   `consumed_total++`; `V(mutex)`. Remoção e contagem são uma única seção crítica,
+   então não existe mensagem retirada e não contada.
+4. `V(empty)`; se `ack_required`, executa o protocolo de ACK abaixo; restaura a máscara.
+
+**ACK por operação (`ack=1`).** O segmento de controle `C` guarda 64 posições de 8 bytes,
+cada uma com um `operation_id` (0 = livre). O conjunto `K` tem o semáforo 0 como
+`ack_mutex` (inicial 1) e, nos índices 1 a 64, um contador de ACKs por posição (inicial 0).
+Como os consumidores são criados antes de o produtor existir, este é o único ponto de
+encontro que ambos já herdaram por `fork()`.
+
+| Passo | Quem | Ação |
+|---|---|---|
+| `ack_begin(op, n)` | Produtor | `P(ack_mutex)`; recusa `op` já presente (`MPMC_ERR_STATE`); toma a primeira posição livre (sem posição livre: `MPMC_ERR_NO_SPACE`); grava `op`; zera o contador da posição; `V(ack_mutex)` |
+| ACK | Consumidor | `P(ack_mutex)`; procura `op = message.operation_id`; se achar, `V(contador)` na posição; `V(ack_mutex)`. Se não achar, o ACK é descartado (o produtor já terminou ou foi cancelado) |
+| `ack_wait(op)` | Produtor | `semop(contador, −n)`: bloqueia até o contador valer pelo menos `n` e subtrai `n` de uma vez |
+| `ack_end(op)` | Produtor | `P(ack_mutex)`; grava 0 na posição; `V(ack_mutex)`. Chamado em sucesso, falha ou cancelamento |
+
+Propriedades que esse desenho garante:
+
+- ACKs que chegam antes de `ack_wait` não se perdem, porque ficam acumulados no contador.
+- Um ACK nunca é creditado a outra operação: a busca é pelo `operation_id` da mensagem e
+  o `V` ocorre com `ack_mutex` adquirido, então `ack_end` não pode liberar e reutilizar a
+  posição entre a busca e o `V`.
+- Em `produz 0 n 1`, as `n` mensagens, de qualquer estrutura de destino, incrementam o
+  mesmo contador; o produtor espera `n` no total.
+- Não há espera circular: o consumidor nunca bloqueia no ACK (o `V` não bloqueia e o
+  `ack_mutex` só é mantido por trechos curtos sem espera), e o único bloqueio do canal é
+  o do produtor em `ack_wait`.
+- O limite é de 64 operações `produz ... 1` simultâneas; a seguinte falha com
+  `MPMC_ERR_NO_SPACE` e o REPL reporta o erro. O valor máximo de um semáforo System V
+  (32767 no Linux) comporta os 1024 ACKs do maior trabalho.
+
+**Estatísticas.** `shm_backend_consumed_count()` lê `consumed_total` sob `mutex`.
+`ipc_poll_events()` não faz nada neste modo.
+
+### Backend 2: filas de mensagens System V
+
+**Recursos criados pelo supervisor em `ipc_init()`:**
+
+| Fila | Quantidade | Tipo (`mtype`) | Corpo (`msgsz`, sem `mtype`) |
+|---|---:|---|---|
+| Dados `D_i` | `p` | 1 | `message_t`, 40 bytes |
+| ACK `Q_ack` | 1 | `operation_id` do produtor | `{ pid_t sender_pid; uint32_t sequence; }`, 8 bytes |
+| Eventos `Q_evt` | 1 | 1 | `{ uint32_t producer_id; }`, 4 bytes |
+
+Os dados do paradigma 2 trafegam só por filas, nunca por `shm`. As filas `Q_ack` e `Q_evt`
+são recursos de controle: não substituem as `p` filas de dados exigidas.
+
+**Capacidade.** O limite de cada fila é `msg_qbytes`. Neste ambiente de teste ele vale
+16384 bytes e a fila de dados encheu com 409 mensagens de 40 bytes; a de ACK, com 2048
+mensagens de 8 bytes. O valor varia entre sistemas e deve ser tratado como dado, não como
+constante. Como no modo 1, `msgsnd` bloqueante em fila cheia é backpressure esperado.
+
+**Envio.** `msgsnd(D_i, {1, message_t})` com `msgsz = sizeof(message_t)`. Se
+`ack_required=false`, usa a forma bloqueante, porque nenhum ACK depende desse produtor.
+Se `ack_required=true`, usa o laço descrito em "ACK por operação" abaixo.
+
+**Recebimento.** `msgrcv(D_i, tipo 1, msgsz = sizeof(message_t))`, sem `MSG_NOERROR`;
+com `blocking=false` acrescenta `IPC_NOWAIT` e `ENOMSG` vira `MPMC_ERR_WOULD_BLOCK`. Um
+corpo de tamanho diferente de `sizeof(message_t)` é violação de contrato
+(`MPMC_ERR_STATE`). Depois de retirar a mensagem, o consumidor, nesta ordem:
+
+1. envia `{producer_id}` a `Q_evt` (um evento por mensagem retirada, com ou sem ACK);
+2. se `ack_required`, envia `{sender_pid, sequence}` a `Q_ack` com `mtype = operation_id`.
+
+**ACK por operação (`ack=1`).** O `mtype` do ACK é o `operation_id` do produtor, de modo
+que `msgrcv(Q_ack, tipo = operation_id)` entrega a cada produtor somente as próprias
+confirmações, mesmo com vários `produz` no mesmo índice. Como `mtype` é `long`, um
+`operation_id` maior que `LONG_MAX` é recusado em `ack_begin` (`MPMC_ERR_INVALID_ARG`);
+na prática os IDs crescem a partir de 1.
+
+| Passo | Ação |
+|---|---|
+| `ack_begin(op, n)` | Só estado local: guarda `op`, `n` e um contador em zero. A fila `Q_ack` já existe |
+| Envio de cada mensagem | Laço: `msgsnd(D_i, IPC_NOWAIT)`; em sucesso, segue. Em `EAGAIN`, drena as confirmações próprias (`msgrcv(Q_ack, tipo = op, IPC_NOWAIT)` até `ENOMSG`), somando ao contador, espera no máximo 1 ms com `nanosleep()` e repete. `EINTR` no laço retorna `MPMC_ERR_INTERRUPTED` |
+| `ack_wait(op)` | `msgrcv(Q_ack, tipo = op)` bloqueante até o contador chegar a `n` |
+| `ack_end(op)` | Drena sem bloquear as confirmações restantes de `op`; não há recurso do kernel a liberar |
+
+Por que isso não trava: um `msgsnd` bloqueante por ACK, sozinho, permitiria o ciclo em que
+produtores esperam vaga em `D_i` enquanto consumidores esperam vaga em `Q_ack`. Aqui, um
+produtor com `ack=1` nunca fica bloqueado no kernel sem drenar os próprios ACKs: ele só
+espera em `ack_wait` (que consome ACKs) ou em `nanosleep` curto (depois de drenar). Logo,
+se `Q_ack` encher, o produtor dono dos ACKs acaba drenando e libera os consumidores.
+
+**Limite conhecido, ACKs órfãos.** Se um produtor morre antes de receber seus ACKs, as
+confirmações que chegarem depois ficam em `Q_ack` sem dono. Ao recolher um filho produtor,
+o supervisor drena `Q_ack` no tipo do `operation_id` dele; ACKs que cheguem depois dessa
+purga permanecem até o `shutdown`. Em operação normal isso não ocorre, porque o produtor
+só termina depois de receber todos os ACKs.
+
+**Estatísticas.** O supervisor chama `ipc_poll_events()` a cada ciclo do REPL (no máximo
+100 ms), ao receber `SIGCHLD` e durante o `shutdown`: lê `Q_evt` com `IPC_NOWAIT` até
+`ENOMSG` e incrementa seu contador local de `producer_id`. No `shutdown`, depois de enviar
+`SIGTERM`, o supervisor alterna `waitpid(WNOHANG)` e `ipc_poll_events()` até recolher todos
+os filhos, e faz uma drenagem final antes de ler `ipc_consumed_count()`. Assim, um consumidor
+bloqueado em `Q_evt` cheia é liberado pela drenagem e nenhum evento enfileirado é perdido.
+
+**Limite conhecido, janela entre retirada e evento.** O kernel não oferece "receber e
+publicar" atômico. Se um `SIGTERM` terminar o consumidor entre o retorno de `msgrcv` e o
+envio do evento, essa mensagem foi retirada mas não contada. A janela é de poucas
+instruções e só se abre durante o `shutdown` ou numa morte anormal; o relatório de
+consumo por estrutura pode então ficar uma unidade abaixo do real nesse caso.
+
+### Comparação dos dois backends
+
+| Aspecto | Memória compartilhada | Filas de mensagens |
+|---|---|---|
+| Unidade de dados | Entrada de 40 bytes em `S_i` | Mensagem System V com corpo de 40 bytes em `D_i` |
+| Capacidade por estrutura | 50 (fixa pela fórmula de 2048 bytes) | Definida por `msg_qbytes` (409 neste ambiente) |
+| Ordem | FIFO por `head`/`tail` | FIFO da fila para o tipo 1 |
+| Exclusão mútua | `mutex` do conjunto `M_i` | Fornecida pelo kernel |
+| Contagem de consumo | `consumed_total` sob `mutex`, junto da retirada | Evento em `Q_evt`, consolidado pelo supervisor |
+| Canal de ACK | Tabela em `C` e contadores no conjunto `K` | `Q_ack`, com `mtype = operation_id` |
+| Limite de ACK | 64 operações com ACK simultâneas | Capacidade de `Q_ack`, com drenagem pelo produtor |
+| Espera pelo ACK | `semop(−n)` | `msgrcv` por tipo |
+| Garantia contra deadlock de ACK | `V` nunca bloqueia | Produtor `ack=1` sempre drena antes de esperar |
+| Janela retirada→contagem | Nenhuma (mesma seção crítica) | Poucas instruções, só em término forçado |
+
+### Cancelamento e sinais
+
+- Esperas bloqueantes (`semop`, `msgsnd`, `msgrcv`, `nanosleep`) não repetem `EINTR`
+  por conta própria; devolvem `MPMC_ERR_INTERRUPTED`, e o worker decide encerrar.
+- No modo 1, as seções críticas que contêm retirada e contagem rodam com `SIGTERM` e
+  `SIGINT` bloqueados; um término recebido nesse intervalo é entregue ao final, sem
+  deixar a estrutura em estado parcial.
+- O supervisor remove os recursos (`IPC_RMID`) somente depois de recolher todos os filhos.
+
 ## Semáforos e invariantes da memória compartilhada
 
 Para cada segmento, `0 <= count <= capacity`. A implementação de buffer circular deve
 satisfazer `tail` apontando para a próxima posição de inserção e `head` para a
 próxima retirada, ambas interpretadas módulo `capacity`.
 
-Semáforos sugeridos:
+Semáforos de cada estrutura (índices e valores iniciais em @ref ipc_wire_formats):
 
 | Nome | Inicial | Semântica |
 |---|---:|---|
@@ -148,7 +355,8 @@ processos, atualizada atomicamente/sob exclusão mútua.
 
 ## Filas de mensagens e notificações
 
-Cada estrutura lógica `i` é representada por uma fila de dados independente.
+Cada estrutura lógica `i` é representada por uma fila de dados independente. Tipos,
+corpos e o algoritmo de ACK escolhido estão em @ref ipc_wire_formats.
 O backend pode criar filas **auxiliares de controle** para ACKs e eventos, mas dados
 do paradigma 2 continuam trafegando por filas System V, nunca por um buffer `shm`.
 
@@ -201,5 +409,8 @@ O `waitpid()` deve ser usado para recolher processos. `IPC_RMID` é responsabili
 
 A obrigatoriedade de `shm + sem`, `msg`, tamanho de 2048 bytes, comandos, flags e
 informações da mensagem vem do enunciado. Buffer circular, identificador de operação,
-formato do ACK, organização em backends e fila auxiliar de controle são **decisões
-arquiteturais sugeridas**, a revisar durante os testes de concorrência.
+formato do ACK, organização em backends e filas auxiliares de controle são **decisões
+arquiteturais do projeto**, fixadas em @ref ipc_wire_formats e a revisar durante os testes
+de concorrência. Os limites que elas introduzem (50 entradas por segmento, 64 operações
+com ACK simultâneas no modo 1, ACKs órfãos e a janela de contagem no modo 2) estão
+declarados ali e não vêm do enunciado.
