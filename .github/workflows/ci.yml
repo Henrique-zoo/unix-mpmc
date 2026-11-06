@@ -1,4 +1,3 @@
-
 name: CI
 
 on:
@@ -13,6 +12,7 @@ jobs:
   formatting:
     name: C formatting (clang-format 23)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -41,8 +41,9 @@ jobs:
             | xargs -0 -r clang-format-23 --style=file --dry-run --Werror
 
   compilation:
-    name: Build application (${{ matrix.mode }})
+    name: Build and test (${{ matrix.mode }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
@@ -65,7 +66,7 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/llvm-23.list
 
           sudo apt-get update
-          sudo apt-get install -y clang-23
+          sudo apt-get install -y clang-23 coreutils procps
 
       - name: Show compiler version
         run: clang-23 --version
@@ -73,9 +74,15 @@ jobs:
       - name: Build application (C23)
         run: make MODE=${{ matrix.mode }} CC=clang-23 all
 
+      - name: Run unit and integration tests
+        run: >-
+          timeout --signal=TERM --kill-after=10s 120s
+          make MODE=${{ matrix.mode }} CC=clang-23 test
+
   documentation:
     name: Generate Doxygen documentation
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
