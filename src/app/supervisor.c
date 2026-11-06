@@ -25,26 +25,26 @@
 
 /** @brief Registro de identidade e estado de um processo filho supervisionado. */
 typedef struct {
-    pid_t pid;                 /**< PID retornado por fork(). */
-    command_kind_t kind;       /**< Tipo de trabalho executado pelo filho. */
-    uint64_t operation_id;     /**< Identidade única atribuída antes de fork(). */
-    struct timespec started;   /**< Instante CLOCK_MONOTONIC capturado antes de fork(). */
+    pid_t pid;               /**< PID retornado por fork(). */
+    command_kind_t kind;     /**< Tipo de trabalho executado pelo filho. */
+    uint64_t operation_id;   /**< Identidade única atribuída antes de fork(). */
+    struct timespec started; /**< Instante CLOCK_MONOTONIC capturado antes de fork(). */
 } child_record_t;
 
 /** @brief Estado privado mantido exclusivamente pelo processo supervisor. */
 struct supervisor {
-    size_t producer_count;    /**< Quantidade de estruturas configuradas. */
-    child_record_t *children; /**< Vetor dinâmico de filhos ativos. */
-    size_t child_count;       /**< Número de registros ocupados. */
-    size_t child_capacity;    /**< Capacidade alocada do vetor. */
+    size_t producer_count;      /**< Quantidade de estruturas configuradas. */
+    child_record_t *children;   /**< Vetor dinâmico de filhos ativos. */
+    size_t child_count;         /**< Número de registros ocupados. */
+    size_t child_capacity;      /**< Capacidade alocada do vetor. */
     struct timespec created_at; /**< Instante CLOCK_MONOTONIC da criação do supervisor. */
-    child_report_t *reports;  /**< Filhos já recolhidos, na ordem de recolhimento. */
-    size_t report_count;      /**< Número de relatórios armazenados. */
-    size_t report_capacity;   /**< Capacidade alocada do vetor de relatórios. */
+    child_report_t *reports;    /**< Filhos já recolhidos, na ordem de recolhimento. */
+    size_t report_count;        /**< Número de relatórios armazenados. */
+    size_t report_capacity;     /**< Capacidade alocada do vetor de relatórios. */
     uint64_t next_operation_id; /**< Próximo identificador; zero indica esgotamento. */
-    bool shutting_down;       /**< Impede novos despachos após shutdown. */
-    int event_pipe[2];        /**< Self-pipe: leitura em [0], escrita em [1]. */
-    size_t notice_count;      /**< Avisos impressos em stderr desde a última consulta. */
+    bool shutting_down;         /**< Impede novos despachos após shutdown. */
+    int event_pipe[2];          /**< Self-pipe: leitura em [0], escrita em [1]. */
+    size_t notice_count;        /**< Avisos impressos em stderr desde a última consulta. */
 };
 
 /** @brief Descritor usado pelo tratador para acordar o loop ativo. */
@@ -621,18 +621,21 @@ static void format_duration(char *buffer, size_t size, uint64_t duration_ns) {
  */
 static void format_end(const child_report_t *report, char *buffer, size_t size) {
     switch (report->end) {
-    case CHILD_END_EXITED:
-        (void)snprintf(
-            buffer, size, "código %d (%s)", report->value,
-            report->value == EXIT_SUCCESS ? "sucesso" : "falha"
-        );
-        break;
-    case CHILD_END_SIGNALED:
-        (void)snprintf(buffer, size, "sinal %d", report->value);
-        break;
-    default:
-        (void)snprintf(buffer, size, "indisponível");
-        break;
+        case CHILD_END_EXITED:
+            (void)snprintf(
+                buffer,
+                size,
+                "código %d (%s)",
+                report->value,
+                report->value == EXIT_SUCCESS ? "sucesso" : "falha"
+            );
+            break;
+        case CHILD_END_SIGNALED:
+            (void)snprintf(buffer, size, "sinal %d", report->value);
+            break;
+        default:
+            (void)snprintf(buffer, size, "indisponível");
+            break;
     }
 }
 
