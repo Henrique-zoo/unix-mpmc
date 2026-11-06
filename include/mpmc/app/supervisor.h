@@ -8,6 +8,9 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <sys/types.h>
 
 #include "mpmc/app/command.h"
 #include "mpmc/ipc/transport.h"
@@ -22,6 +25,29 @@
  * operação, horário inicial monotônico e estatísticas já consolidadas.
  */
 typedef struct supervisor supervisor_t;
+
+/** @brief Forma como um filho supervisionado terminou. */
+typedef enum {
+    CHILD_END_EXITED,   /**< Saiu com exit(); `value` é o código de saída. */
+    CHILD_END_SIGNALED, /**< Morto por sinal; `value` é o número do sinal. */
+    CHILD_END_LOST      /**< Estado indisponível (ECHILD/inesperado); `value` é zero. */
+} child_end_t;
+
+/**
+ * @brief Relatório imutável de um filho já recolhido.
+ * @details Permite apresentar depois a duração e o status de cada processo.
+ * A duração vai do instante imediatamente anterior ao fork() até o recolhimento
+ * por waitpid(), medida com CLOCK_MONOTONIC; portanto inclui a latência (curta)
+ * entre o término real e o recolhimento.
+ */
+typedef struct {
+    pid_t pid;             /**< PID do filho. */
+    command_kind_t kind;   /**< Tipo de trabalho executado. */
+    uint64_t operation_id; /**< Identidade da operação atribuída no despacho. */
+    uint64_t duration_ns;  /**< Duração em nanossegundos (nunca negativa). */
+    child_end_t end;       /**< Forma de término. */
+    int value;             /**< Código de saída ou sinal, conforme `end`. */
+} child_report_t;
 
 /**
  * @brief Cria o estado local de supervisão dos processos.
@@ -48,9 +74,10 @@ mpmc_status_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_m
  * @retval MPMC_ERR_INVALID_ARG Comando não válido.
  * @retval MPMC_ERR_SYS Falha de fork ou outra operação do sistema.
  * @retval MPMC_ERR_SHUTDOWN Instância já está encerrando.
- * @details Comandos de trabalho são encaminhados por fork() sem bloquear o
- * pai. Até a implementação dos módulos workers/IPC, o filho reporta que a
- * operação não está disponível e termina com erro.
+ * @details Cada comando de trabalho recebe um operation_id não nulo antes de
+ * fork(); o pai registra PID, tipo e identidade da operação sem executar o
+ * trabalho. Até a implementação dos módulos workers/IPC, o filho reporta que
+ * a operação não está disponível e termina com erro.
  * @note COMMAND_SHUTDOWN delega a supervisor_shutdown().
  */
 mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *command);
@@ -61,7 +88,13 @@ mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *com
  * @param blocking Se false, usa waitpid(..., WNOHANG) repetidamente; se true,
  * espera até não haver mais filhos registrados (utilizar após cancelamento).
  * @retval MPMC_OK Recolhimento realizado ou nenhum filho pendente.
- * @retval MPMC_ERR_SYS Erro irrecuperável em waitpid().
+ * @retval MPMC_ERR_SYS Erro irrecuperável em waitpid() ou registro de filho
+ * cujo estado já foi coletado por outro processo. Um filho que termina por sinal
+ * (por exemplo SIGKILL externo) NÃO é erro: é informado em stderr e o REPL e os
+ * demais jobs seguem normalmente.
+ * @details EINTR é repetido; término natural, falha e sinal são associados ao
+ * PID, tipo de trabalho e operation_id registrados, e cada filho recolhido
+ * gera um child_report_t consultável por supervisor_report_get().
  * @note Tratadores SIGCHLD só sinalizam a necessidade de coleta; waitpid()
  * é executado fora do contexto de sinal.
  */
@@ -79,6 +112,41 @@ mpmc_status_t supervisor_reap(supervisor_t *supervisor, bool blocking);
  * @note Deve ser segura contra chamadas repetidas (idempotência de shutdown).
  */
 mpmc_status_t supervisor_shutdown(supervisor_t *supervisor);
+
+/**
+ * @brief Retorna quantos filhos já foram recolhidos e possuem relatório.
+ * @param supervisor Instância do supervisor; NULL devolve zero.
+ * @return Número de relatórios, em ordem de recolhimento.
+ */
+size_t supervisor_report_count(const supervisor_t *supervisor);
+
+/**
+ * @brief Copia o relatório de duração e status de um filho recolhido.
+ * @param supervisor Instância do supervisor.
+ * @param index Posição em [0, supervisor_report_count()).
+ * @param[out] out Recebe o relatório; não é alterado em erro.
+ * @retval MPMC_OK Relatório copiado.
+ * @retval MPMC_ERR_INVALID_ARG Ponteiro nulo ou índice fora do intervalo.
+ * @note Os relatórios permanecem válidos após supervisor_shutdown(), até
+ * supervisor_destroy().
+ */
+mpmc_status_t
+supervisor_report_get(const supervisor_t *supervisor, size_t index, child_report_t *out);
+
+/**
+ * @brief Imprime o relatório final: duração e status de cada filho recolhido e o
+ * tempo total de operação do mpmc.
+ * @param supervisor Instância do supervisor.
+ * @param out Stream de saída (normalmente stdout).
+ * @retval MPMC_OK Relatório escrito e descarregado.
+ * @retval MPMC_ERR_INVALID_ARG Ponteiro nulo.
+ * @retval MPMC_ERR_SYS Falha ao escrever em `out`.
+ * @details Uma linha por filho, na ordem de recolhimento: PID, operação, tipo,
+ * término (`código N (sucesso|falha)` ou `sinal N`) e duração em `S.mmm s`. O tempo
+ * total vai da criação do supervisor até a chamada, em CLOCK_MONOTONIC. Deve ser
+ * chamada após supervisor_shutdown(); filhos ainda ativos são apenas contados.
+ */
+mpmc_status_t supervisor_print_report(const supervisor_t *supervisor, FILE *out);
 
 /**
  * @brief Informa quantos avisos o supervisor imprimiu desde a última consulta.

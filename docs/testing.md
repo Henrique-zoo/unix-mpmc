@@ -77,9 +77,14 @@ recursos IPC de outros usuários/processos por `ipcrm`.
 
 ```bash
 make debug
-make test
+make unit   # testes unitários (command e supervisor)
+make test   # unitários + smoke + integração do REPL
 make docs
 ```
+
+O `shutdown` imprime em stdout o relatório final (`supervisor_print_report()`): uma linha por
+filho recolhido (PID, operação, tipo, término e duração `S.mmm s`), a contagem de filhos e o
+tempo total de operação do `mpmc`. O formato é verificado nos testes unitário e de integração.
 
 Os *smoke tests* do Makefile validam somente a capacidade de iniciar e executar `shutdown`.
 Os testes de integração acima são casos a **implementar**. Para que scripts automatizados

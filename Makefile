@@ -1,5 +1,5 @@
 # unix-mpmc — múltiplos produtores/consumidores com IPC System V
-# Uso: make | make debug | make release | make test | make docs | make docs-clean | make clean
+# Uso: make | make debug | make release | make test | make unit | make docs | make docs-clean | make clean
 
 CC   := clang
 MODE ?= debug
@@ -22,7 +22,7 @@ DEPS      := $(OBJECTS:.o=.d)
 BINARY    := $(BUILD_DIR)/mpmc
 
 .DEFAULT_GOAL := all
-.PHONY: all debug release test docs docs-clean clean
+.PHONY: all debug release test unit docs docs-clean clean
 
 all: $(BINARY)
 	@ln -sfn $(BINARY) mpmc
@@ -41,12 +41,33 @@ debug:
 release:
 	$(MAKE) MODE=release all
 
+# Testes unitários. supervisor.c é compilado com -Dfork=mpmc_test_fork para que o teste
+# injete falhas de fork() sem depender de LD_PRELOAD (portável entre Linux e macOS).
+UNIT_DIR := $(BUILD_DIR)/unit
+
+$(UNIT_DIR)/supervisor_for_test.o: src/app/supervisor.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Dfork=mpmc_test_fork -c $< -o $@
+
+$(UNIT_DIR)/test_command: tests/unit/test_command.c src/app/command.c src/status.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/test_supervisor: tests/unit/test_supervisor.c $(UNIT_DIR)/supervisor_for_test.o \
+	src/app/command.c src/status.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor
+	@$(UNIT_DIR)/test_command
+	@$(UNIT_DIR)/test_supervisor
+
 # Testes básicos: o loop interativo deve aceitar o comando shutdown.
-test: all
+test: all unit
 	@printf 'shutdown\n' | ./mpmc 2 1 > /dev/null
 	@printf 'shutdown\n' | ./mpmc 2 2 > /dev/null
 	@sh tests/integration/test_repl.sh ./mpmc
-	@echo 'Startup/REPL smoke tests passed (modes 1 and 2).'
+	@echo 'Unit, startup and REPL tests passed (modes 1 and 2).'
 
 docs:
 	@mkdir -p build/docs

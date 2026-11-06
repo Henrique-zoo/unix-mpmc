@@ -8,10 +8,11 @@
 ## aberto e ocioso. Esse último cenário confirma que SIGCHLD desperta o REPL pelo
 ## self-pipe e que a coleta não depende de o usuário enviar outra linha.
 ##
-## Dois cenários adicionais mantêm um filho bloqueado por meio da variável
+## Três cenários adicionais mantêm um filho bloqueado por meio da variável
 ## MPMC_TEST_WORKER_HANG. Eles verificam que o REPL continua aceitando comandos,
 ## que `shutdown` recolhe o filho bloqueado e que SIGTERM enviado ao próprio REPL
-## também encerra o filho. O gancho de bloqueio existe apenas em builds de
+## também encerra o filho; o terceiro mata um job com SIGKILL e confirma que o REPL e os
+## demais jobs continuam ativos. O gancho de bloqueio existe apenas em builds de
 ## depuração (`-DDEBUG`); em builds release esses cenários são ignorados. O teste
 ## depende dos utilitários `ps` e `pgrep` para observar os processos.
 ##
@@ -69,6 +70,19 @@ prompt_count=$(grep -o '>>' "$tmp_dir/out" | wc -l | tr -d ' ')
 # Linhas em branco são ignoradas (sem erro) e o prompt continua sendo exibido.
 printf '\n   \t \nshutdown\n' | "$binary" 2 1 >"$tmp_dir/blank_out" 2>"$tmp_dir/blank_err"
 [ ! -s "$tmp_dir/blank_err" ] || fail_early 'linha em branco não deveria gerar erro'
+
+# O shutdown imprime o relatório final em stdout com duração e status de cada filho
+# e o tempo total de operação (sem filhos, informa que nenhum foi executado).
+grep -q 'Nenhum processo filho foi executado' "$tmp_dir/blank_out" \
+	|| fail_early 'relatório vazio ausente'
+printf 'produz 1 1 2\nconsome 2 1 2\nshutdown\n' | "$binary" 2 1 >"$tmp_dir/rep_out" 2>"$tmp_dir/rep_err"
+grep -q 'Relatório de execução' "$tmp_dir/rep_out" || fail_early 'relatório final ausente'
+grep -Eq '^[0-9]+ +1 +produz +(código [0-9]+ \((sucesso|falha)\)|sinal [0-9]+) +[0-9]+\.[0-9]{3} s$' "$tmp_dir/rep_out" \
+	|| fail_early 'linha do produz fora do formato esperado'
+grep -Eq '^[0-9]+ +2 +consome ' "$tmp_dir/rep_out" || fail_early 'linha do consome ausente'
+grep -Eq '^Filhos recolhidos: 2$' "$tmp_dir/rep_out" || fail_early 'contagem de filhos incorreta'
+grep -Eq '^Tempo total de operação do mpmc: [0-9]+\.[0-9]{3} s$' "$tmp_dir/rep_out" \
+	|| fail_early 'tempo total ausente ou fora do formato'
 blank_prompts=$(grep -o '>>' "$tmp_dir/blank_out" | wc -l | tr -d ' ')
 [ "$blank_prompts" -ge 3 ]
 
@@ -101,6 +115,7 @@ until grep -q 'terminou com código' "$tmp_dir/idle_err"; do
 	fi
 	sleep 0.1
 done
+grep -Eq 'filho [0-9]+ \(produz, operação [1-9][0-9]*\) terminou com código' "$tmp_dir/idle_err"
 printf 'shutdown\n' >&3
 exec 3>&-
 wait "$repl_pid"
@@ -181,6 +196,38 @@ else
 		wait "$repl_pid"
 		repl_pid=
 		is_running "$worker_pid" && fail 'worker bloqueado sobreviveu ao SIGTERM do REPL'
+
+		# Cenário 3: um job morto por sinal fora do shutdown (kill -KILL) é recolhido e
+		# informado, mas o REPL continua lendo comandos e os demais jobs seguem vivos.
+		has_two_children() {
+			[ "$(pgrep -P "$repl_pid" | wc -l | tr -d ' ')" -ge 2 ]
+		}
+		start_hung_repl hang3
+		printf 'produz 1 1 2\n' >&3
+		wait_until 30 has_two_children || fail 'dois workers bloqueados não coexistiram no cenário 3'
+		victim_pid=$(pgrep -P "$repl_pid" | head -n 1)
+		survivor_pid=$(pgrep -P "$repl_pid" | tail -n 1)
+		[ "$victim_pid" != "$survivor_pid" ] || fail 'cenário 3 não encontrou dois PIDs distintos'
+		kill -KILL "$victim_pid"
+		wait_until 30 grep -q 'terminou pelo sinal 9' "$tmp_dir/hang3.err" \
+			|| fail 'filho morto por sinal não foi recolhido/informado'
+		is_running "$repl_pid" || fail 'REPL encerrou porque um job morreu por sinal'
+		is_running "$survivor_pid" || fail 'o outro job foi derrubado pela morte de um job'
+		printf 'invalido\n' >&3
+		wait_until 30 grep -q 'Argumento inválido' "$tmp_dir/hang3.err" \
+			|| fail 'REPL parou de ler comandos após um job morrer por sinal'
+		! grep -q 'falha ao processar eventos' "$tmp_dir/hang3.err" \
+			|| fail 'morte de job por sinal foi tratada como erro fatal do REPL'
+		printf 'shutdown\n' >&3
+		exec 3>&-
+		wait_until 30 stopped "$repl_pid" || fail 'shutdown travou no cenário 3'
+		wait "$repl_pid"
+		repl_pid=
+		is_running "$survivor_pid" && fail 'job sobrevivente não foi encerrado pelo shutdown'
+		grep -q 'Relatório de execução' "$tmp_dir/hang3.out" || fail 'relatório final ausente no cenário 3'
+		grep -q 'sinal 9' "$tmp_dir/hang3.out" || fail 'relatório não mostra o job morto por SIGKILL'
+		grep -q 'sinal 15' "$tmp_dir/hang3.out" || fail 'relatório não mostra o job encerrado pelo shutdown'
+		grep -q 'Filhos recolhidos: 2' "$tmp_dir/hang3.out" || fail 'relatório deveria ter 2 filhos recolhidos'
 	fi
 fi
 
