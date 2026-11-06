@@ -77,7 +77,8 @@ recursos IPC de outros usuários/processos por `ipcrm`.
 
 ```bash
 make debug
-make test
+make unit   # testes unitários (command e supervisor)
+make test   # unitários + smoke + integração do REPL
 make docs
 ```
 

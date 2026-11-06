@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 /** @brief Registro de identidade e estado de um processo filho supervisionado. */
@@ -27,6 +28,7 @@ typedef struct {
     pid_t pid;                 /**< PID retornado por fork(). */
     command_kind_t kind;       /**< Tipo de trabalho executado pelo filho. */
     uint64_t operation_id;     /**< Identidade única atribuída antes de fork(). */
+    struct timespec started;   /**< Instante CLOCK_MONOTONIC capturado antes de fork(). */
 } child_record_t;
 
 /** @brief Estado privado mantido exclusivamente pelo processo supervisor. */
@@ -35,6 +37,9 @@ struct supervisor {
     child_record_t *children; /**< Vetor dinâmico de filhos ativos. */
     size_t child_count;       /**< Número de registros ocupados. */
     size_t child_capacity;    /**< Capacidade alocada do vetor. */
+    child_report_t *reports;  /**< Filhos já recolhidos, na ordem de recolhimento. */
+    size_t report_count;      /**< Número de relatórios armazenados. */
+    size_t report_capacity;   /**< Capacidade alocada do vetor de relatórios. */
     uint64_t next_operation_id; /**< Próximo identificador; zero indica esgotamento. */
     bool shutting_down;       /**< Impede novos despachos após shutdown. */
     int event_pipe[2];        /**< Self-pipe: leitura em [0], escrita em [1]. */
@@ -156,6 +161,42 @@ static mpmc_status_t ensure_child_capacity(supervisor_t *supervisor) {
     }
     supervisor->children = children;
     supervisor->child_capacity = capacity;
+    return MPMC_OK;
+}
+
+/**
+ * @brief Garante espaço para os relatórios de todos os filhos ativos e de mais um.
+ * @param supervisor Instância cujo vetor de relatórios pode crescer.
+ * @retval MPMC_OK Capacidade suficiente para report_count + child_count + 1.
+ * @retval MPMC_ERR_SYS Overflow de tamanho ou falha de alocação.
+ * @details Chamada antes de fork(): assim, o recolhimento de qualquer filho
+ * registrado nunca precisa alocar memória e não perde o estado final.
+ */
+static mpmc_status_t ensure_report_capacity(supervisor_t *supervisor) {
+    if (supervisor->report_count > SIZE_MAX - supervisor->child_count - 1u) {
+        return MPMC_ERR_SYS;
+    }
+    const size_t needed = supervisor->report_count + supervisor->child_count + 1u;
+    if (needed <= supervisor->report_capacity) {
+        return MPMC_OK;
+    }
+
+    size_t capacity = supervisor->report_capacity == 0u ? 8u : supervisor->report_capacity;
+    while (capacity < needed) {
+        if (capacity > SIZE_MAX / 2u) {
+            return MPMC_ERR_SYS;
+        }
+        capacity *= 2u;
+    }
+    if (capacity > SIZE_MAX / sizeof(*supervisor->reports)) {
+        return MPMC_ERR_SYS;
+    }
+    child_report_t *reports = realloc(supervisor->reports, capacity * sizeof(*reports));
+    if (reports == NULL) {
+        return MPMC_ERR_SYS;
+    }
+    supervisor->reports = reports;
+    supervisor->report_capacity = capacity;
     return MPMC_OK;
 }
 
@@ -297,6 +338,15 @@ mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *com
     if (status != MPMC_OK) {
         return status;
     }
+    status = ensure_report_capacity(supervisor);
+    if (status != MPMC_OK) {
+        return status;
+    }
+
+    struct timespec started;
+    if (clock_gettime(CLOCK_MONOTONIC, &started) == -1) {
+        return MPMC_ERR_SYS;
+    }
 
     sigset_t block_set;
     sigset_t old_set;
@@ -342,6 +392,7 @@ mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *com
         .pid = child,
         .kind = command->kind,
         .operation_id = operation_id,
+        .started = started,
     };
     supervisor->next_operation_id = operation_id == UINT64_MAX ? 0u : operation_id + 1u;
     if (sigprocmask(SIG_SETMASK, &old_set, NULL) == -1) {
@@ -365,9 +416,64 @@ static const char *child_kind_name(command_kind_t kind) {
     return kind == COMMAND_PRODUCE ? "produz" : "consome";
 }
 
+/**
+ * @brief Calcula o tempo decorrido entre dois instantes monotônicos.
+ * @param start Instante inicial.
+ * @param end Instante final.
+ * @return Duração em nanossegundos; zero se end for anterior a start.
+ */
+static uint64_t elapsed_ns(const struct timespec *start, const struct timespec *end) {
+    if (end->tv_sec < start->tv_sec
+        || (end->tv_sec == start->tv_sec && end->tv_nsec < start->tv_nsec)) {
+        return 0u;
+    }
+    uint64_t seconds = (uint64_t)(end->tv_sec - start->tv_sec);
+    int64_t nanos = (int64_t)end->tv_nsec - (int64_t)start->tv_nsec;
+    if (nanos < 0) {
+        --seconds;
+        nanos += 1000000000;
+    }
+    return seconds * 1000000000u + (uint64_t)nanos;
+}
+
+/**
+ * @brief Acrescenta o relatório final de um filho recolhido.
+ * @param supervisor Instância proprietária do vetor de relatórios.
+ * @param finished Registro do filho no momento em que foi removido.
+ * @param end Forma de término observada.
+ * @param value Código de saída ou número do sinal, conforme end.
+ * @retval MPMC_OK Relatório armazenado.
+ * @retval MPMC_ERR_SYS Sem espaço (não esperado: a capacidade é reservada em dispatch).
+ * @details A duração usa CLOCK_MONOTONIC no instante do recolhimento; se o relógio
+ * falhar, vale zero.
+ */
+static mpmc_status_t record_report(
+    supervisor_t *supervisor, const child_record_t *finished, child_end_t end, int value
+) {
+    if (supervisor->report_count >= supervisor->report_capacity) {
+        return MPMC_ERR_SYS;
+    }
+    struct timespec now;
+    uint64_t duration = 0u;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
+        duration = elapsed_ns(&finished->started, &now);
+    }
+    supervisor->reports[supervisor->report_count++] = (child_report_t){
+        .pid = finished->pid,
+        .kind = finished->kind,
+        .operation_id = finished->operation_id,
+        .duration_ns = duration,
+        .end = end,
+        .value = value,
+    };
+    return MPMC_OK;
+}
+
 /** @details EINTR em waitpid() é repetido; cada estado coletado é correlacionado
  * ao registro original antes da remoção. ECHILD indica perda externa da
  * propriedade do filho, é reportado como erro e também limpa o registro obsoleto.
+ * Término por sinal não é erro: é informado e armazenado como relatório. Todo
+ * filho recolhido gera um relatório (início → recolhimento, forma de término).
  * Eventos do canal são drenados antes da coleta, fora do contexto de sinal.
  */
 mpmc_status_t supervisor_reap(supervisor_t *supervisor, bool blocking) {
@@ -404,6 +510,7 @@ mpmc_status_t supervisor_reap(supervisor_t *supervisor, bool blocking) {
                     lost.operation_id
                 );
                 reap_status = MPMC_ERR_SYS;
+                (void)record_report(supervisor, &lost, CHILD_END_LOST, 0);
                 remove_child(supervisor, index);
                 continue;
             }
@@ -413,30 +520,36 @@ mpmc_status_t supervisor_reap(supervisor_t *supervisor, bool blocking) {
         }
 
         child_record_t finished = supervisor->children[index];
+        child_end_t end = CHILD_END_LOST;
+        int end_value = 0;
         if (WIFEXITED(wait_status)) {
+            end = CHILD_END_EXITED;
+            end_value = WEXITSTATUS(wait_status);
             ++supervisor->notice_count;
-            int exit_code = WEXITSTATUS(wait_status);
-            fprintf(stderr,
+            fprintf(
+                stderr,
                 "mpmc: filho %ld (%s, operação %" PRIu64 ") terminou com código %d%s.\n",
                 (long)waited,
                 child_kind_name(finished.kind),
                 finished.operation_id,
-                exit_code,
-                exit_code == EXIT_SUCCESS ? " (sucesso)" : " (falha)"
+                end_value,
+                end_value == EXIT_SUCCESS ? " (sucesso)" : " (falha)"
             );
-        } else if (WIFSIGNALED(wait_status)
-            && (!supervisor->shutting_down || WTERMSIG(wait_status) != SIGTERM)) {
-            ++supervisor->notice_count;
-            fprintf(
-                stderr,
-                "mpmc: filho %ld (%s, operação %" PRIu64 ") terminou pelo sinal %d.\n",
-                (long)waited,
-                child_kind_name(finished.kind),
-                finished.operation_id,
-                WTERMSIG(wait_status)
-            );
-            reap_status = MPMC_ERR_SYS;
-        } else if (!WIFSIGNALED(wait_status)) {
+        } else if (WIFSIGNALED(wait_status)) {
+            end = CHILD_END_SIGNALED;
+            end_value = WTERMSIG(wait_status);
+            if (!supervisor->shutting_down || end_value != SIGTERM) {
+                ++supervisor->notice_count;
+                fprintf(
+                    stderr,
+                    "mpmc: filho %ld (%s, operação %" PRIu64 ") terminou pelo sinal %d.\n",
+                    (long)waited,
+                    child_kind_name(finished.kind),
+                    finished.operation_id,
+                    end_value
+                );
+            }
+        } else {
             ++supervisor->notice_count;
             fprintf(
                 stderr,
@@ -445,6 +558,9 @@ mpmc_status_t supervisor_reap(supervisor_t *supervisor, bool blocking) {
                 child_kind_name(finished.kind),
                 finished.operation_id
             );
+            reap_status = MPMC_ERR_SYS;
+        }
+        if (record_report(supervisor, &finished, end, end_value) != MPMC_OK) {
             reap_status = MPMC_ERR_SYS;
         }
         remove_child(supervisor, index);
@@ -479,12 +595,28 @@ mpmc_status_t supervisor_shutdown(supervisor_t *supervisor) {
     return reap_status != MPMC_OK ? reap_status : event_status;
 }
 
-/** @details Libera o vetor de filhos e fecha as extremidades do self-pipe. */
+/** @details Consulta simples do número de relatórios acumulados. */
+size_t supervisor_report_count(const supervisor_t *supervisor) {
+    return supervisor == NULL ? 0u : supervisor->report_count;
+}
+
+/** @details Copia o relatório; a ordem é a de recolhimento. */
+mpmc_status_t
+supervisor_report_get(const supervisor_t *supervisor, size_t index, child_report_t *out) {
+    if (supervisor == NULL || out == NULL || index >= supervisor->report_count) {
+        return MPMC_ERR_INVALID_ARG;
+    }
+    *out = supervisor->reports[index];
+    return MPMC_OK;
+}
+
+/** @details Libera os vetores de filhos e relatórios e fecha o self-pipe. */
 void supervisor_destroy(supervisor_t *supervisor) {
     if (supervisor == NULL) {
         return;
     }
     close_event_pipe(supervisor);
     free(supervisor->children);
+    free(supervisor->reports);
     free(supervisor);
 }

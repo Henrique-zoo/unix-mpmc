@@ -8,10 +8,11 @@
 ## aberto e ocioso. Esse último cenário confirma que SIGCHLD desperta o REPL pelo
 ## self-pipe e que a coleta não depende de o usuário enviar outra linha.
 ##
-## Dois cenários adicionais mantêm um filho bloqueado por meio da variável
+## Três cenários adicionais mantêm um filho bloqueado por meio da variável
 ## MPMC_TEST_WORKER_HANG. Eles verificam que o REPL continua aceitando comandos,
 ## que `shutdown` recolhe o filho bloqueado e que SIGTERM enviado ao próprio REPL
-## também encerra o filho. O gancho de bloqueio existe apenas em builds de
+## também encerra o filho; o terceiro mata um job com SIGKILL e confirma que o REPL e os
+## demais jobs continuam ativos. O gancho de bloqueio existe apenas em builds de
 ## depuração (`-DDEBUG`); em builds release esses cenários são ignorados. O teste
 ## depende dos utilitários `ps` e `pgrep` para observar os processos.
 ##
@@ -182,6 +183,34 @@ else
 		wait "$repl_pid"
 		repl_pid=
 		is_running "$worker_pid" && fail 'worker bloqueado sobreviveu ao SIGTERM do REPL'
+
+		# Cenário 3: um job morto por sinal fora do shutdown (kill -KILL) é recolhido e
+		# informado, mas o REPL continua lendo comandos e os demais jobs seguem vivos.
+		has_two_children() {
+			[ "$(pgrep -P "$repl_pid" | wc -l | tr -d ' ')" -ge 2 ]
+		}
+		start_hung_repl hang3
+		printf 'produz 1 1 2\n' >&3
+		wait_until 30 has_two_children || fail 'dois workers bloqueados não coexistiram no cenário 3'
+		victim_pid=$(pgrep -P "$repl_pid" | head -n 1)
+		survivor_pid=$(pgrep -P "$repl_pid" | tail -n 1)
+		[ "$victim_pid" != "$survivor_pid" ] || fail 'cenário 3 não encontrou dois PIDs distintos'
+		kill -KILL "$victim_pid"
+		wait_until 30 grep -q 'terminou pelo sinal 9' "$tmp_dir/hang3.err" \
+			|| fail 'filho morto por sinal não foi recolhido/informado'
+		is_running "$repl_pid" || fail 'REPL encerrou porque um job morreu por sinal'
+		is_running "$survivor_pid" || fail 'o outro job foi derrubado pela morte de um job'
+		printf 'invalido\n' >&3
+		wait_until 30 grep -q 'Argumento inválido' "$tmp_dir/hang3.err" \
+			|| fail 'REPL parou de ler comandos após um job morrer por sinal'
+		! grep -q 'falha ao processar eventos' "$tmp_dir/hang3.err" \
+			|| fail 'morte de job por sinal foi tratada como erro fatal do REPL'
+		printf 'shutdown\n' >&3
+		exec 3>&-
+		wait_until 30 stopped "$repl_pid" || fail 'shutdown travou no cenário 3'
+		wait "$repl_pid"
+		repl_pid=
+		is_running "$survivor_pid" && fail 'job sobrevivente não foi encerrado pelo shutdown'
 	fi
 fi
 
