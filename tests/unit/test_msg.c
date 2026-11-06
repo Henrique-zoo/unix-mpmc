@@ -21,6 +21,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -370,11 +372,57 @@ static void test_blocked_send_wakes_on_receive_from_child(void) {
     drop_queue(msqid);
 }
 
+/* Confere, com msgrcv() direto, o tipo e o corpo que o wrapper realmente colocou na fila. */
+static void test_send_stores_type_and_payload(void) {
+    int msqid = new_queue();
+    struct {
+        long mtype;
+        unsigned char mtext[32];
+    } raw;
+    const long types[] = {1, 42, 123456};
+    const unsigned char body[] = {0x00, 0x11, 0xFF, 0x00, 0x7F};
+
+    for (size_t i = 0; i < sizeof types / sizeof types[0]; ++i) {
+        memset(&raw, 0xEE, sizeof raw);
+        CHECK_STATUS(sysv_msg_send(msqid, types[i], body, sizeof body, false), MPMC_OK);
+
+        ssize_t n = msgrcv(msqid, &raw, sizeof raw.mtext, 0, IPC_NOWAIT);
+
+        CHECK(n == (ssize_t)sizeof body, "kernel recebeu %zd bytes, esperado %zu", n, sizeof body);
+        CHECK(raw.mtype == types[i], "kernel recebeu tipo %ld, esperado %ld", raw.mtype, types[i]);
+        CHECK(
+            n == (ssize_t)sizeof body && memcmp(raw.mtext, body, sizeof body) == 0,
+            "corpo gravado na fila difere do enviado"
+        );
+    }
+
+    drop_queue(msqid);
+}
+
+/* Mensagem inserida direto pelo kernel é entregue pelo wrapper de recebimento sem alterações. */
+static void test_receive_returns_kernel_payload(void) {
+    int msqid = new_queue();
+    struct {
+        long mtype;
+        unsigned char mtext[4];
+    } raw = {.mtype = 9, .mtext = {0xDE, 0xAD, 0x00, 0xEF}};
+    unsigned char got[8];
+    ssize_t size = -1;
+
+    CHECK(msgsnd(msqid, &raw, sizeof raw.mtext, 0) == 0, "msgsnd direto falhou");
+    CHECK_STATUS(sysv_msg_receive(msqid, 9, got, sizeof got, true, &size), MPMC_OK);
+    CHECK(size == 4 && memcmp(got, raw.mtext, 4) == 0, "corpo entregue difere do inserido");
+
+    drop_queue(msqid);
+}
+
 int main(void) {
     test_create_remove();
     test_failures_are_propagated();
     test_roundtrip_preserves_payload();
     test_zero_size_message();
+    test_send_stores_type_and_payload();
+    test_receive_returns_kernel_payload();
     test_fifo_order();
     test_type_filtering();
     test_receive_nowait_empty();
