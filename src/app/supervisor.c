@@ -37,6 +37,7 @@ struct supervisor {
     child_record_t *children; /**< Vetor dinâmico de filhos ativos. */
     size_t child_count;       /**< Número de registros ocupados. */
     size_t child_capacity;    /**< Capacidade alocada do vetor. */
+    struct timespec created_at; /**< Instante CLOCK_MONOTONIC da criação do supervisor. */
     child_report_t *reports;  /**< Filhos já recolhidos, na ordem de recolhimento. */
     size_t report_count;      /**< Número de relatórios armazenados. */
     size_t report_capacity;   /**< Capacidade alocada do vetor de relatórios. */
@@ -217,6 +218,10 @@ mpmc_status_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_m
         return MPMC_ERR_SYS;
     }
 
+    if (clock_gettime(CLOCK_MONOTONIC, &supervisor->created_at) == -1) {
+        free(supervisor);
+        return MPMC_ERR_SYS;
+    }
     supervisor->producer_count = producer_count;
     supervisor->next_operation_id = 1u;
     if (open_event_pipe(supervisor) != MPMC_OK) {
@@ -593,6 +598,94 @@ mpmc_status_t supervisor_shutdown(supervisor_t *supervisor) {
         return signal_status;
     }
     return reap_status != MPMC_OK ? reap_status : event_status;
+}
+
+/**
+ * @brief Formata uma duração como `S.mmm s` (milissegundos, truncados).
+ * @param buffer Destino.
+ * @param size Tamanho de buffer.
+ * @param duration_ns Duração em nanossegundos.
+ */
+static void format_duration(char *buffer, size_t size, uint64_t duration_ns) {
+    const uint64_t milliseconds = duration_ns / 1000000u;
+    (void)snprintf(
+        buffer, size, "%" PRIu64 ".%03" PRIu64 " s", milliseconds / 1000u, milliseconds % 1000u
+    );
+}
+
+/**
+ * @brief Descreve como o filho terminou, em português.
+ * @param report Relatório do filho.
+ * @param buffer Destino.
+ * @param size Tamanho de buffer.
+ */
+static void format_end(const child_report_t *report, char *buffer, size_t size) {
+    switch (report->end) {
+    case CHILD_END_EXITED:
+        (void)snprintf(
+            buffer, size, "código %d (%s)", report->value,
+            report->value == EXIT_SUCCESS ? "sucesso" : "falha"
+        );
+        break;
+    case CHILD_END_SIGNALED:
+        (void)snprintf(buffer, size, "sinal %d", report->value);
+        break;
+    default:
+        (void)snprintf(buffer, size, "indisponível");
+        break;
+    }
+}
+
+/** @details Layout fixo; o cabeçalho tem acentos (2 bytes em UTF-8), por isso seus
+ * espaços são escritos à mão para alinhar com as linhas de dados. A saída nunca
+ * contém ">>", para não ser confundida com o prompt.
+ */
+mpmc_status_t supervisor_print_report(const supervisor_t *supervisor, FILE *out) {
+    if (supervisor == NULL || out == NULL) {
+        return MPMC_ERR_INVALID_ARG;
+    }
+
+    struct timespec now;
+    uint64_t total_ns = 0u;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
+        total_ns = elapsed_ns(&supervisor->created_at, &now);
+    }
+
+    (void)fputs("\nRelatório de execução\n----------------------\n", out);
+    if (supervisor->report_count == 0u) {
+        (void)fputs("Nenhum processo filho foi executado.\n", out);
+    } else {
+        (void)fputs("PID      OP     TIPO     TÉRMINO                DURAÇÃO\n", out);
+        for (size_t index = 0u; index < supervisor->report_count; ++index) {
+            const child_report_t *report = &supervisor->reports[index];
+            char end_text[48];
+            char duration_text[32];
+            format_end(report, end_text, sizeof end_text);
+            format_duration(duration_text, sizeof duration_text, report->duration_ns);
+            (void)fprintf(
+                out,
+                "%-8ld %-6" PRIu64 " %-8s %-20s %9s\n",
+                (long)report->pid,
+                report->operation_id,
+                child_kind_name(report->kind),
+                end_text,
+                duration_text
+            );
+        }
+    }
+    (void)fprintf(out, "Filhos recolhidos: %zu\n", supervisor->report_count);
+    if (supervisor->child_count > 0u) {
+        (void)fprintf(out, "Filhos ainda ativos: %zu\n", supervisor->child_count);
+    }
+
+    char total_text[32];
+    format_duration(total_text, sizeof total_text, total_ns);
+    (void)fprintf(out, "Tempo total de operação do mpmc: %s\n", total_text);
+
+    if (fflush(out) != 0 || ferror(out)) {
+        return MPMC_ERR_SYS;
+    }
+    return MPMC_OK;
 }
 
 /** @details Consulta simples do número de relatórios acumulados. */

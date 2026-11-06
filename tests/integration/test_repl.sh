@@ -70,6 +70,19 @@ prompt_count=$(grep -o '>>' "$tmp_dir/out" | wc -l | tr -d ' ')
 # Linhas em branco são ignoradas (sem erro) e o prompt continua sendo exibido.
 printf '\n   \t \nshutdown\n' | "$binary" 2 1 >"$tmp_dir/blank_out" 2>"$tmp_dir/blank_err"
 [ ! -s "$tmp_dir/blank_err" ] || fail_early 'linha em branco não deveria gerar erro'
+
+# O shutdown imprime o relatório final em stdout com duração e status de cada filho
+# e o tempo total de operação (sem filhos, informa que nenhum foi executado).
+grep -q 'Nenhum processo filho foi executado' "$tmp_dir/blank_out" \
+	|| fail_early 'relatório vazio ausente'
+printf 'produz 1 1 2\nconsome 2 1 2\nshutdown\n' | "$binary" 2 1 >"$tmp_dir/rep_out" 2>"$tmp_dir/rep_err"
+grep -q 'Relatório de execução' "$tmp_dir/rep_out" || fail_early 'relatório final ausente'
+grep -Eq '^[0-9]+ +1 +produz +(código [0-9]+ \((sucesso|falha)\)|sinal [0-9]+) +[0-9]+\.[0-9]{3} s$' "$tmp_dir/rep_out" \
+	|| fail_early 'linha do produz fora do formato esperado'
+grep -Eq '^[0-9]+ +2 +consome ' "$tmp_dir/rep_out" || fail_early 'linha do consome ausente'
+grep -Eq '^Filhos recolhidos: 2$' "$tmp_dir/rep_out" || fail_early 'contagem de filhos incorreta'
+grep -Eq '^Tempo total de operação do mpmc: [0-9]+\.[0-9]{3} s$' "$tmp_dir/rep_out" \
+	|| fail_early 'tempo total ausente ou fora do formato'
 blank_prompts=$(grep -o '>>' "$tmp_dir/blank_out" | wc -l | tr -d ' ')
 [ "$blank_prompts" -ge 3 ]
 
@@ -211,6 +224,10 @@ else
 		wait "$repl_pid"
 		repl_pid=
 		is_running "$survivor_pid" && fail 'job sobrevivente não foi encerrado pelo shutdown'
+		grep -q 'Relatório de execução' "$tmp_dir/hang3.out" || fail 'relatório final ausente no cenário 3'
+		grep -q 'sinal 9' "$tmp_dir/hang3.out" || fail 'relatório não mostra o job morto por SIGKILL'
+		grep -q 'sinal 15' "$tmp_dir/hang3.out" || fail 'relatório não mostra o job encerrado pelo shutdown'
+		grep -q 'Filhos recolhidos: 2' "$tmp_dir/hang3.out" || fail 'relatório deveria ter 2 filhos recolhidos'
 	fi
 fi
 

@@ -14,6 +14,11 @@
  * - fork() malsucedido não registra filho, não consome operation_id e restaura a
  *   máscara de sinais.
  *
+ * O supervisor.c deste teste é compilado com `-Dfork=mpmc_test_fork`, o que
+ * permite injetar falhas de fork() de forma portável. Os cenários com worker
+ * bloqueado usam MPMC_TEST_WORKER_HANG e exigem build com -DDEBUG e o utilitário
+ * pgrep; sem eles, são ignorados com a mensagem SKIP.
+ *
  * Retorna 0 se todos os casos passarem; 1 caso contrário.
  */
 
@@ -51,7 +56,7 @@ static unsigned g_failures;
 
 static int g_fork_failures_left;
 
-/** Substitui fork() em supervisor.c. */
+/** Substitui fork() em supervisor.c (compilado com -Dfork=mpmc_test_fork). */
 pid_t mpmc_test_fork(void);
 pid_t mpmc_test_fork(void) {
     if (g_fork_failures_left > 0) {
@@ -98,6 +103,42 @@ static bool wait_for_reports(supervisor_t *supervisor, size_t wanted, int timeou
         sleep_ms(10);
     }
     return false;
+}
+
+/** Executa supervisor_print_report() em um tmpfile e devolve o texto em `buffer`. */
+static mpmc_status_t capture_report(const supervisor_t *supervisor, char *buffer, size_t size) {
+    FILE *file = tmpfile();
+    CHECK(file != NULL, "tmpfile");
+    if (file == NULL) {
+        buffer[0] = '\0';
+        return MPMC_ERR_SYS;
+    }
+    mpmc_status_t status = supervisor_print_report(supervisor, file);
+    rewind(file);
+    size_t length = fread(buffer, 1u, size - 1u, file);
+    buffer[length] = '\0';
+    (void)fclose(file);
+    return status;
+}
+
+/** Conta as linhas de `text` que contêm `needle`. */
+static size_t count_lines_with(const char *text, const char *needle) {
+    size_t count = 0u;
+    for (const char *line = text; *line != '\0';) {
+        const char *end = strchr(line, '\n');
+        size_t length = end == NULL ? strlen(line) : (size_t)(end - line);
+        char copy[256];
+        if (length >= sizeof copy) {
+            length = sizeof copy - 1u;
+        }
+        memcpy(copy, line, length);
+        copy[length] = '\0';
+        if (strstr(copy, needle) != NULL) {
+            ++count;
+        }
+        line = end == NULL ? line + strlen(line) : end + 1;
+    }
+    return count;
 }
 
 static supervisor_t *new_supervisor(void) {
@@ -190,8 +231,38 @@ static void test_natural_exit_report(void) {
     }
     CHECK(seen_produce && seen_consume, "tipo e operation_id associados ao PID correto");
 
+    char text[4096];
+    CHECK(capture_report(supervisor, text, sizeof text) == MPMC_OK, "print_report");
+    CHECK(strstr(text, "Relatório de execução") != NULL, "título do relatório");
+    CHECK(strstr(text, "DURAÇÃO") != NULL, "cabeçalho da tabela");
+    CHECK(count_lines_with(text, "produz") == 1u, "uma linha para o produz");
+    CHECK(count_lines_with(text, "consome") == 1u, "uma linha para o consome");
+    CHECK(count_lines_with(text, "código 1 (falha)") == 2u, "término com código e rótulo");
+    CHECK(count_lines_with(text, ".") >= 3u && strstr(text, " s\n") != NULL,
+          "durações no formato S.mmm s (2 filhos + total)");
+    CHECK(strstr(text, "Filhos recolhidos: 2\n") != NULL, "contagem de filhos recolhidos");
+    CHECK(strstr(text, "Filhos ainda ativos") == NULL, "sem filhos ativos");
+    CHECK(strstr(text, "Tempo total de operação do mpmc: ") != NULL, "tempo total do mpmc");
+    CHECK(strstr(text, ">>") == NULL, "relatório não contém o marcador de prompt");
+
     CHECK(supervisor_shutdown(supervisor) == MPMC_OK, "shutdown sem filhos");
     CHECK(supervisor_report_count(supervisor) == 2u, "relatórios preservados após shutdown");
+    supervisor_destroy(supervisor);
+}
+
+static void test_print_report_empty_and_guards(void) {
+    supervisor_t *supervisor = new_supervisor();
+    char text[1024];
+
+    CHECK(capture_report(supervisor, text, sizeof text) == MPMC_OK, "relatório vazio");
+    CHECK(strstr(text, "Nenhum processo filho foi executado.") != NULL, "mensagem de vazio");
+    CHECK(strstr(text, "Filhos recolhidos: 0\n") != NULL, "zero filhos recolhidos");
+    CHECK(strstr(text, "Tempo total de operação do mpmc: 0.") != NULL,
+          "tempo total presente (< 1 s) mesmo sem filhos");
+    CHECK(supervisor_print_report(NULL, stdout) == MPMC_ERR_INVALID_ARG, "supervisor NULL");
+    CHECK(supervisor_print_report(supervisor, NULL) == MPMC_ERR_INVALID_ARG, "stream NULL");
+
+    (void)supervisor_shutdown(supervisor);
     supervisor_destroy(supervisor);
 }
 
@@ -292,6 +363,12 @@ static void test_signal_kill_is_not_fatal(void) {
 
     CHECK(supervisor_shutdown(supervisor) == MPMC_OK, "shutdown");
     CHECK(supervisor_report_count(supervisor) == 3u, "três relatórios ao final");
+
+    char text[4096];
+    CHECK(capture_report(supervisor, text, sizeof text) == MPMC_OK, "print_report");
+    CHECK(count_lines_with(text, "sinal 9") == 1u, "uma linha com o SIGKILL");
+    CHECK(count_lines_with(text, "sinal 15") == 2u, "duas linhas com o SIGTERM do shutdown");
+    CHECK(strstr(text, "Filhos recolhidos: 3\n") != NULL, "três filhos recolhidos");
     supervisor_destroy(supervisor);
 }
 
@@ -349,6 +426,7 @@ static void test_fork_failure_with_active_job(void) {
 int main(void) {
     test_natural_exit_report();
     test_report_get_guards();
+    test_print_report_empty_and_guards();
     test_fork_failure();
 
 #ifdef DEBUG

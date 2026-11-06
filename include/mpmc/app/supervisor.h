@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <sys/types.h>
 
@@ -131,6 +132,21 @@ size_t supervisor_report_count(const supervisor_t *supervisor);
  */
 mpmc_status_t
 supervisor_report_get(const supervisor_t *supervisor, size_t index, child_report_t *out);
+
+/**
+ * @brief Imprime o relatório final: duração e status de cada filho recolhido e o
+ * tempo total de operação do mpmc.
+ * @param supervisor Instância do supervisor.
+ * @param out Stream de saída (normalmente stdout).
+ * @retval MPMC_OK Relatório escrito e descarregado.
+ * @retval MPMC_ERR_INVALID_ARG Ponteiro nulo.
+ * @retval MPMC_ERR_SYS Falha ao escrever em `out`.
+ * @details Uma linha por filho, na ordem de recolhimento: PID, operação, tipo,
+ * término (`código N (sucesso|falha)` ou `sinal N`) e duração em `S.mmm s`. O tempo
+ * total vai da criação do supervisor até a chamada, em CLOCK_MONOTONIC. Deve ser
+ * chamada após supervisor_shutdown(); filhos ainda ativos são apenas contados.
+ */
+mpmc_status_t supervisor_print_report(const supervisor_t *supervisor, FILE *out);
 
 /**
  * @brief Informa quantos avisos o supervisor imprimiu desde a última consulta.

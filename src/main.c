@@ -66,6 +66,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "mpmc: REPL encerrado com erro: %s\n", mpmc_status_str(status));
         (void)supervisor_shutdown(supervisor);
     }
+    (void)supervisor_print_report(supervisor, stdout);
     supervisor_destroy(supervisor);
     return status == MPMC_OK ? EXIT_SUCCESS : EXIT_FAILURE;
 }
