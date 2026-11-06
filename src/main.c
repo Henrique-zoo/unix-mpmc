@@ -21,10 +21,10 @@
 #include "mpmc/app/repl.h"
 #include "mpmc/app/supervisor.h"
 #include "mpmc/config.h"
-#include "mpmc/status.h"
+#include "mpmc/error.h"
 
-static mpmc_status_t parse_args(int argc, char *argv[], mpmc_config_t *out);
-static mpmc_status_t parse_positive_integer(const char *text, size_t *out);
+static mpmc_result_t parse_args(int argc, char *argv[], mpmc_config_t *out);
+static mpmc_result_t parse_positive_integer(const char *text, size_t *out);
 
 /**
  * @brief Valida os argumentos de inicialização e coordena a execução.
@@ -44,31 +44,40 @@ static mpmc_status_t parse_positive_integer(const char *text, size_t *out);
  */
 int main(int argc, char *argv[]) {
     mpmc_config_t config;
-    mpmc_status_t status = parse_args(argc, argv, &config);
+    mpmc_result_t error = parse_args(argc, argv, &config);
+    char error_text[256];
 
-    if (status != MPMC_OK) {
-        fprintf(stderr, "%s\n", mpmc_status_str(status));
+    if (error.status != MPMC_OK) {
+        (void)mpmc_error_format(error, error_text, sizeof error_text);
+        fprintf(stderr, "%s\n", error_text);
         fprintf(stderr, "Uso: %s <produtores> <paradigma>\n", argv[0]);
         return EXIT_FAILURE;
     }
 
     supervisor_t *supervisor = NULL;
-    status = supervisor_create(&supervisor, config.producer_count, config.mode);
-    if (status != MPMC_OK) {
-        fprintf(
-            stderr, "mpmc: não foi possível inicializar o supervisor: %s\n", mpmc_status_str(status)
-        );
+    error = supervisor_create(&supervisor, config.producer_count, config.mode);
+    if (error.status != MPMC_OK) {
+        (void)mpmc_error_format(error, error_text, sizeof error_text);
+        fprintf(stderr, "mpmc: não foi possível inicializar o supervisor: %s\n", error_text);
         return EXIT_FAILURE;
     }
 
-    status = repl_run(supervisor);
-    if (status != MPMC_OK) {
-        fprintf(stderr, "mpmc: REPL encerrado com erro: %s\n", mpmc_status_str(status));
+    error = repl_run(supervisor);
+    if (error.status != MPMC_OK) {
+        (void)mpmc_error_format(error, error_text, sizeof error_text);
+        fprintf(stderr, "mpmc: REPL encerrado com erro: %s\n", error_text);
         (void)supervisor_shutdown(supervisor);
     }
-    (void)supervisor_print_report(supervisor, stdout);
+    mpmc_result_t report_error = supervisor_print_report(supervisor, stdout);
+    if (report_error.status != MPMC_OK) {
+        (void)mpmc_error_format(report_error, error_text, sizeof error_text);
+        fprintf(stderr, "mpmc: falha ao apresentar o relatório: %s\n", error_text);
+        if (error.status == MPMC_OK) {
+            error = report_error;
+        }
+    }
     supervisor_destroy(supervisor);
-    return status == MPMC_OK ? EXIT_SUCCESS : EXIT_FAILURE;
+    return error.status == MPMC_OK ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 /**
@@ -89,8 +98,13 @@ int main(int argc, char *argv[]) {
  * @param argv Vetor de strings dos argumentos.
  * @param[out] out Configuração validada em caso de sucesso.
  *
- * @retval MPMC_OK Configuração validada.
- * @retval MPMC_ERR_INVALID_ARG Quantidade, formato ou valor dos
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: quantidade de estruturas e paradigma validados e escritos em out; system_errno é
+ *   zero.
+ * - MPMC_ERR_INVALID_ARG: argc diferente de três, argv ou out nulo, formato/valor numérico
+ *   inválido ou paradigma diferente de 1/2. Se strtoumax() falhar na conversão de um argumento,
+ *   system_errno preserva o errno capturado, inclusive ERANGE; nas demais rejeições,
+ *   system_errno é zero.
  *         argumentos inválido, ou ponteiro de saída nulo.
  *
  * @post Em caso de sucesso, *out contém a configuração validada.
@@ -98,24 +112,26 @@ int main(int argc, char *argv[]) {
  *
  * @note A função não inicializa recursos IPC nem cria processos.
  */
-static mpmc_status_t parse_args(int argc, char *argv[], mpmc_config_t *out) {
+static mpmc_result_t parse_args(int argc, char *argv[], mpmc_config_t *out) {
     if (argc != 3 || argv == NULL || out == NULL) {
-        return MPMC_ERR_INVALID_ARG;
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
     size_t producer_count;
     size_t parsed_mode;
 
-    if (parse_positive_integer(argv[1], &producer_count) != MPMC_OK) {
-        return MPMC_ERR_INVALID_ARG;
+    mpmc_result_t error = parse_positive_integer(argv[1], &producer_count);
+    if (error.status != MPMC_OK) {
+        return error;
     }
 
-    if (parse_positive_integer(argv[2], &parsed_mode) != MPMC_OK) {
-        return MPMC_ERR_INVALID_ARG;
+    error = parse_positive_integer(argv[2], &parsed_mode);
+    if (error.status != MPMC_OK) {
+        return error;
     }
 
     if (parsed_mode != IPC_SHARED_MEMORY && parsed_mode != IPC_MESSAGE_QUEUE) {
-        return MPMC_ERR_INVALID_ARG;
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
     *out = (mpmc_config_t){
@@ -123,7 +139,7 @@ static mpmc_status_t parse_args(int argc, char *argv[], mpmc_config_t *out) {
         .mode = (ipc_mode_t)parsed_mode,
     };
 
-    return MPMC_OK;
+    return (mpmc_result_t){.status = MPMC_OK};
 }
 
 /**
@@ -140,24 +156,27 @@ static mpmc_status_t parse_args(int argc, char *argv[], mpmc_config_t *out) {
  * @param text String terminada em NUL a ser convertida.
  * @param[out] out Valor convertido em caso de sucesso.
  *
- * @retval MPMC_OK Conversão realizada com sucesso.
- * @retval MPMC_ERR_INVALID_ARG String vazia, caracteres inválidos,
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: decimal positivo representável em size_t escrito em out; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: text ou out nulo, texto vazio, caractere não decimal, valor zero,
+ *   valor não representável em size_t ou falha de strtoumax(). system_errno contém o errno
+ *   capturado quando strtoumax() falha, inclusive ERANGE; nos demais casos, é zero.
  *         valor nulo, estouro numérico ou ponteiro inválido.
  *
  * @post Em caso de sucesso, *out contém o valor convertido.
  * Em caso de erro, *out permanece inalterado, quando válido.
  *
- * @note A função pode modificar errno durante a conversão.
- * O chamador não deve depender de seu valor após o retorno.
+ * @note Erros de strtoumax() são preservados em system_errno. Erros de
+ * formato/faixa sem causa de sistema possuem system_errno igual a zero.
  */
-static mpmc_status_t parse_positive_integer(const char *text, size_t *out) {
+static mpmc_result_t parse_positive_integer(const char *text, size_t *out) {
     if (text == NULL || out == NULL || *text == '\0') {
-        return MPMC_ERR_INVALID_ARG;
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
     for (const char *ptr = text; *ptr != '\0'; ptr++) {
         if (*ptr < '0' || *ptr > '9') {
-            return MPMC_ERR_INVALID_ARG;
+            return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
         }
     }
 
@@ -165,11 +184,15 @@ static mpmc_status_t parse_positive_integer(const char *text, size_t *out) {
 
     char *endptr;
     uintmax_t value = strtoumax(text, &endptr, 10);
+    int conversion_errno = errno;
 
-    if (errno == ERANGE || *endptr != '\0' || value == 0 || value > SIZE_MAX) {
-        return MPMC_ERR_INVALID_ARG;
+    if (conversion_errno != 0) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG, .system_errno = conversion_errno};
+    }
+    if (*endptr != '\0' || value == 0 || value > SIZE_MAX) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
     *out = (size_t)value;
-    return MPMC_OK;
+    return (mpmc_result_t){.status = MPMC_OK};
 }

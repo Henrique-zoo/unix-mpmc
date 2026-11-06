@@ -234,12 +234,12 @@
       "-DDEBUG",
       "-c",
       "-o",
-      "build/debug/status.o",
-      "src/status.c"
+      "build/debug/error.o",
+      "src/error.c"
     ],
     "directory": "/home/henrique/Projetos/unix-mpmc",
-    "file": "/home/henrique/Projetos/unix-mpmc/src/status.c",
-    "output": "/home/henrique/Projetos/unix-mpmc/build/debug/status.o"
+    "file": "/home/henrique/Projetos/unix-mpmc/src/error.c",
+    "output": "/home/henrique/Projetos/unix-mpmc/build/debug/error.o"
   },
   {
     "arguments": [

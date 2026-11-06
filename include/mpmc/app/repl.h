@@ -7,7 +7,7 @@
 #define MPMC_APP_REPL_H
 
 #include "mpmc/app/supervisor.h"
-#include "mpmc/status.h"
+#include "mpmc/error.h"
 
 /** @ingroup application
  * @{ */
@@ -36,14 +36,23 @@
  * Leituras interrompidas por sinal exigem tratamento explícito de `EINTR`.
  *
  * @param supervisor Supervisor inicializado e pertencente ao processo principal.
- * @retval MPMC_OK REPL encerrado normalmente, com shutdown solicitado.
- * @retval MPMC_ERR_SYS Falha irrecuperável ao ler ou tratar a entrada.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: loop encerrado por shutdown, EOF, SIGINT ou SIGTERM, sem falha reportada no
+ *   encerramento; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: supervisor nulo; system_errno é zero.
+ * - MPMC_ERR_SYS: falha em tcgetpgrp(), sigaction(), poll(), read() ou, por propagação do
+ *   supervisor, kill() ou waitpid(); system_errno contém o errno capturado na operação que
+ *   falhou. O campo é zero para execução em background com stdin no terminal, eventos
+ *   POLLERR/POLLNVAL ou falhas internas propagadas pelo supervisor.
+ *
+ * Erros recuperáveis de parsing, validação e despacho são apresentados e não se tornam o retorno
+ * do REPL. Leituras e poll() interrompidos por EINTR são repetidos.
  * @pre supervisor não é NULL nem foi encerrado/destruído.
  * @post Não ficam comandos pendentes de processamento.
  * @warning Leitura de stdin em programa posto em background pelo shell pode
  * causar suspensão por SIGTTIN com job control ativo.
  */
-mpmc_status_t repl_run(supervisor_t *supervisor);
+mpmc_result_t repl_run(supervisor_t *supervisor);
 
 /** @} */
 #endif
