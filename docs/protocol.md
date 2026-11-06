@@ -20,18 +20,64 @@ Os dois paradigmas devem apresentar as mesmas semânticas observáveis:
 ## Envelope lógico da mensagem
 
 `message_t` contém `sender_pid`, `sequence`, `sent_at`, `operation_id` e `ack_required`.
-Os três primeiros campos atendem ao conteúdo mínimo do enunciado; os demais são
-metadados internos necessários para correlação de confirmações.
+`sender_pid`, `sequence` e `sent_at` são campos mínimos obrigatórios do enunciado:
+devem existir e ser preservados em toda mensagem, independentemente do modo IPC.
+`operation_id` e `ack_required` são extensões internas; não substituem nem alteram
+o significado dos campos obrigatórios. `producer_id` não pertence à mensagem: é
+o índice lógico da fila/estrutura escolhida pelo comando e passado separadamente
+a `ipc_send()`/`ipc_receive()`.
 
-O identificador `operation_id` é atribuído pelo supervisor **antes de `fork()`**, de
-forma que operações concorrentes tenham IDs distintos. O PID representa o processo
-emissor real; **não** é equivalente ao índice lógico de produtor. `sequence` deve
-ser crescente no contexto de cada processo produtor, inclusive no caso *striped*.
+O supervisor atribui um `operation_id` não nulo e único por trabalho **antes de
+`fork()`**. Para trabalho produtor, esse ID identifica a operação de produção e é
+copiado sem alteração para todas as mensagens dela. O processo filho emissor define
+`sender_pid=getpid()`; esse PID físico não é o índice lógico `producer_id`. Um único
+emissor *striped* conserva o mesmo PID e sequência ao alternar entre destinos.
+`sequence` começa em 1 e cresce uma vez por mensagem no processo emissor, não por
+fila; não reinicia ao mudar de destino.
 
-O instante `sent_at` é capturado no momento de envio, usando `CLOCK_REALTIME`.
-Uma cópia serializada no formato da fila pode envolver campos de controle extras;
-a estrutura enviada a `msgsnd` exige o `long mtype` inicial e um `msgsz` que
-**não inclui `mtype`**.
+`sent_at` é capturado para cada mensagem com `CLOCK_REALTIME`, no ponto definido
+como envio pelo worker. É metadado de tempo civil para observabilidade, não chave
+de identidade nem garantia de ordem: a ordem por emissor é determinada por
+`sequence`, pois o relógio de calendário pode ajustar-se. Uma serialização de fila
+pode ter envelope de controle extra, mas deve preservar os três campos mínimos e
+os metadados internos. A estrutura enviada a `msgsnd` exige `long mtype` inicial e
+`msgsz` que **não inclui `mtype`**.
+
+## Correlação entre produção, consumo e relatório
+
+As identidades têm escopos distintos e não devem ser reaproveitadas umas pelas
+outras:
+
+| Identificador/campo | Identifica | Regra |
+|---|---|---|
+| `producer_id` | Fila lógica `1..p` | Seleciona o destino/origem IPC; não é PID e não é campo de `message_t`. `produz 0` é apenas a regra de distribuição *striped*. |
+| `sender_pid` | Processo produtor físico | É `getpid()` no processo que emite a mensagem; preservado ao consumir. |
+| `sequence` | Mensagem dentro do emissor | Inicia em 1 e avança por envio no processo, incluindo destinos distintos em *striped*. |
+| `operation_id` da mensagem | Trabalho produtor | Mesmo ID em todas as mensagens desse trabalho; não é o ID do comando consumidor que as retira. |
+| `operation_id` do consumidor | Trabalho consumidor | Identifica o processo/comando consumidor e seu relatório; nunca sobrescreve o ID gravado na mensagem. |
+
+A chave de correlação de uma mensagem é `(operation_id, sender_pid, sequence)`.
+O `operation_id` impede colisões entre trabalhos, inclusive quando o sistema
+reutiliza um PID; `sender_pid` e `sequence` preservam a procedência exigida e a
+ordem dentro do emissor. `sent_at` não integra essa chave.
+
+Quando `ack_required=false`, o consumo não gera ACK ao produtor. Quando é `true`,
+cada retirada efetiva gera exatamente uma confirmação associada à chave da
+mensagem; uma mensagem não retirada não pode ser confirmada. O backend pode
+agregar confirmações para transporte, mas deve manter a contagem por
+`operation_id` e não contar duas vezes a mesma chave. O produtor aguarda o número
+esperado para o seu próprio `operation_id`; ACKs de outro trabalho ou do comando
+consumidor não satisfazem essa espera. ACK confirma consumo, não apenas inserção.
+
+O relatório de processos do supervisor identifica cada filho por seu PID,
+`operation_id`, tipo, estado de término e duração. Para um filho produtor, seu PID
+deve coincidir com `sender_pid` das mensagens que emitiu e seu `operation_id` com
+o das mensagens. Para um filho consumidor, o PID e `operation_id` descrevem o
+consumidor, enquanto as mensagens retiradas mantêm os dados de seus emissores e
+os IDs dos trabalhos produtores. Portanto, o relatório de término de processo não
+é um recibo individual de mensagem nem substitui as estatísticas de consumo por
+fila; o estado de sucesso de um produtor `ack=1` pressupõe que todos os ACKs da
+operação chegaram.
 
 ## Fluxo por comando
 
@@ -50,7 +96,9 @@ não o limite de capacidade do recurso IPC.
 4. Executar `ipc_ack_end(operation_id)` em sucesso, falha ou cancelamento.
 
 O protocolo deve preservar confirmações emitidas **antes** de o produtor entrar em
-`ipc_ack_wait` (ACKs não são eventos de borda que possam se perder).
+`ipc_ack_wait` (ACKs não são eventos de borda que possam se perder). Cada ACK
+corresponde a uma mensagem da operação, e a soma de confirmações distintas não
+pode exceder o número de mensagens efetivamente consumidas.
 
 ### `produz 0 n ack`
 
@@ -106,9 +154,14 @@ do paradigma 2 continuam trafegando por filas System V, nunca por um buffer `shm
 
 Mensagens de controle precisam distinguir:
 
-- Confirmação de consumo (`operation_id` e destinatário do ACK);
+- Confirmação de consumo (`operation_id` produtor e identidade da mensagem; o
+  destino é o contexto do produtor, não o PID lógico da fila);
 - Evento de mensagem consumida (`logical_producer_id`, para estatísticas);
 - Solicitação de encerramento/cancelamento, caso um canal explícito seja escolhido.
+
+O evento de estatística identifica a fila lógica de onde a mensagem foi retirada;
+não deve inferir essa fila a partir de `sender_pid`. A mensagem preservada continua
+contendo a identidade de seu emissor original.
 
 Apenas o supervisor pode consolidar um contador local baseado nos eventos recebidos,
 por meio de `ipc_poll_events`; não basta incrementar uma variável em um filho, pois

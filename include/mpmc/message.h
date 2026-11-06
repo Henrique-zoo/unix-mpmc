@@ -25,10 +25,11 @@
 
 /**
  * @brief Dados lógicos de uma mensagem produzida.
- * @details O enunciado exige sender_pid, sequence e sent_at. Os campos
- * operation_id e ack_required são metadados propostos para correlacionar
- * confirmações. Um backend de filas System V adicionará separadamente
- * seu envelope `long mtype`; `mtype` não faz parte desta estrutura.
+ * @details sender_pid, sequence e sent_at são campos mínimos obrigatórios do
+ * enunciado e devem ser preservados por ambos os backends. operation_id e
+ * ack_required são metadados internos adicionais para correlacionar confirmação;
+ * não substituem os campos mínimos. Um backend de filas System V adiciona
+ * separadamente o envelope `long mtype`, que não faz parte desta estrutura.
  *
  * `sender_pid` identifica o processo físico que envia (getpid()), enquanto
  * `producer_id` é o índice lógico da fila destino e não faz parte deste
@@ -38,7 +39,7 @@
  */
 typedef struct {
     pid_t sender_pid;        /**< PID físico real do processo que enviou a mensagem (getpid()). */
-    uint32_t sequence;       /**< Sequência do processo produtor, iniciando em 1. */
+    uint32_t sequence;       /**< Sequência crescente por processo emissor, iniciando em 1. */
     struct timespec sent_at; /**< Instante do envio (relógio de calendário). */
     uint64_t operation_id;   /**< Identificador único do comando atribuído pelo supervisor. */
     bool ack_required;       /**< Se o consumo deve confirmar a entrega ao produtor. */

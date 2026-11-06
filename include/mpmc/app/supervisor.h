@@ -36,6 +36,11 @@ typedef enum {
 /**
  * @brief Relatório imutável de um filho já recolhido.
  * @details Permite apresentar depois a duração e o status de cada processo.
+ * operation_id identifica o trabalho do filho, enquanto pid identifica o
+ * processo físico. Em relatórios de produtores, esses valores correspondem,
+ * respectivamente, ao operation_id e sender_pid das mensagens emitidas. Um
+ * relatório de consumidor descreve o consumidor e não reescreve a identidade
+ * das mensagens que ele retirou.
  * A duração vai do instante imediatamente anterior ao fork() até o recolhimento
  * por waitpid(), medida com CLOCK_MONOTONIC; portanto inclui a latência (curta)
  * entre o término real e o recolhimento.

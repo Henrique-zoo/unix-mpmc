@@ -66,7 +66,8 @@ size_t ipc_producer_count(const ipc_context_t *context);
  * @retval MPMC_ERR_SYS Falha em semop(), msgsnd() ou operações associadas.
  * @details Pode bloquear aguardando espaço. Confirmações, quando solicitadas,
  * são independentes da conclusão desta função: envio != consumo.
- * @pre message->ack_required exige um ipc_ack_begin() válido para operation_id.
+ * @pre message->ack_required exige ipc_ack_begin() prévio para o
+ * message->operation_id. O backend preserva sender_pid, sequence e sent_at.
  */
 mpmc_status_t ipc_send(ipc_context_t *context, size_t producer_id, const message_t *message);
 
@@ -81,8 +82,11 @@ mpmc_status_t ipc_send(ipc_context_t *context, size_t producer_id, const message
  * @retval MPMC_ERR_INVALID_INDEX Índice não existente.
  * @retval MPMC_ERR_INTERRUPTED Interrompido por shutdown/sinal.
  * @retval MPMC_ERR_SYS Falha no IPC ou no protocolo de contabilização.
- * @details O backend registra exatamente um consumo e sinaliza ao produtor
- * quando a mensagem possuir ack_required=true. Não emitir ACK duplicado.
+ * @details O backend registra exatamente um consumo e, se
+ * out->ack_required=true, emite uma confirmação para a mensagem identificada
+ * por (out->operation_id, out->sender_pid, out->sequence). O operation_id do
+ * trabalho consumidor não substitui nem modifica os metadados recebidos. Não
+ * emitir ACK duplicado.
  * @warning A contagem e a publicação do ACK exigem desenho à prova de falhas
  * para evitar consumo contado mas não confirmado.
  */
@@ -92,7 +96,7 @@ ipc_receive(ipc_context_t *context, size_t producer_id, message_t *out, bool blo
 /**
  * @brief Prepara o contexto de ACK de uma operação produtora.
  * @param context Transporte no processo produtor.
- * @param operation_id ID único e não zero atribuído pelo supervisor.
+ * @param operation_id ID único e não zero do trabalho produtor, atribuído pelo supervisor.
  * @param expected Número total de mensagens a confirmar, de 1 a 1024.
  * @retval MPMC_OK Canal/estado de confirmação pronto.
  * @retval MPMC_ERR_INVALID_ARG ID ou quantidade inválida.
@@ -104,7 +108,8 @@ mpmc_status_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsig
 /**
  * @brief Espera o consumo efetivo de todas as mensagens de uma operação.
  * @param context Contexto do processo produtor.
- * @param operation_id Operação previamente registrada com ipc_ack_begin().
+ * @param operation_id Operação produtora previamente registrada com ipc_ack_begin();
+ * não é o ID de um consumidor que possa ter retirado as mensagens.
  * @retval MPMC_OK Todas as confirmações chegaram.
  * @retval MPMC_ERR_INTERRUPTED Espera cancelada ou interrompida por shutdown.
  * @retval MPMC_ERR_SYS Falha no canal de controle.
