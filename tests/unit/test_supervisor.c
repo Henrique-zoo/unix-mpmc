@@ -14,11 +14,6 @@
  * - fork() malsucedido não registra filho, não consome operation_id e restaura a
  *   máscara de sinais.
  *
- * O supervisor.c deste teste é compilado com `-Dfork=mpmc_test_fork`, o que
- * permite injetar falhas de fork() de forma portável. Os cenários com worker
- * bloqueado usam MPMC_TEST_WORKER_HANG e exigem build com -DDEBUG e o utilitário
- * pgrep; sem eles, são ignorados com a mensagem SKIP.
- *
  * Retorna 0 se todos os casos passarem; 1 caso contrário.
  */
 
@@ -56,7 +51,7 @@ static unsigned g_failures;
 
 static int g_fork_failures_left;
 
-/** Substitui fork() em supervisor.c (compilado com -Dfork=mpmc_test_fork). */
+/** Substitui fork() em supervisor.c. */
 pid_t mpmc_test_fork(void);
 pid_t mpmc_test_fork(void) {
     if (g_fork_failures_left > 0) {
