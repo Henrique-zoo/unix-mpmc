@@ -119,3 +119,14 @@ O fluxo, os papéis dos tipos e um exemplo completo estão em
 - Relação entre tempo de operação da aplicação e tempos de execução dos filhos.
 
 Consulte @ref ipc_protocol e @ref testing_plan.
+
+## Pendências de integração
+
+- #16: implementar a fachada de transporte e atualizar os contratos de fechamento
+  para propagar os resultados e diagnósticos de cleanup dos backends.
+- #17: chamar producer_message_next() imediatamente antes de cada ipc_send() no
+  filho, usando o operation_id atribuído pelo supervisor. O helper atual só é
+  exercitado pelos testes; ainda não existe envio real pela aplicação.
+- #10 e #20: definir conjuntamente a espera cancelável e a recuperação de reservas.
+  Encerramento global, que descarta o contexto, não equivale ao cancelamento de
+  um trabalho com preservação do contexto para as operações restantes.
