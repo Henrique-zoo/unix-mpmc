@@ -62,7 +62,11 @@ $(UNIT_DIR)/test_msg: tests/unit/test_msg.c src/ipc/msg.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
-$(UNIT_DIR)/test_sem: tests/unit/test_sem.c src/ipc/sem.c
+$(UNIT_DIR)/sem_for_test.o: src/ipc/sem.c include/mpmc/ipc/sem.h include/mpmc/error.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Dsemop=mpmc_test_semop -c $< -o $@
+
+$(UNIT_DIR)/test_sem: tests/unit/test_sem.c $(UNIT_DIR)/sem_for_test.o
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 

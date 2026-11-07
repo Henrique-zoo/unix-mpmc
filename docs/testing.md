@@ -99,6 +99,13 @@ limpeza ou mudança do `errno` corrente. São exercitados `EAGAIN`, `ENOMSG`, `E
 `E2BIG`, falha de `fork()` e falha de escrita do relatório. A formatação também cobre
 consulta de capacidade, truncamento e diagnósticos com causa de sistema.
 
+Os testes de `sem` verificam valores e índices, espera por zero, P/V, IPC_NOWAIT,
+limites representáveis, preservação de errno e permissão de alteração sem leitura
+(0200). A interrupção real usa alarm() e sigaction() sem SA_RESTART. Um objeto de
+sem.c compilado com -Dsemop=mpmc_test_semop permite injetar EIDRM, EINVAL e EACCES
+sem alterar o objeto da aplicação. A remoção de um conjunto com filhos realmente
+bloqueados ainda deve ser exercitada pelos testes de integração.
+
 Os testes de `shm` exercitam os quatro wrappers, verificam segmentos independentes de
 2048 bytes com permissões 0600 via `IPC_STAT` e conferem a preservação dos parâmetros
 de saída em falhas. Um cenário com `fork()` verifica que o filho desassocia apenas
