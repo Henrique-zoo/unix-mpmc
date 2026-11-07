@@ -99,6 +99,13 @@ limpeza ou mudança do `errno` corrente. São exercitados `EAGAIN`, `ENOMSG`, `E
 `E2BIG`, falha de `fork()` e falha de escrita do relatório. A formatação também cobre
 consulta de capacidade, truncamento e diagnósticos com causa de sistema.
 
+Os testes de `sem` verificam valores e índices, espera por zero, P/V, IPC_NOWAIT,
+limites representáveis, preservação de errno e permissão de alteração sem leitura
+(0200). A interrupção real usa alarm() e sigaction() sem SA_RESTART. Um objeto de
+sem.c compilado com -Dsemop=mpmc_test_semop permite injetar EIDRM, EINVAL e EACCES
+sem alterar o objeto da aplicação. A remoção de um conjunto com filhos realmente
+bloqueados ainda deve ser exercitada pelos testes de integração.
+
 Os testes de `shm` exercitam os quatro wrappers, verificam segmentos independentes de
 2048 bytes com permissões 0600 via `IPC_STAT` e conferem a preservação dos parâmetros
 de saída em falhas. Um cenário com `fork()` verifica que o filho desassocia apenas
@@ -115,7 +122,12 @@ falhas de cleanup. Uma callback copia os diagnósticos e altera `errno` para ver
 que cada falha e o erro original da criação continuam preservados. Os testes também
 conferem que a limpeza libera o estado local uma única vez e não aloca diagnósticos.
 
-Os *smoke tests* do Makefile validam somente a capacidade de iniciar e executar `shutdown`.
-Os testes de integração acima são casos a **implementar**. Para que scripts automatizados
-dirijam o REPL, envie comandos por `stdin`, capture `stdout`/`stderr` e imponha limites
-de tempo externos para detectar deadlocks de verdade.
+O alvo `test` também executa `tests/integration/test_repl.c`, que abre um pseudo-terminal
+para verificar o prompt inicial, seu redesenho após o aviso de término de um filho e o
+relatório final. A entrada em terminal complementa os cenários por pipes e FIFOs do
+script `test_repl.sh`, incluindo a validação do limite de estruturas na inicialização.
+
+Os testes de integração de FIFO, ACKs e concorrência dos backends da matriz acima ainda
+dependem das respectivas implementações. Os *smoke tests* validam somente inicialização
+e shutdown; os cenários do REPL não substituem a verificação do transporte IPC completo.
+Scripts automatizados devem capturar a saída e impor limites de tempo para detectar travamentos.

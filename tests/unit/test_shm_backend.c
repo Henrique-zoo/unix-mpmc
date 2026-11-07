@@ -15,12 +15,30 @@
 
 #include "mpmc/ipc/shm_backend.h"
 
+/**
+ * @brief Capacidade dos vetores de segmentos e de rastreamento de alocações.
+ */
 #define MAX_SEGMENTS 8
+/**
+ * @brief Quantidade de estruturas lógicas criada nos cenários usuais.
+ */
 #define PRODUCER_COUNT 3
 
+/**
+ * @brief Quantidade de verificações executadas nesta suíte.
+ */
 static unsigned checks;
+/**
+ * @brief Quantidade de verificações que registraram falha nesta suíte.
+ */
 static unsigned failures;
 
+/**
+ * @brief Registra uma verificação e informa a falha sem interromper a suíte.
+ * @param condition Expressão lógica avaliada uma única vez.
+ * @details Incrementa o contador de verificações; se a condição for falsa,
+ * incrementa o contador de falhas e escreve o diagnóstico em stderr.
+ */
 #define CHECK(condition)                                                                           \
     do {                                                                                           \
         ++checks;                                                                                  \
@@ -30,30 +48,79 @@ static unsigned failures;
         }                                                                                          \
     } while (0)
 
+/**
+ * @brief Estado simplificado de um segmento, sem criar IPC no kernel.
+ * @details O índice no vetor segments é o identificador simulado; a posição zero
+ * permite verificar que o backend aceita esse identificador como válido.
+ */
 typedef struct {
-    bool created;
-    bool attached;
-    unsigned char data[MPMC_SHM_SEGMENT_BYTES];
+    bool created;  /**< Criação simulada ainda não seguida de remoção global bem-sucedida. */
+    bool attached; /**< Associação simulada ainda não seguida de detach bem-sucedido. */
+    unsigned char data[MPMC_SHM_SEGMENT_BYTES]; /**< Área de dados devolvida na associação. */
 } fake_segment_t;
 
+/** @brief Armazena cópias dos diagnósticos recebidos pela callback de cleanup. */
 typedef struct {
-    shm_cleanup_error_t errors[2 * MAX_SEGMENTS];
-    size_t count;
+    shm_cleanup_error_t
+        errors[2 * MAX_SEGMENTS]; /**< Espaço para um detach e um remove por segmento. */
+    size_t count;                 /**< Quantidade de registros efetivamente copiados para errors. */
 } error_log_t;
 
+/**
+ * @brief Segmentos simulados, indexados pelo identificador devolvido ao backend.
+ */
 static fake_segment_t segments[MAX_SEGMENTS];
+/**
+ * @brief Ponteiros de alocações reais ainda pertencentes ao backend sob teste.
+ */
 static void *allocations[MAX_SEGMENTS];
+/**
+ * @brief Quantidade de alocações rastreadas ainda não liberadas pelo backend.
+ */
 static unsigned live_allocations;
+/**
+ * @brief Chamadas acumuladas aos substitutos de malloc() e calloc(), inclusive falhas.
+ */
 static unsigned allocation_calls;
+/**
+ * @brief Chamadas ao substituto de free() com ponteiro não nulo.
+ */
 static unsigned free_calls;
+/**
+ * @brief Tentativas de criação simulada, incluindo a tentativa que falhar.
+ */
 static unsigned create_calls;
+/**
+ * @brief Tentativas de associação de identificadores simulados válidos.
+ */
 static unsigned attach_calls;
+/**
+ * @brief Tentativas de desassociação simulada.
+ */
 static unsigned detach_calls;
+/**
+ * @brief Tentativas de remoção global simulada.
+ */
 static unsigned remove_calls;
+/**
+ * @brief Posição baseada em um da alocação que falhará; zero desabilita a injeção.
+ */
 static unsigned fail_allocation;
+/**
+ * @brief Posição baseada em um da criação que falhará; zero desabilita a injeção.
+ */
 static unsigned fail_create;
+/**
+ * @brief Posição baseada em um da associação que falhará; zero desabilita a injeção.
+ */
 static unsigned fail_attach;
+/**
+ * @brief Errno simulado por segmento no detach; zero representa sucesso.
+ */
 static int detach_errors[MAX_SEGMENTS];
+/**
+ * @brief Errno simulado por segmento na remoção; zero representa sucesso.
+ */
 static int remove_errors[MAX_SEGMENTS];
 
 /* Pontos de injeção usados somente por shm_backend_for_test.o. */
@@ -65,6 +132,12 @@ mpmc_result_t mpmc_test_shm_attach(int shmid, void **out_address);
 mpmc_result_t mpmc_test_shm_detach(const void *address);
 mpmc_result_t mpmc_test_shm_remove(int shmid);
 
+/**
+ * @brief Registra um ponteiro alocado para detectar vazamentos e liberações duplicadas.
+ * @param pointer Ponteiro obtido de malloc()/calloc(); NULL é ignorado.
+ * @details Ocupa a primeira posição livre e incrementa live_allocations. Registra
+ * falha se não houver espaço para rastrear um ponteiro não nulo.
+ */
 static void track_allocation(void *pointer) {
     if (pointer == NULL) return;
     for (size_t i = 0; i < MAX_SEGMENTS; ++i) {
@@ -77,6 +150,13 @@ static void track_allocation(void *pointer) {
     CHECK(false);
 }
 
+/**
+ * @brief Substitui malloc() no objeto do backend e rastreia a alocação real.
+ * @param size Quantidade de bytes solicitada pelo backend.
+ * @return Ponteiro devolvido por malloc(), ou NULL em falha real ou programada.
+ * @details Incrementa allocation_calls. Na posição fail_allocation, define errno=ENOMEM
+ * e não aloca; fora dela, registra o ponteiro para verificar sua liberação posterior.
+ */
 void *mpmc_test_malloc(size_t size) {
     if (++allocation_calls == fail_allocation) {
         errno = ENOMEM;
@@ -87,6 +167,14 @@ void *mpmc_test_malloc(size_t size) {
     return pointer;
 }
 
+/**
+ * @brief Substitui calloc() no objeto do backend e rastreia a alocação real.
+ * @param count Quantidade de elementos solicitada pelo backend.
+ * @param size Tamanho de cada elemento, em bytes.
+ * @return Ponteiro devolvido por calloc(), ou NULL em falha real ou programada.
+ * @details Compartilha allocation_calls e fail_allocation com mpmc_test_malloc().
+ * Na falha programada, define errno=ENOMEM; fora dela, rastreia o bloco zerado.
+ */
 void *mpmc_test_calloc(size_t count, size_t size) {
     if (++allocation_calls == fail_allocation) {
         errno = ENOMEM;
@@ -97,6 +185,13 @@ void *mpmc_test_calloc(size_t count, size_t size) {
     return pointer;
 }
 
+/**
+ * @brief Libera um ponteiro conhecido e detecta liberações indevidas do backend.
+ * @param pointer Ponteiro rastreado; NULL é ignorado.
+ * @details Conta chamadas não nulas. Se encontrar o ponteiro, remove o registro,
+ * decrementa live_allocations, executa free() e define errno=EIO para testar a
+ * preservação de erros anteriores. Ponteiro desconhecido registra falha e não é liberado.
+ */
 void mpmc_test_free(void *pointer) {
     if (pointer == NULL) return;
     ++free_calls;
@@ -112,6 +207,18 @@ void mpmc_test_free(void *pointer) {
     CHECK(false); /* Detecta liberação duplicada ou de alocação desconhecida. */
 }
 
+/**
+ * @brief Simula a criação de um segmento de 2048 bytes sem acessar IPC real.
+ * @param size Tamanho que deve coincidir com MPMC_SHM_SEGMENT_BYTES.
+ * @param[out] out_shmid Recebe o índice do segmento simulado somente em sucesso.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: segmento simulado marcado como criado; system_errno é zero.
+ * - MPMC_ERR_SYS: tentativa escolhida por fail_create; system_errno simula ENOSPC.
+ * - MPMC_ERR_STATE: tentativas excederam o vetor de segmentos; system_errno é zero.
+ * @pre out_shmid deve apontar para um inteiro válido.
+ * @details Confere o tamanho com CHECK(). A primeira criação devolve o identificador zero;
+ * os códigos de falha são construídos diretamente, sem chamada de sistema.
+ */
 mpmc_result_t mpmc_test_shm_create(size_t size, int *out_shmid) {
     CHECK(size == MPMC_SHM_SEGMENT_BYTES);
     CHECK(out_shmid != NULL);
@@ -129,6 +236,17 @@ mpmc_result_t mpmc_test_shm_create(size_t size, int *out_shmid) {
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
+/**
+ * @brief Simula a associação do segmento e devolve seu vetor de dados local.
+ * @param shmid Índice do segmento simulado.
+ * @param[out] out_address Recebe o início de segments[shmid].data somente em sucesso.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: associação simulada registrada; system_errno é zero.
+ * - MPMC_ERR_SYS: tentativa escolhida por fail_attach; system_errno simula EACCES.
+ * - MPMC_ERR_STATE: identificador fora do vetor simulado; system_errno é zero.
+ * @pre out_address deve apontar para um ponteiro válido.
+ * @details A existência da criação é conferida com CHECK(); não executa shmat().
+ */
 mpmc_result_t mpmc_test_shm_attach(int shmid, void **out_address) {
     CHECK(shmid >= 0 && shmid < MAX_SEGMENTS);
     CHECK(out_address != NULL);
@@ -145,6 +263,16 @@ mpmc_result_t mpmc_test_shm_attach(int shmid, void **out_address) {
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
+/**
+ * @brief Simula o detach do segmento identificado pelo endereço de seus dados.
+ * @param address Endereço a procurar nas áreas de dados dos segmentos simulados.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: associação simulada desfeita; system_errno é zero.
+ * - MPMC_ERR_SYS: falha configurada em detach_errors; system_errno recebe o código simulado.
+ * - MPMC_ERR_STATE: endereço não pertence aos segmentos simulados; system_errno é zero.
+ * @details Incrementa detach_calls e confere as flags de criação/associação com CHECK().
+ * Uma falha injetada preserva a flag attached; não executa shmdt().
+ */
 mpmc_result_t mpmc_test_shm_detach(const void *address) {
     ++detach_calls;
     for (size_t i = 0; i < MAX_SEGMENTS; ++i) {
@@ -164,6 +292,16 @@ mpmc_result_t mpmc_test_shm_detach(const void *address) {
     return (mpmc_result_t){.status = MPMC_ERR_STATE};
 }
 
+/**
+ * @brief Simula a remoção global de um segmento sem acessar o kernel.
+ * @param shmid Índice do segmento simulado a remover.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: flag de criação removida; system_errno é zero.
+ * - MPMC_ERR_SYS: falha configurada em remove_errors; system_errno recebe o código simulado.
+ * - MPMC_ERR_STATE: identificador fora do vetor simulado; system_errno é zero.
+ * @details Incrementa remove_calls e confere a flag de criação com CHECK(). Em falha
+ * injetada preserva essa flag; não executa shmctl(IPC_RMID).
+ */
 mpmc_result_t mpmc_test_shm_remove(int shmid) {
     ++remove_calls;
     CHECK(shmid >= 0 && shmid < MAX_SEGMENTS);
@@ -179,6 +317,13 @@ mpmc_result_t mpmc_test_shm_remove(int shmid) {
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
+/**
+ * @brief Copia o diagnóstico temporário da callback para o relatório pertencente ao teste.
+ * @param error Diagnóstico válido durante a chamada, fornecido pelo backend.
+ * @param user_data Ponteiro válido para error_log_t.
+ * @details Registra falha se o relatório estiver cheio e só copia quando houver espaço.
+ * Define errno=ERANGE para conferir que a callback não substitui causas já capturadas.
+ */
 static void collect_error(const shm_cleanup_error_t *error, void *user_data) {
     error_log_t *log = user_data;
     CHECK(log->count < sizeof log->errors / sizeof log->errors[0]);
@@ -188,6 +333,12 @@ static void collect_error(const shm_cleanup_error_t *error, void *user_data) {
     errno = ERANGE; /* O diagnóstico não pode substituir a causa já capturada. */
 }
 
+/**
+ * @brief Libera resíduos locais e reinicializa o estado da simulação.
+ * @details Antes de limpar, confere que live_allocations é zero para detectar vazamentos.
+ * Libera ponteiros restantes diretamente, zera vetores, contadores e pontos de falha.
+ * Não remove IPC real, pois os segmentos desta suíte são simulados.
+ */
 static void reset_case(void) {
     CHECK(live_allocations == 0);
     for (size_t i = 0; i < MAX_SEGMENTS; ++i) {
@@ -202,12 +353,29 @@ static void reset_case(void) {
     fail_allocation = fail_create = fail_attach = 0;
 }
 
+/**
+ * @brief Confere um resultado já capturado independentemente de errno corrente.
+ * @param result Resultado devolvido pela operação exercitada.
+ * @param status Categoria esperada.
+ * @param system_errno Causa de sistema esperada no resultado.
+ * @details Define errno=ERANGE antes de verificar os dois campos, registrando diferenças.
+ */
 static void check_result(mpmc_result_t result, mpmc_status_t status, int system_errno) {
     errno = ERANGE;
     CHECK(result.status == status);
     CHECK(result.system_errno == system_errno);
 }
 
+/**
+ * @brief Confere uma cópia de diagnóstico e sua identidade no relatório de cleanup.
+ * @param log Relatório válido pertencente ao teste.
+ * @param index Posição baseada em zero do diagnóstico esperado.
+ * @param operation Operação de liberação que deve ter falhado.
+ * @param producer_id Índice lógico esperado, baseado em um.
+ * @param system_errno Código de sistema esperado para a falha simulada.
+ * @details Espera MPMC_ERR_SYS e shmid=producer_id-1, conforme a atribuição de IDs
+ * desta simulação. Se index não existir, registra falha e não acessa o vetor.
+ */
 static void check_error(
     const error_log_t *log,
     size_t index,
@@ -224,6 +392,12 @@ static void check_error(
     check_result(error->result, MPMC_ERR_SYS, system_errno);
 }
 
+/**
+ * @brief Cria um backend com PRODUCER_COUNT segmentos simulados e sem reporter.
+ * @return Backend criado, ou NULL se a criação falhar.
+ * @details Registra falhas no resultado e na instância; o cenário deve fechar ou destruir
+ * o backend recebido para verificar a liberação das alocações rastreadas.
+ */
 static shm_backend_t *new_backend(void) {
     shm_backend_t *backend = NULL;
     check_result(shm_backend_create(&backend, PRODUCER_COUNT, NULL), MPMC_OK, 0);
@@ -231,6 +405,9 @@ static shm_backend_t *new_backend(void) {
     return backend;
 }
 
+/**
+ * @brief Confere fechamento nulo, argumentos inválidos e ausência de alocações nesses casos.
+ */
 static void test_null_and_invalid_arguments(void) {
     reset_case();
     error_log_t log = {0};
@@ -247,6 +424,10 @@ static void test_null_and_invalid_arguments(void) {
     CHECK(allocation_calls == 0 && log.count == 0);
 }
 
+/**
+ * @brief Confere criação completa, IDs válidos, ausência de diagnósticos e liberação de todos os
+ * recursos.
+ */
 static void test_success(void) {
     reset_case();
     error_log_t log = {0};
@@ -267,6 +448,9 @@ static void test_success(void) {
     }
 }
 
+/**
+ * @brief Injeta falha em cada alocação e confere saída nula sem recursos parciais restantes.
+ */
 static void test_allocation_failures(void) {
     for (unsigned position = 1; position <= 2; ++position) {
         reset_case();
@@ -283,6 +467,9 @@ static void test_allocation_failures(void) {
     }
 }
 
+/**
+ * @brief Injeta falhas de criação e associação em cada posição e confere o rollback completo.
+ */
 static void test_rollback_at_each_position(void) {
     for (unsigned operation = 0; operation < 2; ++operation) {
         for (unsigned position = 1; position <= PRODUCER_COUNT; ++position) {
@@ -313,6 +500,9 @@ static void test_rollback_at_each_position(void) {
     }
 }
 
+/**
+ * @brief Confere continuidade do destroy, primeiro erro retornado e todos os diagnósticos copiados.
+ */
 static void test_multiple_destroy_errors(void) {
     reset_case();
     shm_backend_t *backend = new_backend();
@@ -332,6 +522,9 @@ static void test_multiple_destroy_errors(void) {
     check_error(&log, 3, SHM_CLEANUP_REMOVE, 3, EIDRM);
 }
 
+/**
+ * @brief Confere liberação local com e sem erros, preservando os segmentos globais simulados.
+ */
 static void test_worker_close(void) {
     for (unsigned inject_errors = 0; inject_errors < 2; ++inject_errors) {
         reset_case();
@@ -361,6 +554,9 @@ static void test_worker_close(void) {
     }
 }
 
+/**
+ * @brief Confere que falhas no rollback não substituem a causa original de criação ou associação.
+ */
 static void test_rollback_diagnostics_preserve_original_error(void) {
     for (unsigned operation = 0; operation < 2; ++operation) {
         reset_case();
@@ -393,6 +589,9 @@ static void test_rollback_diagnostics_preserve_original_error(void) {
     }
 }
 
+/**
+ * @brief Confere o resultado e a limpeza com reporter nulo ou callback desabilitada.
+ */
 static void test_optional_reporter(void) {
     for (unsigned use_reporter = 0; use_reporter < 2; ++use_reporter) {
         reset_case();
@@ -409,6 +608,10 @@ static void test_optional_reporter(void) {
     }
 }
 
+/**
+ * @brief Executa os casos da suíte e apresenta o resultado das verificações.
+ * @return Zero se nenhuma verificação falhar; um se houver falha ou erro de preparação.
+ */
 int main(void) {
     test_null_and_invalid_arguments();
     test_success();

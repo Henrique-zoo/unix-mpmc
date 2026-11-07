@@ -40,17 +40,21 @@ typedef struct {
 
 /**
  * @brief Inicializa a próxima mensagem lógica do trabalho produtor.
- * @param out Mensagem a preencher.
- * @param sequence Estado sequencial privado do processo produtor.
+ * @param[out] out Mensagem preenchida somente em sucesso.
+ * @param[in,out] sequence Estado sequencial privado do processo produtor.
  * @param job Trabalho recebido do supervisor, com operation_id não nulo.
  * @retval MPMC_OK Metadados preenchidos com PID real, sequência e CLOCK_REALTIME.
- * @retval MPMC_ERR_INVALID_ARG Entrada inválida ou operation_id nulo.
+ * @retval MPMC_ERR_INVALID_ARG out, sequence ou job nulo, operation_id zero
+ * ou ack_mode diferente de PRODUCER_ACK_WAIT/PRODUCER_ACK_NONE.
  * @retval MPMC_ERR_STATE Sequência esgotada.
  * @retval MPMC_ERR_SYS Falha em clock_gettime().
  * @details Só avança a sequência se conseguir obter o timestamp. Cada processo
  * produtor deve manter seu próprio estado, inicializado em zero; assim, a
  * primeira mensagem é 1 e mensagens striped continuam na mesma sequência.
  * Não envia a mensagem nem depende de um backend IPC.
+ * @post Em falha, a mensagem e o estado sequencial permanecem inalterados.
+ * @note Retorna diretamente mpmc_status_t. No resultado MPMC_ERR_SYS,
+ * clock_gettime() deixou a causa em errno; este retorno não transporta system_errno.
  */
 mpmc_status_t
 producer_message_next(message_t *out, producer_sequence_t *sequence, const producer_job_t *job);

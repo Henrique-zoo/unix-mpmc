@@ -17,9 +17,9 @@
 ## depende dos utilitários `ps` e `pgrep` para observar os processos.
 ##
 ## Uma linha em branco deve ser ignorada sem mensagem de erro. O redesenho do prompt após avisos
-## assíncronos só ocorre com stdout em terminal; por isso não é coberto aqui e deve ser
-## verificado manualmente (ou com um pseudo-terminal): inicie `mpmc` em um terminal, envie
-## `produz 1 1 2` e confirme que o `>>` reaparece após a mensagem de término do filho.
+## assíncronos só ocorre com stdout em terminal; esse caso é coberto automaticamente por
+## test_repl.c com um pseudo-terminal. Para uma conferência manual, inicie `mpmc` em um terminal,
+## envie `produz 1 1 2` e confirme que o `>>` reaparece após a mensagem de término do filho.
 ##
 ## Dois cenários de regressão cobrem (a) `shutdown`/EOF enviados imediatamente após o
 ## despacho de workers bloqueados, que não pode travar nem deixar filhos para trás
@@ -50,6 +50,10 @@ set -eu
 binary=${1:-./mpmc}
 tmp_dir=$(mktemp -d)
 repl_pid=
+
+## @brief Executa o cleanup de segurança da suíte na saída ou em um sinal de término.
+## @details Tenta encerrar o PID guardado em repl_pid e seus filhos diretos, quando
+## houver PID registrado, e remove o diretório temporário criado por este script.
 cleanup() {
 	if [ -n "$repl_pid" ]; then
 		pkill -KILL -P "$repl_pid" 2>/dev/null || true
@@ -59,6 +63,9 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+## @brief Encerra a suíte ao detectar uma falha nos primeiros cenários.
+## @param $1 Mensagem a escrever em stderr.
+## @details Termina com código 1; a trap de saída executa cleanup().
 fail_early() {
 	echo "$1" >&2
 	exit 1
@@ -149,17 +156,26 @@ wait "$repl_pid"
 # Os cenários abaixo usam MPMC_TEST_WORKER_HANG, gancho disponível apenas em builds
 # de depuração (-DDEBUG): o filho fica bloqueado em pause(), como um worker preso em IPC.
 
-# Verdadeiro enquanto o processo existir e não for zumbi (dash não recolhe sozinho).
+## @brief Consulta a existência do processo, recusando o estado de zumbi.
+## @param $1 PID que será consultado por ps.
+## @return Zero se ps devolver estado não vazio sem Z inicial; um caso contrário.
+## @note O teste consulta o estado porque dash pode ainda não ter recolhido o filho.
 is_running() {
 	state=$(ps -o stat= -p "$1" 2>/dev/null || true)
 	[ -n "$state" ] && [ "${state#Z}" = "$state" ]
 }
 
+## @brief Verifica se pgrep encontra algum filho direto do REPL em repl_pid.
+## @return Código de pgrep: zero se encontrar filho; não zero em ausência ou erro.
 has_child() {
 	pgrep -P "$repl_pid" >/dev/null 2>&1
 }
 
-# wait_until <décimos de segundo> <comando...>
+## @brief Repete uma condição com intervalo de um décimo de segundo entre tentativas.
+## @param $1 Quantidade máxima de tentativas em que a condição pode falhar.
+## @param $2... Comando ou função de condição, seguido de seus argumentos.
+## @return Zero quando a condição retornar zero; um quando as tentativas se esgotarem.
+## @note O prazo é aproximado, pois não desconta o tempo gasto executando a condição.
 wait_until() {
 	remaining=$1
 	shift
@@ -170,16 +186,26 @@ wait_until() {
 	done
 }
 
+## @brief Inverte is_running() para esperar a ausência ou o estado de zumbi de um processo.
+## @param $1 PID consultado por is_running().
+## @return Zero se is_running() retornar não zero; um se o processo ainda estiver ativo.
 stopped() {
 	! is_running "$1"
 }
 
+## @brief Informa uma falha de integração e termina a suíte com código 1.
+## @param $1 Mensagem a escrever em stderr.
+## @details A trap de saída executa o cleanup de segurança.
 fail() {
 	echo "$1" >&2
 	exit 1
 }
 
-# start_hung_repl <prefixo>: inicia o REPL com stdin em FIFO (fd 3) e um worker bloqueado.
+## @brief Inicia um REPL de depuração com entrada em FIFO e despacha um produtor.
+## @param $1 Prefixo dos arquivos de entrada, saída e diagnóstico em tmp_dir.
+## @details Define MPMC_TEST_WORKER_HANG=1, armazena o PID em repl_pid e mantém
+## o descritor 3 aberto para enviar novos comandos. O chamador deve fechá-lo e
+## recolher o REPL ao final do cenário. O bloqueio do worker depende de DEBUG.
 start_hung_repl() {
 	hung_fifo="$tmp_dir/$1.in"
 	mkfifo "$hung_fifo"
@@ -224,6 +250,8 @@ else
 
 		# Cenário 3: um job morto por sinal fora do shutdown (kill -KILL) é recolhido e
 		# informado, mas o REPL continua lendo comandos e os demais jobs seguem vivos.
+		## @brief Verifica se o REPL possui pelo menos dois filhos diretos.
+		## @return Zero se a contagem obtida por pgrep for pelo menos dois; um caso contrário.
 		has_two_children() {
 			[ "$(pgrep -P "$repl_pid" | wc -l | tr -d ' ')" -ge 2 ]
 		}
@@ -260,11 +288,15 @@ fi
 # O filho herda os tratadores de SIGTERM do REPL até restaurar as ações padrão. Sem
 # bloquear os sinais em volta do fork(), o SIGTERM enviado pelo shutdown (ou pelo EOF)
 # podia ser engolido e o waitpid() bloqueante do supervisor nunca retornava.
-# run_limited <segundos> <arquivo de entrada> <comando...>
-# Executa o comando com stdin vindo do arquivo e o mata (junto com seus filhos) se passar do
-# limite. Retorna 124 em caso de estouro, ou o código de saída do comando. Não depende de
-# `timeout`, ausente no macOS. A entrada vai por arquivo porque jobs em background do sh
-# perdem o stdin de pipe.
+## @brief Executa um comando com entrada em arquivo e um vigia de tempo em sh.
+## @param $1 Prazo positivo, em segundos, repassado a sleep.
+## @param $2 Arquivo de entrada padrão do comando.
+## @param $3... Comando a executar e seus argumentos.
+## @return Código de saída do comando, convertendo 137 (término por SIGKILL) em 124.
+## @details O vigia tenta matar o comando e seus filhos diretos após o prazo. Ao
+## terminar a espera, também encerra e recolhe o vigia. A conversão de 137 não
+## distingue um SIGKILL do vigia de outro SIGKILL. Não depende do utilitário timeout.
+## A entrada vem de arquivo para evitar a alteração de stdin dos jobs em background.
 run_limited() {
 	limit=$1
 	input_file=$2

@@ -21,8 +21,9 @@
 
 /**
  * @brief Estado opaco do supervisor; existe somente no processo principal.
- * @details Mantém contexto IPC, lista de filhos, identificador incremental de
- * operação, horário inicial monotônico e estatísticas já consolidadas.
+ * @details Mantém a lista de filhos, os relatórios de término, o identificador
+ * incremental de operação, o horário inicial monotônico e o self-pipe.
+ * A integração com o contexto IPC ainda está pendente.
  */
 typedef struct supervisor supervisor_t;
 
@@ -132,9 +133,9 @@ mpmc_result_t supervisor_reap(supervisor_t *supervisor, bool blocking);
  *   ESRCH de kill() é ignorado. Falhas internas de coleta ou EOF inesperado no self-pipe são
  *   propagados com system_errno zero.
  * @details Impede novos comandos, envia SIGTERM aos filhos, executa waitpid()
- * e processa o ponto de integração de eventos. A remoção de recursos IPC e o
- * relatório de métricas dependem dos backends ainda não implementados.
- * @post Nenhum filho registrado permanece ativo.
+ * e processa o ponto de integração de eventos. A remoção dos recursos IPC e as
+ * métricas de consumo dependem dos backends ainda não implementados.
+ * @post Em sucesso, todos os filhos registrados foram recolhidos.
  * @note Deve ser segura contra chamadas repetidas (idempotência de shutdown).
  */
 mpmc_result_t supervisor_shutdown(supervisor_t *supervisor);

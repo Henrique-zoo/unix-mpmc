@@ -1,6 +1,7 @@
 /**
  * @file test_error.c
  * @brief Verifica diagnósticos independentes de errno e limites de formatação.
+ * @ingroup tests
  */
 
 #include <errno.h>
@@ -9,9 +10,21 @@
 
 #include "mpmc/error.h"
 
+/**
+ * @brief Quantidade de verificações executadas nesta suíte.
+ */
 static unsigned checks;
+/**
+ * @brief Quantidade de verificações que registraram falha nesta suíte.
+ */
 static unsigned failures;
 
+/**
+ * @brief Registra uma verificação e informa a falha sem interromper a suíte.
+ * @param condition Expressão lógica avaliada uma única vez.
+ * @details Incrementa o contador de verificações; se a condição for falsa,
+ * incrementa o contador de falhas e escreve o diagnóstico em stderr.
+ */
 #define CHECK(condition)                                                                           \
     do {                                                                                           \
         ++checks;                                                                                  \
@@ -21,6 +34,10 @@ static unsigned failures;
         }                                                                                          \
     } while (0)
 
+/**
+ * @brief Executa os casos da suíte e apresenta o resultado das verificações.
+ * @return Zero se nenhuma verificação falhar; um se houver falha ou erro de preparação.
+ */
 int main(void) {
     char description[256];
     mpmc_result_t error = {.status = MPMC_ERR_INVALID_ARG};

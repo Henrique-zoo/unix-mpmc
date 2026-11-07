@@ -204,6 +204,16 @@ adquirido, e `SEM_UNDO` não é usado.
    então não existe mensagem retirada e não contada.
 4. `V(empty)`; se `ack_required`, executa o protocolo de ACK abaixo; restaura a máscara.
 
+**Limite da proteção contra sinais.** O mascaramento acima protege somente o
+intervalo posterior a sigprocmask(): ele não torna atômicos o retorno de P e o
+bloqueio dos sinais. Um término nessa janela pode deixar uma reserva pendente.
+
+No shutdown global, todos os filhos são encerrados e recolhidos antes da remoção
+dos recursos, e essas reservas são descartadas junto com o contexto. Cancelar
+somente um trabalho e continuar usando o contexto exige outro protocolo de
+cancelamento, a definir nas issues #10 e #20. Simplesmente bloquear os sinais
+antes de um semop() bloqueante pode impedir que SIGTERM cancele a espera.
+
 **ACK por operação (`ack=1`).** O segmento de controle `C` guarda 64 posições de 8 bytes,
 cada uma com um `operation_id` (0 = livre). O conjunto `K` tem o semáforo 0 como
 `ack_mutex` (inicial 1) e, nos índices 1 a 64, um contador de ACKs por posição (inicial 0).

@@ -331,8 +331,13 @@ mpmc_result_t supervisor_poll_events(supervisor_t *supervisor) {
 
 /**
  * @brief Restaura ações padrão de sinais no processo filho.
+ * @return true se SIGCHLD, SIGINT e SIGTERM foram configurados com SIG_DFL;
+ * false na primeira falha de sigaction().
  * @details Remove os tratadores herdados do REPL para que sinais de término,
  * em particular SIGTERM, tenham o comportamento esperado no worker.
+ * @note Não altera a máscara de sinais. O chamador a restaura separadamente.
+ * Em falha, ações anteriores já restauradas não são revertidas e errno é o da
+ * sigaction() que falhou.
  */
 static bool reset_child_signals(void) {
     static const int signals[] = {SIGCHLD, SIGINT, SIGTERM};
@@ -446,7 +451,13 @@ static void remove_child(supervisor_t *supervisor, size_t index) {
     --supervisor->child_count;
 }
 
-/** @brief Retorna a forma textual curta do tipo registrado para um filho. */
+/**
+ * @brief Retorna a descrição curta do tipo registrado para um filho.
+ * @param kind Tipo do trabalho armazenado no registro.
+ * @return Literal estático "produz" para COMMAND_PRODUCE; "consome" nos demais casos.
+ * @pre Os registros de filhos devem conter COMMAND_PRODUCE ou COMMAND_CONSUME.
+ * @note O texto retornado não deve ser modificado nem liberado.
+ */
 static const char *child_kind_name(command_kind_t kind) {
     return kind == COMMAND_PRODUCE ? "produz" : "consome";
 }

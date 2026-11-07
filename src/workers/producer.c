@@ -1,3 +1,10 @@
+/**
+ * @file producer.c
+ * @brief Construção dos metadados de mensagens no processo produtor.
+ * @ingroup workers
+ * @details Os contratos públicos estão em producer.h. producer_run() ainda não
+ * possui implementação; este arquivo define somente producer_message_next().
+ */
 #include "mpmc/workers/producer.h"
 
 #include <time.h>

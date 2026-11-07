@@ -2,6 +2,8 @@
  * @file transport.h
  * @brief Fachada independente de paradigma para comunicação entre workers.
  * @ingroup ipc
+ * @note A fachada ainda não possui implementação. Os comportamentos de criação,
+ * consulta e liberação abaixo são contratos previstos para a integração.
  */
 #ifndef MPMC_IPC_TRANSPORT_H
 #define MPMC_IPC_TRANSPORT_H
@@ -41,7 +43,7 @@ typedef struct ipc_context ipc_context_t;
  * @param mode Paradigma 1 ou 2.
  * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
  * os valores possíveis de status e system_errno não podem ser verificados.
- *   criados parcialmente.
+ * @post Contrato previsto: recursos criados parcialmente devem ser removidos em falha.
  * @par Propriedade
  * O supervisor é o único proprietário; ipc_destroy() deve ser chamado uma vez.
  */

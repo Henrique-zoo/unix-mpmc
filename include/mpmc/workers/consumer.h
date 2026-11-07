@@ -2,6 +2,8 @@
  * @file consumer.h
  * @brief Lógica de execução de processos consumidores.
  * @ingroup workers
+ * @note consumer_run() ainda não possui implementação; sua documentação descreve
+ * o contrato previsto para o fluxo do processo consumidor.
  */
 #ifndef MPMC_WORKERS_CONSUMER_H
 #define MPMC_WORKERS_CONSUMER_H
@@ -43,7 +45,6 @@ typedef struct {
  * @param out Resultado preenchido inclusive em consumo parcial.
  * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
  * os valores possíveis de status e system_errno não podem ser verificados.
- *   menos mensagens que as solicitadas; out->consumed_count informa o total.
  * @details Cada retirada chama ipc_receive() com blocking=true (ack=1)
  * ou false (ack=2). Confirmação ao produtor e atualização dos totais são
  * responsabilidade do backend, não devem ser duplicadas aqui.

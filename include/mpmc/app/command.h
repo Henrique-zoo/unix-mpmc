@@ -64,7 +64,6 @@ typedef struct {
  *   token inesperado, número malformado ou não representável no campo de destino.
  *
  * system_errno é zero em todos os resultados; a conversão numérica não usa errno.
- *   aridade incorreta, números inválidos ou argumentos NULL.
  *
  * @par Overflow
  * Cada campo é convertido com o limite do seu tipo de destino:
@@ -108,7 +107,6 @@ mpmc_result_t command_parse(const char *line, command_t *out);
  * - MPMC_ERR_INVALID_INDEX: índice acima de producer_count ou índice zero em consome.
  *
  * system_errno é zero em todos os resultados.
- *   de 1/2, discriminante fora do enum, ou producer_count igual a zero.
  *
  * @pre command não é NULL.
  * @note `consome 0` é inválido; `produz 0` é válido.

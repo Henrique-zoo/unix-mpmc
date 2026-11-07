@@ -21,12 +21,20 @@
 
 /** @brief Envelope de msgsnd()/msgrcv(): tipo seguido do corpo. */
 typedef struct {
-    long mtype;
-    unsigned char mtext[];
+    long mtype;            /**< Tipo exigido pelo kernel, excluído de msgsz. */
+    unsigned char mtext[]; /**< Corpo binário contíguo ao campo mtype. */
 } msg_envelope_t;
 
 static_assert(offsetof(msg_envelope_t, mtext) == sizeof(long), "mtext deve seguir mtype");
 
+/**
+ * @brief Aloca espaço contíguo para o tipo System V e o corpo binário.
+ * @param body_size Quantidade de bytes reservados para o corpo.
+ * @return Envelope alocado por malloc(), ou NULL se a alocação falhar.
+ * @pre body_size deve permitir a soma com offsetof(msg_envelope_t, mtext) sem overflow.
+ * @note O conteúdo não é inicializado; o chamador preenche o tipo e o corpo e libera
+ * o envelope com free(). Em falha, errno é o informado por malloc().
+ */
 static msg_envelope_t *envelope_alloc(size_t body_size) {
     return malloc(offsetof(msg_envelope_t, mtext) + body_size);
 }

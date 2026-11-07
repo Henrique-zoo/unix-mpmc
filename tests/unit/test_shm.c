@@ -20,12 +20,33 @@
 #include "mpmc/ipc/shm.h"
 #include "mpmc/message.h"
 
+/**
+ * @brief Quantidade de verificações executadas nesta suíte.
+ */
 static unsigned checks;
+/**
+ * @brief Quantidade de verificações que registraram falha nesta suíte.
+ */
 static unsigned failures;
+/**
+ * @brief PID do dono dos segmentos; impede que o fallback remova recursos no filho.
+ */
 static pid_t owner_pid;
+/**
+ * @brief Identificadores dos segmentos próprios; entradas removidas recebem -1.
+ */
 static int owned_segments[8];
+/**
+ * @brief Quantidade de posições registradas no vetor de segmentos próprios.
+ */
 static size_t owned_count;
 
+/**
+ * @brief Registra uma verificação e informa a falha sem interromper a suíte.
+ * @param condition Expressão lógica avaliada uma única vez.
+ * @details Incrementa o contador de verificações; se a condição for falsa,
+ * incrementa o contador de falhas e escreve o diagnóstico em stderr.
+ */
 #define CHECK(condition)                                                                           \
     do {                                                                                           \
         ++checks;                                                                                  \
@@ -35,6 +56,14 @@ static size_t owned_count;
         }                                                                                          \
     } while (0)
 
+/**
+ * @brief Executa uma operação uma vez e confere status e system_errno.
+ * @param call Expressão que retorna mpmc_result_t.
+ * @param expected_status Categoria de resultado esperada.
+ * @param expected_errno Valor esperado para o errno armazenado no resultado.
+ * @details Altera errno antes e depois da operação para conferir que o resultado
+ * não depende do valor global corrente.
+ */
 #define CHECK_RESULT(call, expected_status, expected_errno)                                        \
     do {                                                                                           \
         errno = EACCES;                                                                            \
@@ -55,7 +84,12 @@ static void cleanup_segments(void) {
     }
 }
 
-/** @brief Registra um segmento próprio para remoção de segurança na saída. */
+/**
+ * @brief Registra um segmento próprio para remoção de segurança na saída.
+ * @param shmid Identificador do segmento criado pelo teste.
+ * @details Se o vetor estiver cheio, registra falha e tenta remover imediatamente
+ * o segmento adicional, sem incluí-lo no vetor de fallback.
+ */
 static void track_segment(int shmid) {
     const size_t capacity = sizeof owned_segments / sizeof owned_segments[0];
     CHECK(owned_count < capacity);
@@ -66,7 +100,12 @@ static void track_segment(int shmid) {
     }
 }
 
-/** @brief Cria e registra um segmento de dados de 2048 bytes. */
+/**
+ * @brief Cria e registra um segmento de dados de 2048 bytes.
+ * @return Identificador criado, inclusive zero; -1 se sysv_shm_create() falhar.
+ * @details Confere status e system_errno e registra o segmento para cleanup na saída.
+ * Falhas são registradas pelos contadores da suíte.
+ */
 static int new_segment(void) {
     int shmid = -1;
     errno = EACCES;
@@ -80,7 +119,12 @@ static int new_segment(void) {
     return shmid;
 }
 
-/** @brief Exercita a remoção pelo wrapper e dispensa o fallback em sucesso. */
+/**
+ * @brief Exercita a remoção pelo wrapper e dispensa o fallback em sucesso.
+ * @param shmid Identificador do segmento próprio a marcar para remoção.
+ * @details Confere status e system_errno. Somente em sucesso substitui os registros
+ * correspondentes no vetor de fallback por -1.
+ */
 static void remove_segment(int shmid) {
     errno = EACCES;
     mpmc_result_t result = sysv_shm_remove(shmid);
@@ -95,7 +139,12 @@ static void remove_segment(int shmid) {
     }
 }
 
-/** @brief Confere no kernel que um segmento sem associações foi destruído. */
+/**
+ * @brief Confere no kernel que um segmento sem associações foi destruído.
+ * @param shmid Identificador previamente removido e sem vínculos restantes.
+ * @details Espera falha de shmctl(IPC_STAT) com EINVAL ou EIDRM e registra
+ * qualquer resultado diferente nos contadores da suíte.
+ */
 static void check_removed(int shmid) {
     struct shmid_ds info;
     int rc = shmctl(shmid, IPC_STAT, &info);
@@ -104,7 +153,12 @@ static void check_removed(int shmid) {
     CHECK(system_errno == EINVAL || system_errno == EIDRM);
 }
 
-/** @brief Handler vazio: só existe para que SIGCHLD deixe de ser descartado. */
+/**
+ * @brief Mantém uma ação capturável de SIGCHLD durante a espera síncrona do teste.
+ * @param signal_number Número do sinal recebido; ignorado.
+ * @details O tratador vazio evita depender do descarte da ação padrão de SIGCHLD
+ * em plataformas como macOS. Não executa coleta nem operações em contexto de sinal.
+ */
 static void noop_sigchld_handler(int signal_number) {
     (void)signal_number;
 }
@@ -115,6 +169,12 @@ static void noop_sigchld_handler(int signal_number) {
  * notificações com sigwait(), sem consultas periódicas. Este teste reserva
  * SIGALRM para essa espera; o alarme é cancelado e a máscara anterior restaurada
  * antes do retorno. Em falha, o filho é terminado e recolhido.
+ * Instala temporariamente noop_sigchld_handler() e restaura a ação anterior
+ * antes de restaurar a máscara de sinais.
+ * @param child PID positivo do filho pertencente ao processo de teste.
+ * @param[out] status Recebe o estado de waitpid() quando o filho é recolhido.
+ * @return true se a coleta normal ocorreu antes do timeout; false em erro ou timeout,
+ * mesmo quando a coleta de segurança posterior conseguir recolher o filho.
  */
 static bool wait_for_child(pid_t child, int *status) {
     sigset_t wait_signals;
@@ -212,6 +272,9 @@ cleanup:
     return collected;
 }
 
+/**
+ * @brief Confere a rejeição de argumentos inválidos sem alterar os parâmetros de saída.
+ */
 static void test_invalid_arguments(void) {
     int shmid = -1;
     CHECK_RESULT(sysv_shm_create(0, &shmid), MPMC_ERR_INVALID_ARG, 0);
@@ -227,6 +290,9 @@ static void test_invalid_arguments(void) {
     CHECK_RESULT(sysv_shm_remove(-1), MPMC_ERR_INVALID_ARG, 0);
 }
 
+/**
+ * @brief Confere a preservação de errno quando o kernel rejeita o tamanho do segmento.
+ */
 static void test_create_system_error(void) {
     int shmid = -1;
     mpmc_result_t result = sysv_shm_create(SIZE_MAX, &shmid);
@@ -241,6 +307,9 @@ static void test_create_system_error(void) {
     CHECK(shmid == -1);
 }
 
+/**
+ * @brief Confere segmentos independentes, tamanho, permissões e falhas de associação/liberação.
+ */
 static void test_segments_are_private_and_sized(void) {
     int first = new_segment();
     if (first < 0) return;
@@ -298,6 +367,9 @@ static void test_segments_are_private_and_sized(void) {
     check_removed(second);
 }
 
+/**
+ * @brief Confere escrita compartilhada, detach local do filho e remoção global pelo pai.
+ */
 static void test_parent_and_child_lifecycle(void) {
     int shmid = new_segment();
     if (shmid < 0) return;
@@ -340,6 +412,10 @@ static void test_parent_and_child_lifecycle(void) {
     check_removed(shmid);
 }
 
+/**
+ * @brief Executa os casos da suíte e apresenta o resultado das verificações.
+ * @return Zero se nenhuma verificação falhar; um se houver falha ou erro de preparação.
+ */
 int main(void) {
     owner_pid = getpid();
     if (atexit(cleanup_segments) != 0) {

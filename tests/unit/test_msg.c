@@ -31,9 +31,22 @@
 #include "mpmc/error.h"
 #include "mpmc/ipc/msg.h"
 
+/**
+ * @brief Quantidade de verificações executadas nesta suíte.
+ */
 static unsigned g_checks;
+/**
+ * @brief Quantidade de verificações que registraram falha nesta suíte.
+ */
 static unsigned g_failures;
 
+/**
+ * @brief Registra uma verificação e informa a falha sem interromper a suíte.
+ * @param condition Expressão lógica avaliada uma única vez.
+ * @param ... Formato e argumentos de fprintf() para o diagnóstico em caso de falha.
+ * @details Incrementa o contador de verificações; se a condição for falsa,
+ * incrementa o contador de falhas e escreve o diagnóstico em stderr.
+ */
 #define CHECK(condition, ...)                                                                      \
     do {                                                                                           \
         ++g_checks;                                                                                \
@@ -45,6 +58,11 @@ static unsigned g_failures;
         }                                                                                          \
     } while (0)
 
+/**
+ * @brief Confere a categoria do resultado e exige errno armazenado zero em sucesso.
+ * @param call Operação que retorna mpmc_result_t, avaliada uma única vez.
+ * @param expected Categoria de resultado esperada.
+ */
 #define CHECK_STATUS(call, expected)                                                               \
     do {                                                                                           \
         mpmc_result_t status_ = (call);                                                            \
@@ -62,6 +80,12 @@ static unsigned g_failures;
         );                                                                                         \
     } while (0)
 
+/**
+ * @brief Confere a categoria de erro e a causa de sistema capturada.
+ * @param call Operação que retorna mpmc_result_t, avaliada uma única vez.
+ * @param expected Categoria de erro esperada.
+ * @param expected_errno Valor esperado para system_errno.
+ */
 #define CHECK_ERROR(call, expected, expected_errno)                                                \
     do {                                                                                           \
         mpmc_result_t error_ = (call);                                                             \
@@ -75,6 +99,12 @@ static unsigned g_failures;
         );                                                                                         \
     } while (0)
 
+/**
+ * @brief Cria uma fila privada para um cenário de teste.
+ * @return Identificador não negativo da fila criada, inclusive zero.
+ * @details Em falha, formata o resultado, escreve o diagnóstico e encerra o processo
+ * com _exit(2). O cenário que receber a fila deve removê-la com drop_queue().
+ */
 static int new_queue(void) {
     int msqid = -1;
 
@@ -88,15 +118,30 @@ static int new_queue(void) {
     return msqid;
 }
 
+/**
+ * @brief Solicita a remoção da fila criada pelo cenário.
+ * @param msqid Identificador da fila pertencente ao teste.
+ * @details Confere MPMC_OK e system_errno zero, registrando falha se a remoção não ocorrer.
+ */
 static void drop_queue(int msqid) {
     CHECK_STATUS(sysv_msg_remove(msqid), MPMC_OK);
 }
 
+/**
+ * @brief Permite que SIGALRM interrompa a chamada bloqueante sob teste.
+ * @param signo Número do sinal recebido; ignorado.
+ * @details O tratador não executa operações nem altera o estado dos testes.
+ */
 static void on_alarm(int signo) {
     (void)signo;
 }
 
-/* Instala SIGALRM sem SA_RESTART e agenda um disparo em `millis` ms. */
+/**
+ * @brief Agenda SIGALRM com resolução de milissegundos, sem SA_RESTART.
+ * @param millis Intervalo positivo até o disparo; zero desarma o temporizador.
+ * @details Instala on_alarm() por sigaction() e configura ITIMER_REAL com setitimer().
+ * Este auxiliar não verifica os retornos dessas chamadas nem restaura a ação anterior.
+ */
 static void arm_alarm(long millis) {
     struct sigaction action;
     struct itimerval timer;
@@ -114,6 +159,7 @@ static void arm_alarm(long millis) {
 
 /**
  * @brief Enche a fila com mensagens de 1 KiB, sem bloquear; retorna o resultado completo.
+ * @param msqid Fila privada que será preenchida com blocos de 1024 bytes.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: mil envios concluídos sem atingir o limite da fila; system_errno é zero.
  * - MPMC_ERR_WOULD_BLOCK: fila ficou sem capacidade em um envio não bloqueante; system_errno
@@ -135,6 +181,9 @@ static mpmc_result_t fill_queue(int msqid) {
     return error;
 }
 
+/**
+ * @brief Confere criação de filas distintas, saída nula e erros na remoção repetida.
+ */
 static void test_create_remove(void) {
     int a = -1;
     int b = -1;
@@ -149,6 +198,9 @@ static void test_create_remove(void) {
     CHECK_STATUS(sysv_msg_remove(a), MPMC_ERR_SYS); /* já removida */
 }
 
+/**
+ * @brief Confere a preservação de EINVAL para identificadores de fila inválidos.
+ */
 static void test_failures_are_propagated(void) {
     char byte = 'x';
     char out;
@@ -159,6 +211,9 @@ static void test_failures_are_propagated(void) {
     CHECK_ERROR(sysv_msg_remove(-1), MPMC_ERR_SYS, EINVAL);
 }
 
+/**
+ * @brief Confere a preservação de todos os bytes do corpo e o tamanho sem mtype.
+ */
 static void test_roundtrip_preserves_payload(void) {
     int msqid = new_queue();
     unsigned char sent[256];
@@ -180,6 +235,9 @@ static void test_roundtrip_preserves_payload(void) {
     drop_queue(msqid);
 }
 
+/**
+ * @brief Confere o envio e recebimento de mensagens sem bytes no corpo.
+ */
 static void test_zero_size_message(void) {
     int msqid = new_queue();
     ssize_t size = -1;
@@ -191,6 +249,9 @@ static void test_zero_size_message(void) {
     drop_queue(msqid);
 }
 
+/**
+ * @brief Confere a retirada FIFO de mensagens inseridas com o mesmo tipo.
+ */
 static void test_fifo_order(void) {
     int msqid = new_queue();
 
@@ -210,6 +271,9 @@ static void test_fifo_order(void) {
     drop_queue(msqid);
 }
 
+/**
+ * @brief Confere filtros positivos e negativos de seleção do tipo de mensagem.
+ */
 static void test_type_filtering(void) {
     int msqid = new_queue();
     char got = 0;
@@ -232,6 +296,9 @@ static void test_type_filtering(void) {
     drop_queue(msqid);
 }
 
+/**
+ * @brief Confere ENOMSG e WOULD_BLOCK na recepção não bloqueante sem mensagem.
+ */
 static void test_receive_nowait_empty(void) {
     int msqid = new_queue();
     char got;
@@ -245,6 +312,9 @@ static void test_receive_nowait_empty(void) {
     drop_queue(msqid);
 }
 
+/**
+ * @brief Confere EAGAIN e WOULD_BLOCK no envio não bloqueante para fila cheia.
+ */
 static void test_send_nowait_full(void) {
     int msqid = new_queue();
     unsigned char got[1024];
@@ -259,6 +329,9 @@ static void test_send_nowait_full(void) {
     drop_queue(msqid);
 }
 
+/**
+ * @brief Confere E2BIG sem truncamento nem retirada da mensagem original.
+ */
 static void test_message_too_big_is_not_truncated(void) {
     int msqid = new_queue();
     char got[16];
@@ -275,6 +348,9 @@ static void test_message_too_big_is_not_truncated(void) {
     drop_queue(msqid);
 }
 
+/**
+ * @brief Confere a devolução de EINTR na recepção interrompida por SIGALRM.
+ */
 static void test_blocking_receive_interrupted(void) {
     int msqid = new_queue();
     char got;
@@ -286,6 +362,9 @@ static void test_blocking_receive_interrupted(void) {
     drop_queue(msqid);
 }
 
+/**
+ * @brief Confere a devolução de EINTR no envio interrompido por SIGALRM.
+ */
 static void test_blocking_send_interrupted(void) {
     int msqid = new_queue();
     char block[1024] = {0};
@@ -298,7 +377,9 @@ static void test_blocking_send_interrupted(void) {
     drop_queue(msqid);
 }
 
-/* O ID herdado por fork() permite que outro processo desbloqueie o receptor. */
+/**
+ * @brief Confere que o envio por um filho libera a recepção bloqueante do pai.
+ */
 static void test_blocking_receive_wakes_on_send_from_child(void) {
     int msqid = new_queue();
     char got[8] = {0};
@@ -321,7 +402,13 @@ static void test_blocking_receive_wakes_on_send_from_child(void) {
     drop_queue(msqid);
 }
 
-/* Lê um limite do kernel em /proc/sys/kernel; devolve `fallback` se indisponível. */
+/**
+ * @brief Lê um limite positivo do kernel, usando um valor alternativo se necessário.
+ * @param path Caminho do arquivo de limite a abrir para leitura.
+ * @param fallback Valor retornado se o arquivo não abrir ou não contiver um número positivo.
+ * @return Limite lido e convertido para size_t, ou fallback.
+ * @details O fechamento do arquivo é tentado; seu resultado não altera o valor retornado.
+ */
 static size_t kernel_limit(const char *path, size_t fallback) {
     FILE *file = fopen(path, "r");
     unsigned long value = 0;
@@ -334,6 +421,11 @@ static size_t kernel_limit(const char *path, size_t fallback) {
     return (size_t)value;
 }
 
+/**
+ * @brief Confere o limite MSGMAX e, quando couber na fila, o envio no tamanho exato.
+ * @note Se o limite não puder ser consultado em /proc/sys/kernel/msgmax, libera
+ * a fila e ignora este cenário, sem presumir um valor de MSGMAX de outra plataforma.
+ */
 static void test_message_size_limit(void) {
     int msqid = new_queue();
     size_t msgmax = kernel_limit("/proc/sys/kernel/msgmax", 0);
@@ -376,7 +468,9 @@ static void test_message_size_limit(void) {
     drop_queue(msqid);
 }
 
-/* Envio bloqueado numa fila cheia é liberado quando outro processo consome. */
+/**
+ * @brief Confere que o consumo por um filho libera o envio para uma fila cheia.
+ */
 static void test_blocked_send_wakes_on_receive_from_child(void) {
     int msqid = new_queue();
     char block[1024] = {0};
@@ -416,12 +510,15 @@ static void test_blocked_send_wakes_on_receive_from_child(void) {
     drop_queue(msqid);
 }
 
-/* Confere, com msgrcv() direto, o tipo e o corpo que o wrapper realmente colocou na fila. */
+/**
+ * @brief Confere o envelope enviado pelo wrapper usando msgrcv() diretamente.
+ */
 static void test_send_stores_type_and_payload(void) {
     int msqid = new_queue();
+    /** @brief Envelope recebido diretamente do kernel para inspecionar a serialização. */
     struct {
-        long mtype;
-        unsigned char mtext[32];
+        long mtype;              /**< Tipo entregue separadamente do tamanho do corpo. */
+        unsigned char mtext[32]; /**< Espaço de recepção dos bytes enviados pelo wrapper. */
     } raw;
     const long types[] = {1, 42, 123456};
     const unsigned char body[] = {0x00, 0x11, 0xFF, 0x00, 0x7F};
@@ -443,12 +540,15 @@ static void test_send_stores_type_and_payload(void) {
     drop_queue(msqid);
 }
 
-/* Mensagem inserida direto pelo kernel é entregue pelo wrapper de recebimento sem alterações. */
+/**
+ * @brief Confere a recepção pelo wrapper de um envelope enviado com msgsnd() direto.
+ */
 static void test_receive_returns_kernel_payload(void) {
     int msqid = new_queue();
+    /** @brief Envelope enviado diretamente ao kernel para conferir o recebimento pelo wrapper. */
     struct {
-        long mtype;
-        unsigned char mtext[4];
+        long mtype;             /**< Tipo positivo utilizado pela chamada direta a msgsnd(). */
+        unsigned char mtext[4]; /**< Corpo binário que o wrapper deve preservar integralmente. */
     } raw = {.mtype = 9, .mtext = {0xDE, 0xAD, 0x00, 0xEF}};
     unsigned char got[8];
     ssize_t size = -1;
@@ -460,6 +560,10 @@ static void test_receive_returns_kernel_payload(void) {
     drop_queue(msqid);
 }
 
+/**
+ * @brief Executa os casos da suíte e apresenta o resultado das verificações.
+ * @return Zero se nenhuma verificação falhar; um se houver falha ou erro de preparação.
+ */
 int main(void) {
     test_create_remove();
     test_failures_are_propagated();

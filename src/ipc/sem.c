@@ -1,9 +1,9 @@
 /**
  * @file sem.c
- * @brief Implementação das operações de semáforos System V.
+ * @brief Implementação das primitivas de semáforos System V.
  * @ingroup sysv_primitives
+ * @see sem.h para os contratos públicos.
  */
-
 #include "mpmc/ipc/sem.h"
 
 #include <errno.h>
@@ -11,216 +11,120 @@
 #include <sys/ipc.h>
 #include <sys/sem.h>
 
-/**
- * @brief Argumentos utilizados nas operações semctl().
- */
+/** @brief Argumentos utilizados por semctl(). */
 union mpmc_semun {
-    int val;
-    struct semid_ds *buf;
-    unsigned short *array;
+    int val;               /**< Valor utilizado na operação SETVAL. */
+    struct semid_ds *buf;  /**< Variante de argumento para consultas como IPC_STAT. */
+    unsigned short *array; /**< Variante de argumento para GETALL ou SETALL. */
 };
 
 /**
- * @brief Retorna código de erro correspondente ao errno informado, definido no switch.
- * @param numero_erro Codigo do errno.
- * @return Status e o errno original
+ * @brief Traduz um errno já capturado, sem consultar a variável global errno.
+ * @param error Código capturado na chamada de sistema que falhou.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_ERR_WOULD_BLOCK: error igual a EAGAIN.
+ * - MPMC_ERR_INTERRUPTED: error igual a EINTR.
+ * - MPMC_ERR_SHUTDOWN: error igual a EIDRM.
+ * - MPMC_ERR_INVALID_INDEX: error igual a EFBIG.
+ * - MPMC_ERR_INVALID_ARG: error igual a EINVAL.
+ * - MPMC_ERR_SYS: outro código de erro.
+ * Em todos os resultados, system_errno recebe error.
  */
-static mpmc_result_t sem_error_result(int numero_erro) {
-    mpmc_status_t estado = MPMC_ERR_SYS;
+static mpmc_result_t sem_error_result(int error) {
+    mpmc_status_t status;
 
-    switch (numero_erro) {
+    switch (error) {
         case EAGAIN:
-            estado = MPMC_ERR_WOULD_BLOCK;
+            status = MPMC_ERR_WOULD_BLOCK;
             break;
-
         case EINTR:
-            estado = MPMC_ERR_INTERRUPTED;
+            status = MPMC_ERR_INTERRUPTED;
             break;
-
         case EIDRM:
-            estado = MPMC_ERR_SHUTDOWN;
+            status = MPMC_ERR_SHUTDOWN;
             break;
-
         case EFBIG:
-            estado = MPMC_ERR_INVALID_INDEX;
+            status = MPMC_ERR_INVALID_INDEX;
             break;
-
         case EINVAL:
-            estado = MPMC_ERR_INVALID_ARG;
+            status = MPMC_ERR_INVALID_ARG;
             break;
-
         default:
-            estado = MPMC_ERR_SYS;
+            status = MPMC_ERR_SYS;
             break;
     }
 
     mpmc_result_t resultado = {
-        .status = estado,
-        .system_errno = numero_erro,
+        .status = status,
+        .system_errno = error,
     };
 
     return resultado;
 }
 
-/**
- * @brief Confere se o indice pertence ao conjunto de semáforos (IPC_STAT).
- * @param semid Identificador do conjunto.
- * @param index Índice do semáforo dentro do conjunto começando em 0.
- * @return MPMC_OK em caso de sucesso, MPMC_ERR_INVALID_ARG para argumentos
- * inválidos ou o erro correspondente.
- */
-static mpmc_result_t sem_validate_index(int semid, unsigned index) {
-    struct semid_ds informacoes;
-    union mpmc_semun argumento;
-    int resultado_consulta;
-    int numero_erro;
-
-    if (semid < 0) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_INVALID_ARG,
-        };
-    }
-
-    if (index > USHRT_MAX) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_INVALID_INDEX,
-        };
-    }
-
-    argumento.buf = &informacoes;
-    resultado_consulta = semctl(semid, 0, IPC_STAT, argumento);
-
-    if (resultado_consulta == -1) {
-        numero_erro = errno;
-        return sem_error_result(numero_erro);
-    }
-
-    if ((unsigned long)index >= informacoes.sem_nsems) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_INVALID_INDEX,
-        };
-    }
-
-    return (mpmc_result_t){
-        .status = MPMC_OK,
-    };
-}
-
 mpmc_result_t sysv_sem_create(unsigned count, int *out_semid) {
-    int identificador_sem;
-    int numero_erro;
-
     if (count == 0 || count > (unsigned)INT_MAX || out_semid == NULL) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_INVALID_ARG,
-        };
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
-    identificador_sem = semget(IPC_PRIVATE, (int)count, IPC_CREAT | 0600);
-
-    if (identificador_sem == -1) {
-        numero_erro = errno;
-        return sem_error_result(numero_erro);
-    }
+    int identificador_sem = semget(IPC_PRIVATE, (int)count, 0600);
+    if (identificador_sem == -1) return sem_error_result(errno);
 
     *out_semid = identificador_sem;
 
-    return (mpmc_result_t){
-        .status = MPMC_OK,
-    };
+    return (mpmc_result_t){.status = MPMC_OK};
 }
 
+/**
+ * @details O índice só é convertido após verificar sua representação em int.
+ * EINVAL de SETVAL é ambíguo; não é adicionada uma consulta IPC_STAT para
+ * distingui-lo, preservando as permissões exigidas pela operação original.
+ */
 mpmc_result_t sysv_sem_set(int semid, unsigned index, unsigned value) {
-    mpmc_result_t resultado_validacao;
-    union mpmc_semun argumento;
-    int numero_erro;
-    int resultado_atribuicao;
-
-    if (value > (unsigned)INT_MAX) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_INVALID_ARG,
-        };
+    if (semid < 0 || value > (unsigned)INT_MAX) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
-    resultado_validacao = sem_validate_index(semid, index);
+    if (index > (unsigned)INT_MAX) return (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX};
 
-    if (resultado_validacao.status != MPMC_OK) {
-        return resultado_validacao;
-    }
+    union mpmc_semun argumento = {.val = (int)value};
 
-    argumento.val = (int)value;
+    if (semctl(semid, (int)index, SETVAL, argumento) == -1) {
+        int erro = errno;
 
-    resultado_atribuicao = semctl(semid, (int)index, SETVAL, argumento);
-
-    if (resultado_atribuicao == -1) {
-        numero_erro = errno;
-
-        if (numero_erro == ERANGE) {
+        if (erro == ERANGE) {
             return (mpmc_result_t){
                 .status = MPMC_ERR_INVALID_ARG,
-                .system_errno = numero_erro,
+                .system_errno = erro,
             };
         }
 
-        return sem_error_result(numero_erro);
+        return sem_error_result(erro);
     }
 
-    return (mpmc_result_t){
-        .status = MPMC_OK,
-    };
+    return (mpmc_result_t){.status = MPMC_OK};
 }
 
+/** @details Valida o estreitamento do índice antes de montar struct sembuf. */
 mpmc_result_t sysv_sem_change(int semid, unsigned index, short delta, bool nowait) {
-    mpmc_result_t resultado_validacao;
-    struct sembuf operacao;
-    int resultado_operacao;
-    int numero_erro;
+    if (semid < 0) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    if (index > USHRT_MAX) return (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX};
 
-    operacao.sem_num = (unsigned short)index;
-    operacao.sem_op = delta;
-
-    if (nowait) {
-        operacao.sem_flg = IPC_NOWAIT;
-    } else {
-        operacao.sem_flg = 0;
-    }
-
-    resultado_validacao = sem_validate_index(semid, index);
-
-    if (resultado_validacao.status != MPMC_OK) {
-        return resultado_validacao;
-    }
-
-    resultado_operacao = semop(semid, &operacao, 1);
-
-    if (resultado_operacao == -1) {
-        numero_erro = errno;
-        return sem_error_result(numero_erro);
-    }
-
-    return (mpmc_result_t){
-        .status = MPMC_OK,
+    struct sembuf operacao = {
+        .sem_num = (unsigned short)index,
+        .sem_op = delta,
+        .sem_flg = nowait ? IPC_NOWAIT : 0,
     };
+
+    if (semop(semid, &operacao, 1) == -1) return sem_error_result(errno);
+
+    return (mpmc_result_t){.status = MPMC_OK};
 }
 
 mpmc_result_t sysv_sem_remove(int semid) {
-    int resultado_remocao;
-    int numero_erro;
+    if (semid < 0) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 
-    if (semid < 0) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_INVALID_ARG,
-        };
-    }
+    if (semctl(semid, 0, IPC_RMID) == -1) return sem_error_result(errno);
 
-    resultado_remocao = semctl(semid, 0, IPC_RMID);
-
-    if (resultado_remocao == -1) {
-        numero_erro = errno;
-        return sem_error_result(numero_erro);
-    }
-
-    return (mpmc_result_t){
-        .status = MPMC_OK,
-    };
+    return (mpmc_result_t){.status = MPMC_OK};
 }
