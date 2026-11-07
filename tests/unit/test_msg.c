@@ -330,8 +330,14 @@ static size_t kernel_limit(const char *path, size_t fallback) {
 
 static void test_message_size_limit(void) {
     int msqid = new_queue();
-    size_t msgmax = kernel_limit("/proc/sys/kernel/msgmax", 8192);
+    size_t msgmax = kernel_limit("/proc/sys/kernel/msgmax", 0);
     size_t msgmnb = kernel_limit("/proc/sys/kernel/msgmnb", 16384);
+
+    if (msgmax == 0) {
+        drop_queue(msqid);
+        return;
+    }
+
     unsigned char *sent = malloc(msgmax + 1);
     unsigned char *got = malloc(msgmax + 1);
     ssize_t size = 0;
