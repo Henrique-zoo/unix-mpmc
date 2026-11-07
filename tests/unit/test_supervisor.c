@@ -406,7 +406,11 @@ static void test_signal_kill_is_not_fatal(void) {
 
     /* O outro job segue vivo e o supervisor continua operante. */
     CHECK(list_children(children, 16) == 1, "o outro job continua vivo");
+    /* O terceiro filho também precisa ficar bloqueado; do contrário ele termina sozinho
+     * (worker ainda não implementado) antes do SIGTERM do shutdown e o teste fica instável. */
+    setenv("MPMC_TEST_WORKER_HANG", "1", 1);
     CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_OK, "dispatch após filho morto");
+    unsetenv("MPMC_TEST_WORKER_HANG");
 
     CHECK(supervisor_shutdown(supervisor).status == MPMC_OK, "shutdown");
     CHECK(supervisor_report_count(supervisor) == 3u, "três relatórios ao final");

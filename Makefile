@@ -1,7 +1,7 @@
 # unix-mpmc — múltiplos produtores/consumidores com IPC System V
 # Uso: make | make debug | make release | make test | make unit | make docs | make docs-clean | make clean
 
-CC   := clang
+CC := clang
 MODE ?= debug
 
 CPPFLAGS += -Iinclude -D_POSIX_C_SOURCE=200809L
@@ -101,11 +101,19 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 	@$(UNIT_DIR)/test_shm_backend
 	@$(UNIT_DIR)/test_message_metadata
 
+# Teste do REPL com pseudo-terminal (POSIX; não exige -lutil nem ferramentas externas).
+INTEGRATION_DIR := $(BUILD_DIR)/integration
+
+$(INTEGRATION_DIR)/test_repl: tests/integration/test_repl.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LDLIBS) -o $@
+
 # Testes básicos: o loop interativo deve aceitar o comando shutdown.
-test: all unit
+test: all unit $(INTEGRATION_DIR)/test_repl
 	@printf 'shutdown\n' | ./mpmc 2 1 > /dev/null
 	@printf 'shutdown\n' | ./mpmc 2 2 > /dev/null
 	@sh tests/integration/test_repl.sh ./mpmc
+	@$(INTEGRATION_DIR)/test_repl ./mpmc
 	@echo 'Unit, startup and REPL tests passed.'
 
 docs:

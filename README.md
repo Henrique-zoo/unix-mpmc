@@ -95,6 +95,9 @@ Exemplos de inicialização previstos:
 ./mpmc 2 2    # 2 estruturas IPC, usando filas de mensagens
 ```
 
+A quantidade de estruturas `p` deve estar entre `1` e `1024` (`MPMC_MAX_PRODUCERS`, em
+`include/mpmc/config.h`); valores fora dessa faixa são recusados na inicialização.
+
 Os índices de produtores usados nos comandos vão de `1` até o valor `p` da inicialização.
 O índice `0` é um caso especial **somente para `produz`**.
 

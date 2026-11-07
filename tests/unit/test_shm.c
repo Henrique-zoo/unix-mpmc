@@ -104,6 +104,11 @@ static void check_removed(int shmid) {
     CHECK(system_errno == EINVAL || system_errno == EIDRM);
 }
 
+/** @brief Handler vazio: só existe para que SIGCHLD deixe de ser descartado. */
+static void noop_sigchld_handler(int signal_number) {
+    (void)signal_number;
+}
+
 /**
  * @brief Recolhe o filho com timeout de três segundos definido por alarm().
  * @details Bloqueia SIGCHLD e SIGALRM antes de verificar o filho e espera as
@@ -114,6 +119,9 @@ static void check_removed(int shmid) {
 static bool wait_for_child(pid_t child, int *status) {
     sigset_t wait_signals;
     sigset_t previous_mask;
+    struct sigaction chld_action = {0};
+    struct sigaction old_chld_action;
+    bool action_saved = false;
     bool mask_saved = false;
     bool collected = false;
     bool have_child = true;
@@ -130,6 +138,15 @@ static bool wait_for_child(pid_t child, int *status) {
     }
 
     mask_saved = true;
+
+    chld_action.sa_handler = noop_sigchld_handler;
+    sigemptyset(&chld_action.sa_mask);
+    rc = sigaction(SIGCHLD, &chld_action, &old_chld_action);
+    CHECK(rc == 0);
+    if (rc == 0) {
+        action_saved = true;
+    }
+
     (void)alarm(3);
 
     for (;;) {
@@ -184,6 +201,9 @@ cleanup:
             waited = waitpid(child, status, 0);
         } while (waited == -1 && errno == EINTR);
         CHECK(waited == child || (waited == -1 && errno == ECHILD));
+    }
+    if (action_saved) {
+        CHECK(sigaction(SIGCHLD, &old_chld_action, NULL) == 0);
     }
     if (mask_saved) {
         CHECK(sigprocmask(SIG_SETMASK, &previous_mask, NULL) == 0);

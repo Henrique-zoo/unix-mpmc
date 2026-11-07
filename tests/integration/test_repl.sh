@@ -27,6 +27,9 @@
 ## que deve terminar com erro em vez de ficar pendurado. Ambos usam um vigia em `sh` puro
 ## (run_limited), pois `timeout` não existe no macOS.
 ##
+## A quantidade de estruturas p é validada contra MPMC_MAX_PRODUCERS: o limite é aceito e
+## valores acima dele (inclusive overflow de size_t) são recusados sem iniciar o REPL.
+##
 ## Para exercitar os casos, execute o script a partir da raiz do repositório,
 ## informando o binário como primeiro argumento. A entrada é fornecida por pipes
 ## ou FIFOs para testar o comportamento sem interação manual.
@@ -60,6 +63,28 @@ fail_early() {
 	echo "$1" >&2
 	exit 1
 }
+
+# A quantidade de estruturas p vai de 1 a MPMC_MAX_PRODUCERS (include/mpmc/config.h). O limite
+# é aceito nos dois paradigmas; um valor acima dele, inclusive um que estoura size_t, é recusado
+# com erro e sintaxe de uso, e o REPL nem chega a iniciar (nenhum prompt é exibido).
+max_producers=$(sed -n 's/^#define MPMC_MAX_PRODUCERS[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+	include/mpmc/config.h)
+[ -n "$max_producers" ] || fail_early 'MPMC_MAX_PRODUCERS não encontrado em include/mpmc/config.h'
+for mode in 1 2; do
+	printf 'shutdown\n' | "$binary" "$max_producers" "$mode" >"$tmp_dir/limit_out" 2>"$tmp_dir/limit_err" \
+		|| fail_early "p = $max_producers (limite) deveria ser aceito no paradigma $mode"
+	[ ! -s "$tmp_dir/limit_err" ] || fail_early "p no limite não deveria gerar erro (paradigma $mode)"
+done
+for too_many in "$((max_producers + 1))" "$((max_producers * 2))" 18446744073709551615 \
+	18446744073709551616; do
+	if printf 'shutdown\n' | "$binary" "$too_many" 1 >"$tmp_dir/limit_out" 2>"$tmp_dir/limit_err"; then
+		fail_early "p = $too_many (acima do limite) deveria ser recusado"
+	fi
+	grep -q 'Argumento inválido' "$tmp_dir/limit_err" \
+		|| fail_early "p = $too_many: mensagem de erro ausente"
+	grep -q 'Uso:' "$tmp_dir/limit_err" || fail_early "p = $too_many: sintaxe de uso ausente"
+	[ ! -s "$tmp_dir/limit_out" ] || fail_early "p = $too_many: o REPL não deveria iniciar"
+done
 
 # Um comando inválido deve informar o erro e manter o REPL disponível.
 printf 'invalido\nshutdown\n' | "$binary" 2 1 >"$tmp_dir/out" 2>"$tmp_dir/err"
