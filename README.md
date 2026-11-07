@@ -29,6 +29,8 @@
 12. [Decisões e pontos em aberto](#decisões-e-pontos-em-aberto)
 13. [Referências](#referências)
 
+<a id="objetivo-e-escopo"></a>
+
 ## Objetivo e escopo
 
 Implementar uma aplicação que permita criar **processos produtores e consumidores concorrentes** e
@@ -44,6 +46,8 @@ estatísticas e executar um encerramento ordenado.
 
 O projeto não usa threads como substitutas dos processos nem filas ou semáforos POSIX como
 substitutos das primitivas System V exigidas pelo enunciado.
+
+<a id="requisitos-do-trabalho"></a>
 
 ## Requisitos do trabalho
 
@@ -72,6 +76,8 @@ trabalhos pelo mesmo caminho ordenado de `shutdown` (a remoção dos recursos IP
 caminho, mas só terá efeito quando os módulos `ipc/` forem implementados). Linhas inválidas são
 informadas e não encerram o REPL.
 
+<a id="compilação-e-execução"></a>
+
 ## Compilação e execução
 
 **Dependências:** compilador C compatível com C23 (`gcc 15+` ou `clang 18+`), `make`, Linux com
@@ -81,7 +87,7 @@ IPC System V disponível. O Doxygen é opcional para compilar a aplicação.
 make                  # build/debug/mpmc e link ./mpmc
 make debug            # compilação para depuração
 make release          # build/release/mpmc, otimizado
-make test             # smoke tests e testes básicos do REPL
+make test             # unitários, smoke tests e integração do REPL
 make clean            # remove binários e objetos
 ```
 
@@ -100,6 +106,8 @@ A quantidade de estruturas `p` deve estar entre `1` e `1024` (`MPMC_MAX_PRODUCER
 
 Os índices de produtores usados nos comandos vão de `1` até o valor `p` da inicialização.
 O índice `0` é um caso especial **somente para `produz`**.
+
+<a id="comandos-interativos"></a>
 
 ## Comandos interativos
 
@@ -176,6 +184,8 @@ O REPL aceita `stdin` interativo (terminal), arquivo (`./mpmc 4 1 < comandos.txt
 A aplicação deve continuar aceitando comandos enquanto os trabalhos concorrentes executam.
 A ordem real de execução, a ordem de término e a interposição das mensagens no terminal são
 não determinísticas.
+
+<a id="arquitetura"></a>
 
 ## Arquitetura
 
@@ -271,6 +281,8 @@ Descrições mais detalhadas em [docs/architecture.md](docs/architecture.md) e
 [docs/protocol.md](docs/protocol.md). As assinaturas completas e os contratos individuais
 estão nos cabeçalhos da pasta `include/mpmc/`.
 
+<a id="modelos-de-ipc-e-sincronização"></a>
+
 ## Modelos de IPC e sincronização
 
 ### Paradigma 1: memória compartilhada + semáforos
@@ -312,6 +324,8 @@ contadores atualizados por um filho não aparecem automaticamente no heap do sup
 O desenho previsto usa eventos de controle por filas de mensagens e consolidação
 pelo supervisor. Consulte [docs/protocol.md](docs/protocol.md).
 
+<a id="processos-mensagens-e-confirmações"></a>
+
 ## Processos, mensagens e confirmações
 
 Cada chamada a `produz` ou `consome` cria um processo filho distinto. O identificador do
@@ -334,6 +348,8 @@ inserida. Aguardas e bloqueios devem ser interrompíveis pelo encerramento do si
 O desenho das confirmações e o tratamento de operações *striped* estão em
 [docs/protocol.md](docs/protocol.md).
 
+<a id="ciclo-de-vida-e-encerramento"></a>
+
 ## Ciclo de vida e encerramento
 
 1. Validar argumentos de `mpmc` (`p > 0`, paradigma `1` ou `2`).
@@ -350,6 +366,8 @@ O desenho das confirmações e o tratamento de operações *striped* estão em
 Os tempos de duração devem utilizar relógio monotônico (`CLOCK_MONOTONIC`), ao passo que
 `sent_at` deve usar um relógio de calendário (`CLOCK_REALTIME`).
 
+<a id="tratamento-de-erros-e-observabilidade"></a>
+
 ## Tratamento de erros e observabilidade
 
 O projeto prevê erros distintos para: argumentos inválidos, índice lógico inexistente,
@@ -363,6 +381,8 @@ A saída de status deve incluir, no mínimo, os requisitos do enunciado: duraç�
 processo, total consumido por estrutura e tempo total de operação do `mpmc`. A formatação
 textual exata dessas informações é uma decisão de implementação.
 
+<a id="testes"></a>
+
 ## Testes
 
 As suítes devem abranger parsing, limites (`1..1024`), índices inválidos, distribuição
@@ -370,14 +390,18 @@ As suítes devem abranger parsing, limites (`1..1024`), índices inválidos, dis
 os comandos, bloqueios, `shutdown` com filhos pendentes e vazamento de recursos IPC.
 Veja [docs/testing.md](docs/testing.md) para a matriz completa.
 
-Depois da implementação, execute:
+Para executar a suíte disponível:
 
 ```bash
 make test
 ```
 
-O alvo atual `test` do Makefile contém apenas *smoke tests* (entrada `shutdown` nos dois
-paradigmas); **não constitui comprovação de correção concorrente**.
+O alvo `test` executa os testes unitários, os *smoke tests* de inicialização e shutdown,
+a integração do REPL por pipes/FIFOs e o teste de redesenho do prompt com pseudo-terminal.
+Esses cenários ainda não comprovam a correção concorrente dos backends IPC: as operações
+de produção, consumo e confirmação por transporte permanecem pendentes de implementação.
+
+<a id="documentação-doxygen"></a>
 
 ## Documentação Doxygen
 
@@ -400,6 +424,8 @@ os documentos de arquitetura, protocolo e testes aparecem nas páginas relaciona
 Os arquivos `.h` especificam **interfaces propostas**, que podem evoluir durante a
 implementação. Ao alterar um contrato, atualize a documentação e os testes associados.
 
+<a id="decisões-e-pontos-em-aberto"></a>
+
 ## Decisões e pontos em aberto
 
 O enunciado determina comportamento observável, mas não detalha tudo sobre implementação.
@@ -417,6 +443,8 @@ As seguintes escolhas são **propostas de projeto**, não exigências adicionais
 mas a explicação menciona a memória 2; aqui seguimos a **sintaxe do comando**, que indica
 estrutura 3. A descrição de alguns exemplos de bloqueio também é imprecisa; a regra
 normativa adotada é a explicação dos parâmetros `ack` na seção 2 do enunciado.
+
+<a id="referências"></a>
 
 ## Referências
 
