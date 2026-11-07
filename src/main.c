@@ -121,14 +121,10 @@ static mpmc_result_t parse_args(int argc, char *argv[], mpmc_config_t *out) {
     size_t parsed_mode;
 
     mpmc_result_t error = parse_positive_integer(argv[1], &producer_count);
-    if (error.status != MPMC_OK) {
-        return error;
-    }
+    if (error.status != MPMC_OK) return error;
 
     error = parse_positive_integer(argv[2], &parsed_mode);
-    if (error.status != MPMC_OK) {
-        return error;
-    }
+    if (error.status != MPMC_OK) return error;
 
     if (parsed_mode != IPC_SHARED_MEMORY && parsed_mode != IPC_MESSAGE_QUEUE) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
@@ -175,9 +171,7 @@ static mpmc_result_t parse_positive_integer(const char *text, size_t *out) {
     }
 
     for (const char *ptr = text; *ptr != '\0'; ptr++) {
-        if (*ptr < '0' || *ptr > '9') {
-            return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-        }
+        if (*ptr < '0' || *ptr > '9') return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
     errno = 0;
@@ -187,7 +181,10 @@ static mpmc_result_t parse_positive_integer(const char *text, size_t *out) {
     int conversion_errno = errno;
 
     if (conversion_errno != 0) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG, .system_errno = conversion_errno};
+        return (mpmc_result_t){
+            .status = MPMC_ERR_INVALID_ARG,
+            .system_errno = conversion_errno,
+        };
     }
     if (*endptr != '\0' || value == 0 || value > SIZE_MAX) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
