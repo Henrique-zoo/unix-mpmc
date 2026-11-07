@@ -81,6 +81,23 @@ resultados e retornam `mpmc_result_t`, com a categoria em `status` e a causa ori
 do valor corrente de `errno`. Não devem silenciar permanentemente erros nem abstrair
 semânticas diferentes de `IPC_NOWAIT`, `EINTR` e `IPC_RMID`.
 
+O ciclo de vida de `shm_backend` aceita um `shm_cleanup_reporter_t` opcional em
+`create`, `worker_close` e `destroy`. A callback recebe cada falha de liberação,
+com a operação (`detach` ou `remove`), índice lógico 1..p, `shmid` e resultado original.
+O chamador pode copiar os registros para um relatório ou apresentá-los na camada
+de aplicação; os registros temporários só são válidos durante cada chamada da
+callback. O backend não retém o reporter nem aloca uma lista de erros.
+
+A limpeza tenta todos os recursos e libera o estado local mesmo quando há falhas.
+`worker_close` mantém os objetos globais; `destroy` também solicita `IPC_RMID`.
+O resultado dessas operações preserva o primeiro erro. No rollback, `create`
+reutiliza `destroy`, retorna a causa original da inicialização e comunica as falhas
+secundárias pela callback. `mpmc_result_t` continua sendo um valor simples, sem
+propriedade de ponteiros ou necessidade de liberação adicional.
+
+O fluxo, os papéis dos tipos e um exemplo completo estão em
+[Diagnósticos de cleanup](cleanup_errors.md) (@ref shm_cleanup_diagnostics).
+
 ## Falhas e recuperação
 
 1. Parsing inválido: imprimir mensagem e voltar ao prompt, sem criar filhos.

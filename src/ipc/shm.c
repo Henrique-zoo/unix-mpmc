@@ -85,3 +85,16 @@ mpmc_result_t sysv_shm_remove(int shmid) {
 
     return (mpmc_result_t){.status = MPMC_OK};
 }
+
+mpmc_result_t sysv_shm_stat(int shmid, struct shmid_ds *out_info) {
+    if (shmid < 0 || out_info == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+
+    if (shmctl(shmid, IPC_STAT, out_info) == -1) {
+        return (mpmc_result_t){
+            .status = MPMC_ERR_SYS,
+            .system_errno = errno,
+        };
+    }
+
+    return (mpmc_result_t){.status = MPMC_OK};
+}
