@@ -40,8 +40,11 @@ BreakBeforeCloseBracketSwitch: true
 
 # Evitar blocos compactados
 AllowShortFunctionsOnASingleLine: None
-AllowShortIfStatementsOnASingleLine: Never
-AllowShortLoopsOnASingleLine: false
+# Reservar if sem chaves em uma linha para retornos curtos.
+# Retornos de structs com múltiplos campos inicializados usam uma linha por campo,
+# vírgula final no inicializador e chaves no if.
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
 AllowShortBlocksOnASingleLine: Never
 
 # Condicionais e switch

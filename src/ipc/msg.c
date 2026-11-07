@@ -32,13 +32,14 @@ static msg_envelope_t *envelope_alloc(size_t body_size) {
 }
 
 mpmc_result_t sysv_msg_create(int *out_msqid) {
-    if (out_msqid == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-    }
+    if (out_msqid == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 
     int msqid = msgget(IPC_PRIVATE, IPC_CREAT | 0600);
     if (msqid == -1) {
-        return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+        return (mpmc_result_t){
+            .status = MPMC_ERR_SYS,
+            .system_errno = errno,
+        };
     }
 
     *out_msqid = msqid;
@@ -48,7 +49,10 @@ mpmc_result_t sysv_msg_create(int *out_msqid) {
 mpmc_result_t sysv_msg_send(int msqid, long type, const void *payload, size_t size, bool nowait) {
     msg_envelope_t *envelope = envelope_alloc(size);
     if (envelope == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+        return (mpmc_result_t){
+            .status = MPMC_ERR_SYS,
+            .system_errno = errno,
+        };
     }
 
     envelope->mtype = type;
@@ -61,17 +65,24 @@ mpmc_result_t sysv_msg_send(int msqid, long type, const void *payload, size_t si
 
     free(envelope);
 
-    if (rc == 0) {
-        return (mpmc_result_t){.status = MPMC_OK};
-    }
+    if (rc == 0) return (mpmc_result_t){.status = MPMC_OK};
 
     if (err == EINTR) {
-        return (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = err};
+        return (mpmc_result_t){
+            .status = MPMC_ERR_INTERRUPTED,
+            .system_errno = err,
+        };
     }
     if (nowait && err == EAGAIN) {
-        return (mpmc_result_t){.status = MPMC_ERR_WOULD_BLOCK, .system_errno = err};
+        return (mpmc_result_t){
+            .status = MPMC_ERR_WOULD_BLOCK,
+            .system_errno = err,
+        };
     }
-    return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = err};
+    return (mpmc_result_t){
+        .status = MPMC_ERR_SYS,
+        .system_errno = err,
+    };
 }
 
 mpmc_result_t sysv_msg_receive(
@@ -79,7 +90,10 @@ mpmc_result_t sysv_msg_receive(
 ) {
     msg_envelope_t *envelope = envelope_alloc(capacity);
     if (envelope == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+        return (mpmc_result_t){
+            .status = MPMC_ERR_SYS,
+            .system_errno = errno,
+        };
     }
 
     /* Sem MSG_NOERROR: mensagem maior que `capacity` falha com E2BIG e fica na fila. */
@@ -97,17 +111,29 @@ mpmc_result_t sysv_msg_receive(
 
     free(envelope);
     if (err == EINTR) {
-        return (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = err};
+        return (mpmc_result_t){
+            .status = MPMC_ERR_INTERRUPTED,
+            .system_errno = err,
+        };
     }
     if (nowait && err == ENOMSG) {
-        return (mpmc_result_t){.status = MPMC_ERR_WOULD_BLOCK, .system_errno = err};
+        return (mpmc_result_t){
+            .status = MPMC_ERR_WOULD_BLOCK,
+            .system_errno = err,
+        };
     }
-    return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = err};
+    return (mpmc_result_t){
+        .status = MPMC_ERR_SYS,
+        .system_errno = err,
+    };
 }
 
 mpmc_result_t sysv_msg_remove(int msqid) {
     if (msgctl(msqid, IPC_RMID, NULL) == -1) {
-        return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+        return (mpmc_result_t){
+            .status = MPMC_ERR_SYS,
+            .system_errno = errno,
+        };
     }
 
     return (mpmc_result_t){.status = MPMC_OK};
