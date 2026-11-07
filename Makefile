@@ -55,7 +55,8 @@ $(UNIT_DIR)/test_command: tests/unit/test_command.c src/app/command.c src/error.
 
 $(UNIT_DIR)/test_supervisor: tests/unit/test_supervisor.c \
 		$(UNIT_DIR)/supervisor_for_test.o src/app/command.c src/error.c \
-		src/ipc/transport.c src/ipc/msg_backend.c src/ipc/shm_backend.c src/ipc/msg.c
+		src/ipc/transport.c src/ipc/msg_backend.c src/ipc/shm_backend.c src/ipc/msg.c \
+		src/ipc/shm.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -71,6 +72,22 @@ $(UNIT_DIR)/test_error: tests/unit/test_error.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+$(UNIT_DIR)/test_shm: tests/unit/test_shm.c src/ipc/shm.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/shm_backend_for_test.o: src/ipc/shm_backend.c include/mpmc/ipc/shm_backend.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		-Dmalloc=mpmc_test_malloc -Dcalloc=mpmc_test_calloc -Dfree=mpmc_test_free \
+		-Dsysv_shm_create=mpmc_test_shm_create -Dsysv_shm_attach=mpmc_test_shm_attach \
+		-Dsysv_shm_detach=mpmc_test_shm_detach -Dsysv_shm_remove=mpmc_test_shm_remove \
+		-c $< -o $@
+
+$(UNIT_DIR)/test_shm_backend: tests/unit/test_shm_backend.c $(UNIT_DIR)/shm_backend_for_test.o
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_message_metadata: tests/unit/test_message_metadata.c src/workers/producer.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
@@ -80,13 +97,16 @@ $(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c src/ipc/msg_backend.
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
 unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
-		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_message_metadata \
+		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
+		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_message_metadata \
 		$(UNIT_DIR)/test_msg_backend
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
 	@$(UNIT_DIR)/test_msg
 	@$(UNIT_DIR)/test_sem
 	@$(UNIT_DIR)/test_error
+	@$(UNIT_DIR)/test_shm
+	@$(UNIT_DIR)/test_shm_backend
 	@$(UNIT_DIR)/test_message_metadata
 	@$(UNIT_DIR)/test_msg_backend
 

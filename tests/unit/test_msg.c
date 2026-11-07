@@ -28,8 +28,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "mpmc/ipc/msg.h"
 #include "mpmc/error.h"
+#include "mpmc/ipc/msg.h"
 
 static unsigned g_checks;
 static unsigned g_failures;
@@ -52,19 +52,27 @@ static unsigned g_failures;
             status_.status == (expected),                                                          \
             "%s retornou '%s', esperado '%s'",                                                     \
             #call,                                                                                 \
-            mpmc_status_str(status_.status),                                                              \
+            mpmc_status_str(status_.status),                                                       \
             mpmc_status_str(expected)                                                              \
         );                                                                                         \
-        CHECK(status_.status != MPMC_OK || status_.system_errno == 0,                              \
-              "%s: sucesso deve ter system_errno zero", #call);                                   \
+        CHECK(                                                                                     \
+            status_.status != MPMC_OK || status_.system_errno == 0,                                \
+            "%s: sucesso deve ter system_errno zero",                                              \
+            #call                                                                                  \
+        );                                                                                         \
     } while (0)
 
-#define CHECK_ERROR(call, expected, expected_errno)                                                 \
+#define CHECK_ERROR(call, expected, expected_errno)                                                \
     do {                                                                                           \
-        mpmc_result_t error_ = (call);                                                              \
+        mpmc_result_t error_ = (call);                                                             \
         CHECK(error_.status == (expected), "%s: categoria inesperada", #call);                     \
-        CHECK(error_.system_errno == (expected_errno),                                             \
-              "%s: system_errno=%d, esperado %d", #call, error_.system_errno, (expected_errno));   \
+        CHECK(                                                                                     \
+            error_.system_errno == (expected_errno),                                               \
+            "%s: system_errno=%d, esperado %d",                                                    \
+            #call,                                                                                 \
+            error_.system_errno,                                                                   \
+            (expected_errno)                                                                       \
+        );                                                                                         \
     } while (0)
 
 static int new_queue(void) {
@@ -318,9 +326,7 @@ static size_t kernel_limit(const char *path, size_t fallback) {
     FILE *file = fopen(path, "r");
     unsigned long value = 0;
 
-    if (file == NULL) {
-        return fallback;
-    }
+    if (file == NULL) return fallback;
     if (fscanf(file, "%lu", &value) != 1 || value == 0) {
         value = fallback;
     }
@@ -382,7 +388,10 @@ static void test_blocked_send_wakes_on_receive_from_child(void) {
         ssize_t size = 0;
 
         nanosleep(&(struct timespec){.tv_nsec = 100000000L}, NULL);
-        _exit(sysv_msg_receive(msqid, 0, buffer, sizeof buffer, false, &size).status == MPMC_OK ? 0 : 1);
+        _exit(
+            sysv_msg_receive(msqid, 0, buffer, sizeof buffer, false, &size).status == MPMC_OK ? 0
+                                                                                              : 1
+        );
     }
 
     clock_gettime(CLOCK_MONOTONIC, &start);

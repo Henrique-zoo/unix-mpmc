@@ -22,19 +22,18 @@
  * Retorna 0 se todos os casos passarem; 1 caso contrário.
  */
 
-#include "mpmc/app/command.h"
-#include "mpmc/app/supervisor.h"
-#include "mpmc/error.h"
-
 #include <errno.h>
 #include <signal.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "mpmc/app/command.h"
+#include "mpmc/app/supervisor.h"
+#include "mpmc/error.h"
 
 static unsigned g_checks;
 static unsigned g_failures;
@@ -72,9 +71,11 @@ pid_t mpmc_test_fork(void) {
 /* ------------------------------------------------------------------ */
 
 static void sleep_ms(long milliseconds) {
-    struct timespec delay = {.tv_sec = milliseconds / 1000, .tv_nsec = (milliseconds % 1000) * 1000000L};
-    while (nanosleep(&delay, &delay) == -1 && errno == EINTR) {
-    }
+    struct timespec delay = {
+        .tv_sec = milliseconds / 1000,
+        .tv_nsec = (milliseconds % 1000) * 1000000L,
+    };
+    while (nanosleep(&delay, &delay) == -1 && errno == EINTR);
 }
 
 static command_t make_command(command_kind_t kind) {
@@ -97,9 +98,7 @@ static bool wait_for_reports(supervisor_t *supervisor, size_t wanted, int timeou
         if (error.status != MPMC_OK && g_reap_error.status == MPMC_OK) {
             g_reap_error = error;
         }
-        if (supervisor_report_count(supervisor) >= wanted) {
-            return true;
-        }
+        if (supervisor_report_count(supervisor) >= wanted) return true;
         sleep_ms(10);
     }
     return false;
@@ -125,7 +124,10 @@ static mpmc_result_t capture_report(const supervisor_t *supervisor, char *buffer
     CHECK(file != NULL, "tmpfile");
     if (file == NULL) {
         buffer[0] = '\0';
-        return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = file_errno};
+        return (mpmc_result_t){
+            .status = MPMC_ERR_SYS,
+            .system_errno = file_errno,
+        };
     }
     mpmc_result_t error = supervisor_print_report(supervisor, file);
     rewind(file);
@@ -175,9 +177,7 @@ static int list_children(pid_t *out, int max) {
         command_line, sizeof command_line, "echo $$; pgrep -P %ld 2>/dev/null", (long)getpid()
     );
     FILE *pipe = popen(command_line, "r");
-    if (pipe == NULL) {
-        return -1;
-    }
+    if (pipe == NULL) return -1;
     long shell_pid = -1;
     if (fscanf(pipe, "%ld", &shell_pid) != 1) {
         (void)pclose(pipe);
@@ -203,9 +203,7 @@ static int wait_for_children(pid_t *out, int wanted) {
     int count = 0;
     for (int attempt = 0; attempt < 100; ++attempt) {
         count = list_children(out, 16);
-        if (count == wanted) {
-            return count;
-        }
+        if (count == wanted) return count;
         sleep_ms(20);
     }
     return count;
@@ -253,8 +251,10 @@ static void test_natural_exit_report(void) {
     CHECK(count_lines_with(text, "produz") == 1u, "uma linha para o produz");
     CHECK(count_lines_with(text, "consome") == 1u, "uma linha para o consome");
     CHECK(count_lines_with(text, "código 1 (falha)") == 2u, "término com código e rótulo");
-    CHECK(count_lines_with(text, ".") >= 3u && strstr(text, " s\n") != NULL,
-          "durações no formato S.mmm s (2 filhos + total)");
+    CHECK(
+        count_lines_with(text, ".") >= 3u && strstr(text, " s\n") != NULL,
+        "durações no formato S.mmm s (2 filhos + total)"
+    );
     CHECK(strstr(text, "Filhos recolhidos: 2\n") != NULL, "contagem de filhos recolhidos");
     CHECK(strstr(text, "Filhos ainda ativos") == NULL, "sem filhos ativos");
     CHECK(strstr(text, "Tempo total de operação do mpmc: ") != NULL, "tempo total do mpmc");
@@ -272,8 +272,10 @@ static void test_print_report_empty_and_guards(void) {
     CHECK(capture_report(supervisor, text, sizeof text).status == MPMC_OK, "relatório vazio");
     CHECK(strstr(text, "Nenhum processo filho foi executado.") != NULL, "mensagem de vazio");
     CHECK(strstr(text, "Filhos recolhidos: 0\n") != NULL, "zero filhos recolhidos");
-    CHECK(strstr(text, "Tempo total de operação do mpmc: 0.") != NULL,
-          "tempo total presente (< 1 s) mesmo sem filhos");
+    CHECK(
+        strstr(text, "Tempo total de operação do mpmc: 0.") != NULL,
+        "tempo total presente (< 1 s) mesmo sem filhos"
+    );
     CHECK(supervisor_print_report(NULL, stdout).status == MPMC_ERR_INVALID_ARG, "supervisor NULL");
     CHECK(supervisor_print_report(supervisor, NULL).status == MPMC_ERR_INVALID_ARG, "stream NULL");
 
@@ -298,8 +300,13 @@ static void test_report_get_guards(void) {
     child_report_t untouched = report;
 
     CHECK(supervisor_report_count(NULL) == 0u, "report_count(NULL) == 0");
-    CHECK(supervisor_report_get(NULL, 0u, &report).status == MPMC_ERR_INVALID_ARG, "supervisor NULL");
-    CHECK(supervisor_report_get(supervisor, 0u, &report).status == MPMC_ERR_INVALID_ARG, "índice vazio");
+    CHECK(
+        supervisor_report_get(NULL, 0u, &report).status == MPMC_ERR_INVALID_ARG, "supervisor NULL"
+    );
+    CHECK(
+        supervisor_report_get(supervisor, 0u, &report).status == MPMC_ERR_INVALID_ARG,
+        "índice vazio"
+    );
     CHECK(supervisor_report_get(supervisor, 0u, NULL).status == MPMC_ERR_INVALID_ARG, "out NULL");
     CHECK(memcmp(&report, &untouched, sizeof report) == 0, "out intacto em erro");
 
@@ -317,7 +324,9 @@ static void test_fork_failure(void) {
     errno = EINVAL;
     CHECK(error.status == MPMC_ERR_SYS, "fork falho -> ERR_SYS");
     CHECK(error.system_errno == EAGAIN, "erro de fork deve preservar EAGAIN após restaurar sinais");
-    CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_ERR_SYS, "segunda falha -> ERR_SYS");
+    CHECK(
+        supervisor_dispatch(supervisor, &produce).status == MPMC_ERR_SYS, "segunda falha -> ERR_SYS"
+    );
     CHECK(g_fork_failures_left == 0, "as duas falhas injetadas foram consumidas");
 
     /* Nenhum registro inválido: reap não tem o que recolher e nada vira relatório. */
@@ -328,17 +337,22 @@ static void test_fork_failure(void) {
     /* A máscara de sinais foi restaurada. */
     sigset_t current;
     CHECK(sigprocmask(SIG_BLOCK, NULL, &current) == 0, "sigprocmask");
-    CHECK(!sigismember(&current, SIGCHLD) && !sigismember(&current, SIGINT)
-              && !sigismember(&current, SIGTERM),
-          "sinais devem continuar desbloqueados após fork falho");
+    CHECK(
+        !sigismember(&current, SIGCHLD) && !sigismember(&current, SIGINT)
+            && !sigismember(&current, SIGTERM),
+        "sinais devem continuar desbloqueados após fork falho"
+    );
 
     /* O supervisor segue utilizável e o id da operação não foi consumido. */
     CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_OK, "dispatch após falhas");
     CHECK(wait_for_reports(supervisor, 1u, 5000), "filho posterior recolhido");
     child_report_t report;
     CHECK(supervisor_report_get(supervisor, 0u, &report).status == MPMC_OK, "report_get");
-    CHECK(report.operation_id == 1u, "operation_id não é consumido por fork falho (veio %llu)",
-          (unsigned long long)report.operation_id);
+    CHECK(
+        report.operation_id == 1u,
+        "operation_id não é consumido por fork falho (veio %llu)",
+        (unsigned long long)report.operation_id
+    );
 
     CHECK(supervisor_shutdown(supervisor).status == MPMC_OK, "shutdown");
     supervisor_destroy(supervisor);
@@ -372,17 +386,22 @@ static void test_signal_kill_is_not_fatal(void) {
 
     /* Regressão: o reap que recolhe um filho morto por sinal (fora do shutdown) não
      * pode devolver erro; caso contrário o REPL encerraria e derrubaria os demais jobs. */
-    CHECK(g_reap_error.status == MPMC_OK, "reap devolveu erro (%d) ao recolher filho morto por sinal",
-          (int)g_reap_error.status);
+    CHECK(
+        g_reap_error.status == MPMC_OK,
+        "reap devolveu erro (%d) ao recolher filho morto por sinal",
+        (int)g_reap_error.status
+    );
     CHECK(supervisor_take_notices(supervisor) >= 1u, "término por sinal gera aviso");
 
     child_report_t report;
     CHECK(supervisor_report_get(supervisor, 0u, &report).status == MPMC_OK, "report_get");
     CHECK(report.pid == victim, "relatório do PID morto");
     CHECK(report.end == CHILD_END_SIGNALED && report.value == SIGKILL, "end=SIGNALED, sinal 9");
-    CHECK(report.duration_ns >= 100ull * 1000000ull,
-          "duração deve cobrir o tempo vivo (>=100 ms; veio %llu ns)",
-          (unsigned long long)report.duration_ns);
+    CHECK(
+        report.duration_ns >= 100ull * 1000000ull,
+        "duração deve cobrir o tempo vivo (>=100 ms; veio %llu ns)",
+        (unsigned long long)report.duration_ns
+    );
     CHECK(report.duration_ns < 10ull * 1000000000ull, "duração coerente (< 10 s)");
 
     /* O outro job segue vivo e o supervisor continua operante. */
@@ -417,15 +436,20 @@ static void test_shutdown_reports(void) {
     for (size_t index = 0u; index < supervisor_report_count(supervisor); ++index) {
         child_report_t report;
         CHECK(supervisor_report_get(supervisor, index, &report).status == MPMC_OK, "report_get");
-        CHECK(report.end == CHILD_END_SIGNALED && report.value == SIGTERM,
-              "encerrado por SIGTERM do shutdown");
+        CHECK(
+            report.end == CHILD_END_SIGNALED && report.value == SIGTERM,
+            "encerrado por SIGTERM do shutdown"
+        );
         CHECK(report.duration_ns < 10ull * 1000000000ull, "duração coerente");
     }
     CHECK(list_children(children, 16) == 0, "nenhum filho (nem zumbi) após shutdown");
 
     CHECK(supervisor_shutdown(supervisor).status == MPMC_OK, "shutdown idempotente");
     CHECK(supervisor_report_count(supervisor) == 3u, "relatórios não duplicam");
-    CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_ERR_SHUTDOWN, "dispatch após shutdown");
+    CHECK(
+        supervisor_dispatch(supervisor, &produce).status == MPMC_ERR_SHUTDOWN,
+        "dispatch após shutdown"
+    );
     supervisor_destroy(supervisor);
 }
 
@@ -437,7 +461,9 @@ static void test_fork_failure_with_active_job(void) {
     setenv("MPMC_TEST_WORKER_HANG", "1", 1);
     CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_OK, "dispatch ativo");
     g_fork_failures_left = 1;
-    CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_ERR_SYS, "fork falho com job ativo");
+    CHECK(
+        supervisor_dispatch(supervisor, &produce).status == MPMC_ERR_SYS, "fork falho com job ativo"
+    );
     unsetenv("MPMC_TEST_WORKER_HANG");
 
     CHECK(wait_for_children(children, 1) == 1, "job ativo não é afetado pela falha");

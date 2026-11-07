@@ -65,7 +65,10 @@ install_signal_handler(int signal_number, void (*handler)(int), struct sigaction
     action.sa_handler = handler;
     sigemptyset(&action.sa_mask);
     if (sigaction(signal_number, &action, previous) == -1) {
-        return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+        return (mpmc_result_t){
+            .status = MPMC_ERR_SYS,
+            .system_errno = errno,
+        };
     }
     return (mpmc_result_t){.status = MPMC_OK};
 }
@@ -81,13 +84,14 @@ install_signal_handler(int signal_number, void (*handler)(int), struct sigaction
  * verificação evita que a leitura de stdin suspenda o programa com SIGTTIN.
  */
 static mpmc_result_t check_foreground_stdin(void) {
-    if (!isatty(STDIN_FILENO)) {
-        return (mpmc_result_t){.status = MPMC_OK};
-    }
+    if (!isatty(STDIN_FILENO)) return (mpmc_result_t){.status = MPMC_OK};
 
     pid_t foreground_group = tcgetpgrp(STDIN_FILENO);
     if (foreground_group == -1) {
-        return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+        return (mpmc_result_t){
+            .status = MPMC_ERR_SYS,
+            .system_errno = errno,
+        };
     }
     if (foreground_group != getpgrp()) {
         fprintf(
@@ -124,9 +128,7 @@ static mpmc_result_t service_supervisor(supervisor_t *supervisor) {
  */
 static bool is_blank_line(const char *line) {
     for (; *line != '\0'; ++line) {
-        if (*line != ' ' && *line != '\t' && *line != '\r') {
-            return false;
-        }
+        if (*line != ' ' && *line != '\t' && *line != '\r') return false;
     }
     return true;
 }
@@ -141,9 +143,7 @@ static bool is_blank_line(const char *line) {
  * encerra o loop nem modifica o estado de saída.
  */
 static void dispatch_line(supervisor_t *supervisor, char *line, bool *shutdown) {
-    if (is_blank_line(line)) {
-        return;
-    }
+    if (is_blank_line(line)) return;
 
     command_t command;
     mpmc_result_t error = command_parse(line, &command);
@@ -182,20 +182,14 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
     bool shutdown = false;
     mpmc_result_t result;
 
-    if (supervisor == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-    }
+    if (supervisor == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 
     result = check_foreground_stdin();
-    if (result.status != MPMC_OK) {
-        return result;
-    }
+    if (result.status != MPMC_OK) return result;
 
     termination_requested = 0;
     result = install_signal_handler(SIGCHLD, handle_child_signal, &previous_chld);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
+    if (result.status != MPMC_OK) return result;
     result = install_signal_handler(SIGINT, handle_termination_signal, &previous_int);
     if (result.status != MPMC_OK) {
         (void)sigaction(SIGCHLD, &previous_chld, NULL);

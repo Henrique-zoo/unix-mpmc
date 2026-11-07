@@ -30,7 +30,7 @@ mpmc_result_t ipc_init(ipc_context_t **out, size_t producer_count, ipc_mode_t mo
     if (mode == IPC_MESSAGE_QUEUE) {
         result = msg_backend_create(&context->message_backend, producer_count);
     } else {
-        result = shm_backend_create(&context->shared_backend, producer_count);
+        result = shm_backend_create(&context->shared_backend, producer_count, NULL);
     }
     if (result.status != MPMC_OK) {
         free(context);
@@ -107,7 +107,7 @@ void ipc_worker_close(ipc_context_t *context) {
     if (context->mode == IPC_MESSAGE_QUEUE) {
         msg_backend_worker_close(context->message_backend);
     } else {
-        shm_backend_worker_close(context->shared_backend);
+        (void)shm_backend_worker_close(context->shared_backend, NULL);
     }
     free(context);
 }
@@ -117,7 +117,7 @@ void ipc_destroy(ipc_context_t *context) {
     if (context->mode == IPC_MESSAGE_QUEUE) {
         msg_backend_destroy(context->message_backend);
     } else {
-        shm_backend_destroy(context->shared_backend);
+        (void)shm_backend_destroy(context->shared_backend, NULL);
     }
     free(context);
 }

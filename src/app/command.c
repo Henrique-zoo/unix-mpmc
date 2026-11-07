@@ -58,9 +58,7 @@ static bool next_token(const char **cursor, token_t *token) {
         ++*cursor;
     }
 
-    if (**cursor == '\0') {
-        return false;
-    }
+    if (**cursor == '\0') return false;
 
     start = *cursor;
     while (**cursor != '\0' && !is_blank((unsigned char)**cursor)) {
@@ -77,9 +75,7 @@ static bool token_equals(token_t token, const char *text) {
     size_t index = 0;
 
     while (text[index] != '\0') {
-        if (index >= token.length || token.text[index] != text[index]) {
-            return false;
-        }
+        if (index >= token.length || token.text[index] != text[index]) return false;
         ++index;
     }
 
@@ -104,23 +100,17 @@ static bool token_equals(token_t token, const char *text) {
 static bool parse_unsigned(token_t token, uintmax_t limit, uintmax_t *value) {
     uintmax_t parsed = 0;
 
-    if (token.length == 0u) {
-        return false;
-    }
+    if (token.length == 0u) return false;
 
     for (size_t index = 0; index < token.length; ++index) {
         unsigned char character = (unsigned char)token.text[index];
         uintmax_t digit;
 
-        if (character < (unsigned char)'0' || character > (unsigned char)'9') {
-            return false;
-        }
+        if (character < (unsigned char)'0' || character > (unsigned char)'9') return false;
 
         digit = (uintmax_t)(character - (unsigned char)'0');
 
-        if (parsed > limit / 10u || (parsed == limit / 10u && digit > limit % 10u)) {
-            return false;
-        }
+        if (parsed > limit / 10u || (parsed == limit / 10u && digit > limit % 10u)) return false;
 
         parsed = parsed * 10u + digit;
     }
@@ -159,21 +149,15 @@ mpmc_result_t command_parse(const char *line, command_t *out) {
     uintmax_t ack;
     bool has_ampersand = false;
 
-    if (line == NULL || out == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-    }
+    if (line == NULL || out == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 
     cursor = line;
     while (count < (size_t)CMD_MAX_TOKENS && next_token(&cursor, &tokens[count])) {
         ++count;
     }
-    if (next_token(&cursor, &extra)) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-    }
+    if (next_token(&cursor, &extra)) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 
-    if (count == 0u) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-    }
+    if (count == 0u) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 
     if (strip_ampersand(&tokens[count - 1u])) {
         has_ampersand = true;
@@ -182,14 +166,10 @@ mpmc_result_t command_parse(const char *line, command_t *out) {
         }
     }
 
-    if (count == 0u) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-    }
+    if (count == 0u) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 
     if (token_equals(tokens[0], "shutdown")) {
-        if (count != 1u) {
-            return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-        }
+        if (count != 1u) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 
         parsed.kind = COMMAND_SHUTDOWN;
         parsed.producer_id = 0u;
@@ -208,9 +188,7 @@ mpmc_result_t command_parse(const char *line, command_t *out) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
-    if (count != 4u) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-    }
+    if (count != 4u) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 
     if (!parse_unsigned(tokens[1], (uintmax_t)SIZE_MAX, &index)
         || !parse_unsigned(tokens[2], (uintmax_t)UINT_MAX, &message_count)
@@ -231,9 +209,7 @@ mpmc_result_t command_validate(const command_t *command, size_t producer_count) 
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
-    if (command->kind == COMMAND_SHUTDOWN) {
-        return (mpmc_result_t){.status = MPMC_OK};
-    }
+    if (command->kind == COMMAND_SHUTDOWN) return (mpmc_result_t){.status = MPMC_OK};
 
     if (command->kind != COMMAND_PRODUCE && command->kind != COMMAND_CONSUME) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
