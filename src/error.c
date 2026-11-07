@@ -74,15 +74,11 @@ const char *mpmc_status_str(mpmc_status_t status) {
 }
 
 int mpmc_error_format(mpmc_result_t error, char *buffer, size_t capacity) {
-    if (buffer == NULL && capacity > 0) {
-        return -1;
-    }
+    if (buffer == NULL && capacity > 0) return -1;
 
     const char *description = mpmc_status_str(error.status);
 
-    if (error.system_errno == 0) {
-        return snprintf(buffer, capacity, "%s", description);
-    }
+    if (error.system_errno == 0) return snprintf(buffer, capacity, "%s", description);
 
     size_t length = strlen(description);
 
