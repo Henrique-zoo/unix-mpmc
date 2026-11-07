@@ -21,9 +21,9 @@ union mpmc_semun {
 };
 
 /**
- * @brief Retorna código de erro correspondente definidos no switch case.
+ * @brief Retorna código de erro correspondente ao errno informado, definido no switch.
  * @param numero_erro Codigo do errno.
- * @return O status e o errno original
+ * @return Status e o errno original
  */
 static mpmc_result_t sem_error_result(int numero_erro) {
     mpmc_status_t estado = MPMC_ERR_SYS;
@@ -106,13 +106,6 @@ static mpmc_result_t sem_validate_index(int semid, unsigned index) {
     };
 }
 
-/**
- * @brief Cria um conjunto de semáforos System V.
- * @param count Quantidade de semáforos do conjunto (número positivo)
- * @param[out] out_semid Endereço que recebe o identificador retornado por semget()
- * @return MPMC_OK em caso de sucesso, MPMC_ERR_INVALID_ARG para argumentos
- * inválidos ou o erro correspondente.
- */
 mpmc_result_t sysv_sem_create(unsigned count, int *out_semid) {
     int identificador_sem;
     int numero_erro;
@@ -137,14 +130,6 @@ mpmc_result_t sysv_sem_create(unsigned count, int *out_semid) {
     };
 }
 
-/**
- * @brief Atribui valor inicial a um semáforo do conjunto.
- * @param semid Identificador do conjunto.
- * @param index Índice do semáforo começando em 0.
- * @param value Valor inicial a ser atribuído.
- * @return MPMC_OK em caso de sucesso, MPMC_ERR_INVALID_ARG para argumentos
- * inválidos, MPMC_ERR_INVALID_INDEX para índice inexistente ou o erro correspondente.
- */
 mpmc_result_t sysv_sem_set(int semid, unsigned index, unsigned value) {
     mpmc_result_t resultado_validacao;
     union mpmc_semun argumento;
@@ -185,16 +170,6 @@ mpmc_result_t sysv_sem_set(int semid, unsigned index, unsigned value) {
     };
 }
 
-/**
- * @brief Efetua operação P/V sobre um semáforo utilizando semop().
- * @param semid Identificador do conjunto de semáforos.
- * @param index Índice no conjunto
- * @param delta Valor da operação: negativo para reservar (P), positivo para liberar (V)
- * e zero para aguardar até que o semáforo tenha valor zero.
- * @param nowait Se true, usa IPC_NOWAIT para não bloquear.
- * @return MPMC_OK em caso de sucesso ou o erro correspondente.
- * @note Operações interrompidas por EINTR não são repetidas automaticamente.
- */
 mpmc_result_t sysv_sem_change(int semid, unsigned index, short delta, bool nowait) {
     mpmc_result_t resultado_validacao;
     struct sembuf operacao;
@@ -228,12 +203,6 @@ mpmc_result_t sysv_sem_change(int semid, unsigned index, short delta, bool nowai
     };
 }
 
-/**
- * @brief Remove um conjunto de semáforos System V (IPC_RMID).
- * @param semid Identificador do conjunto pertencente ao supervisor.
- * @return MPMC_OK em caso de sucesso ou o erro correspondente.
- * @note A remoção pode interromper processos bloqueados em semop().
- */
 mpmc_result_t sysv_sem_remove(int semid) {
     int resultado_remocao;
     int numero_erro;
