@@ -1,9 +1,7 @@
 # unix-mpmc — múltiplos produtores/consumidores com IPC System V
 # Uso: make | make debug | make release | make test | make unit | make docs | make docs-clean | make clean
 
-ifeq ($(origin CC),default)
-  CC := clang
-endif
+CC := clang
 MODE ?= debug
 
 CPPFLAGS += -Iinclude -D_POSIX_C_SOURCE=200809L
