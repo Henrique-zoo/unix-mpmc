@@ -70,17 +70,22 @@ $(UNIT_DIR)/test_error: tests/unit/test_error.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+$(UNIT_DIR)/test_shm: tests/unit/test_shm.c src/ipc/shm.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_message_metadata: tests/unit/test_message_metadata.c src/workers/producer.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
 unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
-		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_message_metadata
+		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_shm $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_message_metadata
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
 	@$(UNIT_DIR)/test_msg
 	@$(UNIT_DIR)/test_sem
 	@$(UNIT_DIR)/test_error
+	@$(UNIT_DIR)/test_shm
 	@$(UNIT_DIR)/test_message_metadata
 
 # Testes básicos: o loop interativo deve aceitar o comando shutdown.
