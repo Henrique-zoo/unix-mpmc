@@ -21,6 +21,7 @@ não é suficiente para provar correção concorrente.
 | U07 | `producer` | Mapeamento *striped* com `n` divisível/não divisível por `p` |
 | U08 | `message` | Sequências crescentes por PID de produtor; timestamps preenchidos |
 | U09 | `status` | Conversão de códigos de retorno a mensagens legíveis |
+| U10	| `sem` | Criação, inicialização, operações P/V, IPC_NOWAIT, índice inválido, interrupção por EINTR e remoção de semáforos |
 
 ## Testes de integração (repetir para modos 1 e 2)
 
@@ -77,7 +78,7 @@ recursos IPC de outros usuários/processos por `ipcrm`.
 
 ```bash
 make debug
-make unit   # testes de command, supervisor, msg e error
+make unit   # testes de command, supervisor, msg, sem e error
 make test   # unitários + smoke + integração do REPL
 make docs
 ```
