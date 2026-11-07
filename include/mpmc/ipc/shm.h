@@ -7,6 +7,7 @@
 #define MPMC_IPC_SHM_H
 
 #include <stddef.h>
+#include <sys/shm.h>
 
 #include "mpmc/error.h"
 
@@ -135,6 +136,39 @@ mpmc_result_t sysv_shm_detach(const void *address);
  * @see sysv_shm_detach
  */
 mpmc_result_t sysv_shm_remove(int shmid);
+
+/**
+ * @brief Consulta as informações de um segmento de memória compartilhada System V.
+ *
+ * @details
+ * Utiliza shmctl() com IPC_STAT para recuperar os metadados do segmento
+ * identificado por @p shmid, incluindo tamanho, permissões, proprietário
+ * e quantidade de associações existentes.
+ *
+ * As informações são armazenadas em @p out_info somente quando a
+ * operação é concluída com sucesso.
+ *
+ * @param shmid Identificador do segmento de memória compartilhada.
+ * @param[out] out_info Ponteiro que recebe os metadados do segmento.
+ *
+ * @return Estrutura mpmc_result_t com um dos seguintes estados:
+ * - MPMC_OK: informações recuperadas com sucesso.
+ * - MPMC_ERR_INVALID_ARG: identificador negativo ou ponteiro de saída nulo.
+ * - MPMC_ERR_SYS: falha em shmctl(), com o erro original armazenado em
+ *   system_errno.
+ *
+ * @pre out_info deve apontar para uma estrutura shmid_ds válida.
+ *
+ * @post Em caso de sucesso, *out_info contém os metadados do segmento.
+ * Em caso de falha, *out_info permanece inalterado.
+ *
+ * @note O campo shm_segsz de shmid_ds informa o tamanho do segmento,
+ * em bytes, permitindo verificar o requisito de 2048 bytes do projeto.
+ *
+ * @note A operação não modifica o conteúdo nem as propriedades
+ * do segmento consultado.
+ */
+mpmc_result_t sysv_shm_stat(int shmid, struct shmid_ds *out_info);
 
 /** @} */
 #endif

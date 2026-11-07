@@ -21,23 +21,95 @@
 
 /**
  * @brief Estado opaco do backend por memória compartilhada.
- * @details Contém IDs dos segmentos System V (2048 bytes cada), conjuntos de
- * semáforos, mapeamentos atuais e infraestrutura de ACK/estatísticas.
+ * @details Mantém os segmentos System V de 2048 bytes e suas associações locais.
  * Apenas `ipc/transport.c` deve acessar diretamente esta interface.
  */
 typedef struct shm_backend shm_backend_t;
 
+/** @brief Operação de liberação que originou um diagnóstico de cleanup. */
+typedef enum {
+    SHM_CLEANUP_DETACH, /**< Falha ao desassociar um mapeamento com shmdt(). */
+    SHM_CLEANUP_REMOVE  /**< Falha ao remover um segmento com shmctl(IPC_RMID). */
+} shm_cleanup_operation_t;
+
 /**
- * @brief Inicializa um segmento de 2048 bytes e semáforos por produtor lógico.
- * @param out Recebe o backend criado; NULL em falha.
- * @param producer_count Número positivo de estruturas independentes.
- * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
- * os valores possíveis de status e system_errno não podem ser verificados.
- * @post Em erro, remove segmentos/semáforos criados parcialmente.
- * @details O layout deve caber EXATAMENTE no segmento exigido pelo trabalho;
- * usar sizeof/alinhamento real para calcular a capacidade do buffer.
+ * @brief Diagnóstico de uma falha individual na liberação de um segmento.
+ * @details Os campos são copiados por valor e não dependem do estado do backend
+ * após sua liberação. O registro recebido pela callback só é válido durante a
+ * chamada; copie o conteúdo de *error, não o ponteiro error, para armazenar o
+ * diagnóstico. A cópia pertence ao chamador e não exige liberação adicional.
+ * @see @ref shm_cleanup_diagnostics para o fluxo e um exemplo de coleta.
  */
-mpmc_result_t shm_backend_create(shm_backend_t **out, size_t producer_count);
+typedef struct {
+    shm_cleanup_operation_t operation; /**< Operação de liberação que falhou. */
+    size_t producer_id;                /**< Índice lógico da estrutura, no intervalo 1..p. */
+    int shmid;                         /**< Identificador do segmento envolvido, inclusive zero. */
+    mpmc_result_t result;              /**< Falha individual, com o errno original preservado. */
+} shm_cleanup_error_t;
+
+/**
+ * @brief Recebe uma falha individual durante a limpeza do backend.
+ * @param error Diagnóstico válido somente durante a chamada.
+ * @param user_data Ponteiro fornecido pelo chamador, sem interpretação pelo backend;
+ * pode ser NULL se a callback não precisar de estado adicional.
+ * @details Este tipo declara um ponteiro para função. O chamador atribui sua
+ * função ao campo on_error de shm_cleanup_reporter_t. A cada falha de liberação,
+ * o backend executa on_error(error, user_data), no mesmo fluxo da chamada que
+ * está realizando a limpeza.
+ *
+ * A callback não é chamada para operações bem-sucedidas. Em rollback, recebe
+ * somente as falhas de liberação; a falha que impediu a criação é retornada por
+ * shm_backend_create(). O retorno da callback é void: ela registra ou apresenta
+ * o diagnóstico e retorna para que a limpeza prossiga.
+ * @note A callback não deve destruir o backend que já está sendo limpo, nem
+ * invalidar o reporter ou seus dados antes que a chamada de limpeza termine.
+ * @see @ref shm_cleanup_diagnostics para um exemplo de implementação.
+ */
+typedef void (*shm_cleanup_error_fn)(const shm_cleanup_error_t *error, void *user_data);
+
+/**
+ * @brief Destino opcional dos diagnósticos individuais de cleanup.
+ * @details O backend não retém este objeto nem adquire a propriedade de user_data.
+ * Ambos devem permanecer válidos durante a operação que recebe o reporter.
+ * O campo on_error informa qual função executar; user_data informa onde essa
+ * função encontra o estado do chamador, como um buffer de diagnósticos.
+ *
+ * O reporter vale somente para a chamada que o recebe. Passá-lo a create()
+ * habilita os diagnósticos de rollback dessa criação; passe-o novamente a
+ * worker_close() ou destroy() para receber os diagnósticos dessas operações.
+ *
+ * Não há alocação de uma lista de erros pelo backend. Um reporter nulo ou uma
+ * callback nula desabilita os diagnósticos, preservando o resultado de retorno.
+ * @see @ref shm_cleanup_diagnostics para armazenamento, duração dos dados e resultados.
+ */
+typedef struct {
+    shm_cleanup_error_fn on_error; /**< Callback chamada uma vez para cada falha de liberação. */
+    void *user_data;               /**< Dados repassados à callback, pertencentes ao chamador. */
+} shm_cleanup_reporter_t;
+
+/**
+ * @brief Cria e associa um segmento de 2048 bytes por estrutura lógica.
+ * @param[out] out Recebe o backend criado; recebe NULL em falha, quando o ponteiro é válido.
+ * @param producer_count Número positivo de estruturas independentes.
+ * @param reporter Destino dos diagnósticos de rollback; pode ser NULL.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: backend alocado e todos os segmentos criados e associados ao processo;
+ *   system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: out nulo ou producer_count zero; system_errno é zero.
+ * - MPMC_ERR_SYS: falha em malloc(), calloc(), shmget() ou shmat(); system_errno contém
+ *   o errno capturado na operação que falhou, preservado durante a limpeza.
+ * @post Em sucesso, *out contém o backend com producer_count segmentos associados.
+ * Em falha, *out permanece NULL quando out é válido, as alocações locais são liberadas
+ * e a limpeza dos segmentos parcialmente criados é tentada.
+ * @note Falhas de rollback são comunicadas por reporter e não substituem o erro
+ * original de criação ou associação retornado pela função. Sem reporter habilitado,
+ * essas falhas secundárias não ficam disponíveis após o retorno.
+ * @note A criação de semáforos e a inicialização do layout do buffer circular ainda
+ * não estão implementadas nesta função.
+ */
+mpmc_result_t shm_backend_create(
+    shm_backend_t **out, size_t producer_count, const shm_cleanup_reporter_t *reporter
+);
 
 /**
  * @brief Insere mensagem no buffer circular do índice escolhido.
@@ -113,20 +185,36 @@ shm_backend_consumed_count(shm_backend_t *backend, size_t producer_id, uint64_t 
 
 /**
  * @brief Desanexa mapeamentos herdados pelo processo filho.
- * @param backend Instância herdada após fork().
- * @details Chama shmdt() conforme necessário e libera estruturas apenas locais
- * a este processo. Não remove os segmentos nem semáforos globais.
+ * @param backend Instância herdada após fork(); NULL é permitido.
+ * @param reporter Destino dos diagnósticos de liberação; pode ser NULL.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: associações locais desfeitas e estado local liberado, ou backend nulo;
+ *   system_errno é zero.
+ * - MPMC_ERR_SYS: falha em shmdt(); system_errno contém o errno capturado na primeira
+ *   falha. Cada falha individual é comunicada por reporter, quando habilitado.
+ * @details Tenta todas as desassociações, mesmo após uma falha, e libera o estado
+ * local. Os segmentos globais permanecem sob responsabilidade do supervisor.
+ * @post O backend é liberado mesmo em erro e não pode ser reutilizado após o retorno.
  */
-void shm_backend_worker_close(shm_backend_t *backend);
+mpmc_result_t
+shm_backend_worker_close(shm_backend_t *backend, const shm_cleanup_reporter_t *reporter);
 
 /**
  * @brief Remove objetos IPC e libera estado pertencente ao processo pai.
  * @param backend Instância criada pelo supervisor; NULL é permitido.
+ * @param reporter Destino dos diagnósticos de liberação; pode ser NULL.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: desassociações e solicitações de remoção concluídas, ou backend nulo;
+ *   system_errno é zero.
+ * - MPMC_ERR_SYS: falha em shmdt() ou shmctl(IPC_RMID); system_errno contém o errno
+ *   capturado na primeira falha. Cada falha individual é comunicada por reporter,
+ *   quando habilitado.
  * @pre Todos os trabalhadores foram interrompidos/recolhidos.
- * @details Remove segmentos shm e semáforos System V via IPC_RMID. Evita
- * remover identificadores que não foram realmente criados pela instância.
+ * @details Aceita estado parcialmente inicializado. Tenta todas as desassociações
+ * e remoções de segmentos, mesmo após falhas, e libera as alocações locais.
+ * @post O backend é liberado mesmo em erro e não pode ser reutilizado após o retorno.
  */
-void shm_backend_destroy(shm_backend_t *backend);
+mpmc_result_t shm_backend_destroy(shm_backend_t *backend, const shm_cleanup_reporter_t *reporter);
 
 /** @} */
 #endif

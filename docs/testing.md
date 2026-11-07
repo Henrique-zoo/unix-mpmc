@@ -83,7 +83,7 @@ recursos IPC de outros usuários/processos por `ipcrm`.
 
 ```bash
 make debug
-make unit   # testes de command, supervisor, msg, sem, error e wrappers de shm
+make unit   # testes de command, supervisor, msg, sem, error, wrappers e backend de shm
 make test   # unitários + smoke + integração do REPL
 make docs
 ```
@@ -105,6 +105,14 @@ seu vínculo, que o mapeamento do pai continua válido após `IPC_RMID` e que a 
 desassociação destrói o segmento. O cleanup de segurança remove somente segmentos
 criados pelo teste; a coleta do filho usa `alarm(3)` e espera bloqueante por sinais
 para detectar travamentos, sem consultas periódicas.
+
+Os testes de `shm_backend` usam alocações e wrappers substituídos apenas no objeto
+de teste para injetar falhas de `malloc()`, `calloc()`, criação e associação em
+cada posição. Verificam rollback completo, tratamento do identificador zero,
+`destroy(NULL)`, liberação somente local pelo worker e continuidade após múltiplas
+falhas de cleanup. Uma callback copia os diagnósticos e altera `errno` para verificar
+que cada falha e o erro original da criação continuam preservados. Os testes também
+conferem que a limpeza libera o estado local uma única vez e não aloca diagnósticos.
 
 Os *smoke tests* do Makefile validam somente a capacidade de iniciar e executar `shutdown`.
 Os testes de integração acima são casos a **implementar**. Para que scripts automatizados
