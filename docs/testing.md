@@ -50,6 +50,7 @@ não é suficiente para provar correção concorrente.
 | I20 | Multiprodutores com ACK concorrente | ACKs não se cruzam entre trabalhos |
 | I21 | Tempos de vida dos filhos e do `mpmc` | Relatório apresenta durações não negativas e coerentes |
 | I22 | Mensagem e relatório final | ID/PID do produtor correlacionam com suas mensagens; relatório de consumidor não sobrescreve os metadados do produtor |
+| I23 | Inicialização com `p` no limite e acima dele | `p = MPMC_MAX_PRODUCERS` é aceito nos dois paradigmas; `p` maior, inclusive overflow de `size_t`, é recusado com erro e uso, sem iniciar o REPL |
 
 ## Propriedades a verificar
 

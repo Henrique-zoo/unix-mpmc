@@ -36,7 +36,7 @@ static mpmc_result_t parse_positive_integer(const char *text, size_t *out);
  *
  * @details
  * Espera exatamente dois argumentos:
- * - Número de produtores lógicos, inteiro estritamente positivo.
+ * - Número de produtores lógicos, inteiro de 1 a MPMC_MAX_PRODUCERS.
  * - Paradigma IPC: 1 para memória compartilhada ou 2 para filas de mensagens.
  *
  * Em caso de argumentos inválidos, apresenta uma mensagem de erro
@@ -50,7 +50,9 @@ int main(int argc, char *argv[]) {
     if (error.status != MPMC_OK) {
         (void)mpmc_error_format(error, error_text, sizeof error_text);
         fprintf(stderr, "%s\n", error_text);
-        fprintf(stderr, "Uso: %s <produtores> <paradigma>\n", argv[0]);
+        fprintf(
+            stderr, "Uso: %s <produtores: 1..%u> <paradigma: 1|2>\n", argv[0], MPMC_MAX_PRODUCERS
+        );
         return EXIT_FAILURE;
     }
 
@@ -88,8 +90,7 @@ int main(int argc, char *argv[]) {
  * verificando a quantidade e a validade dos parâmetros.
  *
  * São exigidos exatamente dois argumentos:
- * - Número de produtores lógicos: inteiro estritamente positivo,
- *   representável em size_t.
+ * - Número de produtores lógicos: inteiro de 1 a MPMC_MAX_PRODUCERS.
  * - Paradigma IPC: IPC_SHARED_MEMORY ou IPC_MESSAGE_QUEUE.
  *
  * A conversão numérica é delegada a parse_positive_integer().
@@ -102,9 +103,9 @@ int main(int argc, char *argv[]) {
  * - MPMC_OK: quantidade de estruturas e paradigma validados e escritos em out; system_errno é
  *   zero.
  * - MPMC_ERR_INVALID_ARG: argc diferente de três, argv ou out nulo, formato/valor numérico
- *   inválido ou paradigma diferente de 1/2. Se strtoumax() falhar na conversão de um argumento,
- *   system_errno preserva o errno capturado, inclusive ERANGE; nas demais rejeições,
- *   system_errno é zero.
+ *   inválido, quantidade acima de MPMC_MAX_PRODUCERS ou paradigma diferente de 1/2. Se
+ *   strtoumax() falhar na conversão de um argumento, system_errno preserva o errno capturado,
+ *   inclusive ERANGE; nas demais rejeições, system_errno é zero.
  *         argumentos inválido, ou ponteiro de saída nulo.
  *
  * @post Em caso de sucesso, *out contém a configuração validada.
@@ -123,6 +124,9 @@ static mpmc_result_t parse_args(int argc, char *argv[], mpmc_config_t *out) {
     mpmc_result_t error = parse_positive_integer(argv[1], &producer_count);
     if (error.status != MPMC_OK) {
         return error;
+    }
+    if (producer_count > MPMC_MAX_PRODUCERS) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
     error = parse_positive_integer(argv[2], &parsed_mode);
