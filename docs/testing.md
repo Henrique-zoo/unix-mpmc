@@ -83,7 +83,7 @@ recursos IPC de outros usuários/processos por `ipcrm`.
 
 ```bash
 make debug
-make unit   # testes de command, supervisor, msg, sem e error
+make unit   # testes de command, supervisor, msg, sem, error e wrappers de shm
 make test   # unitários + smoke + integração do REPL
 make docs
 ```
@@ -97,6 +97,14 @@ validação sem causa de sistema usam zero; falhas preservam a causa original me
 limpeza ou mudança do `errno` corrente. São exercitados `EAGAIN`, `ENOMSG`, `EINTR`,
 `E2BIG`, falha de `fork()` e falha de escrita do relatório. A formatação também cobre
 consulta de capacidade, truncamento e diagnósticos com causa de sistema.
+
+Os testes de `shm` exercitam os quatro wrappers, verificam segmentos independentes de
+2048 bytes com permissões 0600 via `IPC_STAT` e conferem a preservação dos parâmetros
+de saída em falhas. Um cenário com `fork()` verifica que o filho desassocia apenas
+seu vínculo, que o mapeamento do pai continua válido após `IPC_RMID` e que a última
+desassociação destrói o segmento. O cleanup de segurança remove somente segmentos
+criados pelo teste; a coleta do filho usa `alarm(3)` e espera bloqueante por sinais
+para detectar travamentos, sem consultas periódicas.
 
 Os *smoke tests* do Makefile validam somente a capacidade de iniciar e executar `shutdown`.
 Os testes de integração acima são casos a **implementar**. Para que scripts automatizados
