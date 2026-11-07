@@ -57,20 +57,21 @@ size_t ipc_producer_count(const ipc_context_t *context);
 /**
  * @brief Envia uma mensagem a uma estrutura lógica.
  * @param context Transporte inicializado e válido no processo atual.
- * @param producer_id Índice de destino, no intervalo 1..p.
+ * @param producer_id Índice lógico da fila de destino, no intervalo 1..p; não é PID.
  * @param message Mensagem lógica; a implementação não altera o objeto passado.
  * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
  * os valores possíveis de status e system_errno não podem ser verificados.
  * @details Pode bloquear aguardando espaço. Confirmações, quando solicitadas,
  * são independentes da conclusão desta função: envio != consumo.
- * @pre message->ack_required exige um ipc_ack_begin() válido para operation_id.
+ * @pre message->ack_required exige ipc_ack_begin() prévio para o
+ * message->operation_id. O backend preserva sender_pid, sequence e sent_at.
  */
 mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message_t *message);
 
 /**
  * @brief Retira uma única mensagem de uma estrutura lógica.
  * @param context Transporte inicializado.
- * @param producer_id Índice de origem, no intervalo 1..p.
+ * @param producer_id Índice lógico da fila de origem, no intervalo 1..p; não é PID do emissor.
  * @param out Recebe a mensagem removida se retornar MPMC_OK.
  * @param blocking Se true, aguarda um item; se false, não espera.
  * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
@@ -86,7 +87,7 @@ ipc_receive(ipc_context_t *context, size_t producer_id, message_t *out, bool blo
 /**
  * @brief Prepara o contexto de ACK de uma operação produtora.
  * @param context Transporte no processo produtor.
- * @param operation_id ID único e não zero atribuído pelo supervisor.
+ * @param operation_id ID único e não zero do trabalho produtor, atribuído pelo supervisor.
  * @param expected Número total de mensagens a confirmar, de 1 a 1024.
  * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
  * os valores possíveis de status e system_errno não podem ser verificados.

@@ -21,7 +21,8 @@ não é suficiente para provar correção concorrente.
 | U07 | `producer` | Mapeamento *striped* com `n` divisível/não divisível por `p` |
 | U08 | `message` | Sequências crescentes por PID de produtor; timestamps preenchidos |
 | U09 | `status` | Conversão de códigos de retorno a mensagens legíveis |
-| U10	| `sem` | Criação, inicialização, operações P/V, IPC_NOWAIT, índice inválido, interrupção por EINTR e remoção de semáforos |
+| U10 | `message`/ACK | Identidade `(operation_id, sender_pid, sequence)` preservada até o ACK; `sent_at` não é usado como chave |
+| U11	| `sem` | Criação, inicialização, operações P/V, IPC_NOWAIT, índice inválido, interrupção por EINTR e remoção de semáforos |
 
 ## Testes de integração (repetir para modos 1 e 2)
 
@@ -48,12 +49,16 @@ não é suficiente para provar correção concorrente.
 | I19 | Estatísticas finais | Soma por estrutura equivale aos consumos válidos |
 | I20 | Multiprodutores com ACK concorrente | ACKs não se cruzam entre trabalhos |
 | I21 | Tempos de vida dos filhos e do `mpmc` | Relatório apresenta durações não negativas e coerentes |
+| I22 | Mensagem e relatório final | ID/PID do produtor correlacionam com suas mensagens; relatório de consumidor não sobrescreve os metadados do produtor |
 
 ## Propriedades a verificar
 
 - `consumidas(i) <= produzidas(i)` sempre, para cada estrutura `i`.
 - O número de mensagens retiradas globalmente equivale à soma dos relatórios dos consumidores.
 - Para cada mensagem produzida, há no máximo um consumidor correspondente.
+- `sender_pid`, `sequence` e `sent_at` sobrevivem sem alteração ao transporte; a fila lógica é identificada separadamente pelo índice `producer_id`.
+- Cada ACK corresponde a uma chave de mensagem distinta `(operation_id, sender_pid, sequence)` com `ack_required=true`; o ID do trabalho consumidor não é usado como ID de produção.
+- O relatório do supervisor usa PID e `operation_id` do processo para identificar o trabalho; estatísticas de consumo continuam agrupadas pela fila lógica.
 - Se um produtor conclui normalmente com `ack=1`, todas as mensagens daquele trabalho
   aparecem entre as efetivamente consumidas.
 - Após `shutdown` completo, não há filhos zumbis do `mpmc` nem objetos System V
