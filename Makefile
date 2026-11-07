@@ -49,30 +49,36 @@ $(UNIT_DIR)/supervisor_for_test.o: src/app/supervisor.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Dfork=mpmc_test_fork -c $< -o $@
 
-$(UNIT_DIR)/test_command: tests/unit/test_command.c src/app/command.c src/status.c
+$(UNIT_DIR)/test_command: tests/unit/test_command.c src/app/command.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
-$(UNIT_DIR)/test_message_metadata: tests/unit/test_message_metadata.c src/workers/producer.c
+$(UNIT_DIR)/test_supervisor: tests/unit/test_supervisor.c \
+		$(UNIT_DIR)/supervisor_for_test.o src/app/command.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
-$(UNIT_DIR)/test_supervisor: tests/unit/test_supervisor.c $(UNIT_DIR)/supervisor_for_test.o \
-	src/app/command.c src/status.c
+$(UNIT_DIR)/test_msg: tests/unit/test_msg.c src/ipc/msg.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
-unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_message_metadata
+$(UNIT_DIR)/test_error: tests/unit/test_error.c src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
+		$(UNIT_DIR)/test_error
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
-	@$(UNIT_DIR)/test_message_metadata
+	@$(UNIT_DIR)/test_msg
+	@$(UNIT_DIR)/test_error
 
 # Testes básicos: o loop interativo deve aceitar o comando shutdown.
 test: all unit
 	@printf 'shutdown\n' | ./mpmc 2 1 > /dev/null
 	@printf 'shutdown\n' | ./mpmc 2 2 > /dev/null
 	@sh tests/integration/test_repl.sh ./mpmc
-	@echo 'Unit, startup and REPL tests passed (modes 1 and 2).'
+	@echo 'Unit, startup and REPL tests passed.'
 
 docs:
 	@mkdir -p build/docs

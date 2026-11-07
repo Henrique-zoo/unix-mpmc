@@ -185,7 +185,7 @@ unix-mpmc/
 ├── README.md                # Visão geral e instruções de uso
 ├── .gitignore
 ├── include/mpmc/
-│   ├── status.h             # Códigos de retorno e tratamento de erros
+│   ├── error.h              # Resultados com categoria, causa de sistema e diagnóstico
 │   ├── message.h            # Estrutura lógica das mensagens
 │   ├── app/
 │   │   ├── command.h        # Parsing e validação de comandos
@@ -203,7 +203,7 @@ unix-mpmc/
 │       └── msg.h            # Wrappers de msgget/msgsnd/msgrcv/msgctl
 ├── src/
 │   ├── main.c
-│   ├── status.c
+│   ├── error.c
 │   ├── app/                  # Implementações de command/repl/supervisor
 │   ├── workers/              # Implementações de producer/consumer
 │   └── ipc/                  # Implementações de transporte e wrappers
@@ -351,8 +351,10 @@ Os tempos de duração devem utilizar relógio monotônico (`CLOCK_MONOTONIC`), 
 
 O projeto prevê erros distintos para: argumentos inválidos, índice lógico inexistente,
 falta de mensagens em modo não bloqueante, interrupção por sinal, falha de chamada de sistema
-e encerramento em andamento. O `errno` originado do kernel pode ser preservado pelo wrapper
-para mensagens de diagnóstico (`perror`/`strerror`).
+e encerramento em andamento. As operações retornam `mpmc_result_t`: `status` contém a categoria
+e `system_errno` preserva o `errno` original da falha, inclusive em interrupções ou operações
+que bloqueariam. Sucesso e erros sem causa de sistema usam `system_errno=0`.
+`mpmc_error_format()` produz o diagnóstico sem consultar o valor corrente de `errno`.
 
 A saída de status deve incluir, no mínimo, os requisitos do enunciado: duração de cada
 processo, total consumido por estrutura e tempo total de operação do `mpmc`. A formatação

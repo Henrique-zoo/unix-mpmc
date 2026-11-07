@@ -9,8 +9,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "mpmc/error.h"
 #include "mpmc/ipc/transport.h"
-#include "mpmc/status.h"
 
 /** @ingroup workers
  * @{ */
@@ -32,7 +32,7 @@ typedef struct {
 /** @brief Resultado observado em uma operação de consumo. */
 typedef struct {
     unsigned consumed_count; /**< Mensagens realmente retiradas; nunca mais que n. */
-    mpmc_status_t status;    /**< MPMC_OK se concluiu n, ou erro/insuficiência. */
+    mpmc_result_t error;     /**< Resultado completo, inclusive causa de sistema se houver. */
 } consumer_result_t;
 
 /**
@@ -40,11 +40,9 @@ typedef struct {
  * @param transport Backend IPC inicializado e herdado no filho.
  * @param job Configuração validada da operação de consumo.
  * @param out Resultado preenchido inclusive em consumo parcial.
- * @retval MPMC_OK Exatamente job->message_count mensagens foram consumidas.
- * @retval MPMC_ERR_WOULD_BLOCK O consumidor não bloqueante encontrou
+ * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
+ * os valores possíveis de status e system_errno não podem ser verificados.
  *   menos mensagens que as solicitadas; out->consumed_count informa o total.
- * @retval MPMC_ERR_INTERRUPTED Cancelamento antes de completar a operação.
- * @retval MPMC_ERR_SYS Falha na retirada ou contabilização IPC.
  * @details Cada retirada chama ipc_receive() com blocking=true (ack=1)
  * ou false (ack=2). Confirmação ao produtor e atualização dos totais são
  * responsabilidade do backend, não devem ser duplicadas aqui.
@@ -52,7 +50,7 @@ typedef struct {
  * @post Se algumas mensagens forem retiradas e ocorrer erro, não são
  * devolvidas artificialmente à estrutura.
  */
-mpmc_status_t
+mpmc_result_t
 consumer_run(ipc_context_t *transport, const consumer_job_t *job, consumer_result_t *out);
 
 /** @} */

@@ -25,7 +25,7 @@
  */
 
 #include "mpmc/app/command.h"
-#include "mpmc/status.h"
+#include "mpmc/error.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -84,13 +84,14 @@ static void expect_ok_bg(const char *line, unsigned producers,
                          unsigned n_msgs, unsigned ack, bool background)
 {
     command_t c = make_sentinel();
-    mpmc_status_t status = command_parse(line, &c);
+    mpmc_result_t error = command_parse(line, &c);
+    CHECK(error.system_errno == 0, "parsing não deve carregar erro de sistema");
 
     ++g_checks;
-    if (status != MPMC_OK) {
+    if (error.status != MPMC_OK) {
         ++g_failures;
         fprintf(stderr, "FALHA %s:%d: \"%s\": parse esperava MPMC_OK, "
-                "obtido %d\n", __FILE__, __LINE__, line, (int)status);
+                "obtido %d\n", __FILE__, __LINE__, line, (int)error.status);
         return;
     }
 
@@ -106,9 +107,10 @@ static void expect_ok_bg(const char *line, unsigned producers,
           "\"%s\": background_token esperado %d, obtido %d",
           line, (int)background, (int)c.background_token);
 
-    status = command_validate(&c, (size_t)producers);
-    CHECK(status == MPMC_OK, "\"%s\" p=%u: validate esperava MPMC_OK, "
-          "obtido %d", line, producers, (int)status);
+    error = command_validate(&c, (size_t)producers);
+    CHECK(error.system_errno == 0, "validação não deve carregar erro de sistema");
+    CHECK(error.status == MPMC_OK, "\"%s\" p=%u: validate esperava MPMC_OK, "
+          "obtido %d", line, producers, (int)error.status);
 }
 
 static void expect_ok(const char *line, unsigned producers,
@@ -122,11 +124,12 @@ static void expect_ok(const char *line, unsigned producers,
 static void expect_parse_error(const char *line)
 {
     command_t c = make_sentinel();
-    mpmc_status_t status = command_parse(line, &c);
+    mpmc_result_t error = command_parse(line, &c);
 
-    CHECK(status == MPMC_ERR_INVALID_ARG,
+    CHECK(error.status == MPMC_ERR_INVALID_ARG,
           "\"%s\": parse esperava MPMC_ERR_INVALID_ARG, obtido %d",
-          line, (int)status);
+          line, (int)error.status);
+    CHECK(error.system_errno == 0, "erro de sintaxe deve ter system_errno zero");
     CHECK(sentinel_intact(&c),
           "\"%s\": *out foi modificado em falha de parsing", line);
 }
@@ -136,21 +139,22 @@ static void expect_validate_error(const char *line, unsigned producers,
                                   mpmc_status_t expected)
 {
     command_t c = make_sentinel();
-    mpmc_status_t status = command_parse(line, &c);
+    mpmc_result_t error = command_parse(line, &c);
 
     ++g_checks;
-    if (status != MPMC_OK) {
+    if (error.status != MPMC_OK) {
         ++g_failures;
         fprintf(stderr, "FALHA %s:%d: \"%s\": parse deveria aceitar antes "
                 "da validação semântica, obtido %d\n",
-                __FILE__, __LINE__, line, (int)status);
+                __FILE__, __LINE__, line, (int)error.status);
         return;
     }
 
-    status = command_validate(&c, (size_t)producers);
-    CHECK(status == expected,
+    error = command_validate(&c, (size_t)producers);
+    CHECK(error.system_errno == 0, "erro de validação deve ter system_errno zero");
+    CHECK(error.status == expected,
           "\"%s\" p=%u: validate esperava %d, obtido %d",
-          line, producers, (int)expected, (int)status);
+          line, producers, (int)expected, (int)error.status);
 }
 
 /* ------------------------------------------------------------------ */
@@ -394,25 +398,25 @@ static void test_stage_separation(void)
      * n_msgs e ack fora de faixa, porque a checagem pertence a
      * command_validate.
      */
-    CHECK(command_parse("produz 99 5000 3", &c) == MPMC_OK,
+    CHECK(command_parse("produz 99 5000 3", &c).status == MPMC_OK,
           "parse deveria aceitar valores fora de faixa (etapa sintática)");
     CHECK(c.producer_id == 99 && c.message_count == 5000 && c.ack_mode == 3,
           "parse deveria preservar os valores lidos");
-    CHECK(command_validate(&c, 4) != MPMC_OK,
+    CHECK(command_validate(&c, 4).status != MPMC_OK,
           "validate deveria rejeitar valores fora de faixa");
 
     /* producers nem existe mais na assinatura do parse */
-    CHECK(command_parse("produz 1 5 1", &c) == MPMC_OK,
+    CHECK(command_parse("produz 1 5 1", &c).status == MPMC_OK,
           "parse não depende de producers");
-    CHECK(command_validate(&c, 0) == MPMC_ERR_INVALID_ARG,
+    CHECK(command_validate(&c, 0).status == MPMC_ERR_INVALID_ARG,
           "validate deveria rejeitar producer_count 0");
 
     /* shutdown é aceito por validate independentemente dos campos */
-    CHECK(command_parse("shutdown", &c) == MPMC_OK, "shutdown parse");
+    CHECK(command_parse("shutdown", &c).status == MPMC_OK, "shutdown parse");
     c.producer_id = 999;
     c.message_count = 999;
     c.ack_mode = 999;
-    CHECK(command_validate(&c, 4) == MPMC_OK,
+    CHECK(command_validate(&c, 4).status == MPMC_OK,
           "shutdown ignora campos numéricos em validate");
 }
 
@@ -424,14 +428,14 @@ static void test_argument_guards(void)
 {
     command_t c = make_sentinel();
 
-    CHECK(command_parse(NULL, &c) == MPMC_ERR_INVALID_ARG,
+    CHECK(command_parse(NULL, &c).status == MPMC_ERR_INVALID_ARG,
           "line NULL deveria retornar INVALID_ARG");
     CHECK(sentinel_intact(&c), "*out tocado com line NULL");
 
-    CHECK(command_parse("produz 1 1 1", NULL) == MPMC_ERR_INVALID_ARG,
+    CHECK(command_parse("produz 1 1 1", NULL).status == MPMC_ERR_INVALID_ARG,
           "out NULL deveria retornar INVALID_ARG");
 
-    CHECK(command_validate(NULL, 4) == MPMC_ERR_INVALID_ARG,
+    CHECK(command_validate(NULL, 4).status == MPMC_ERR_INVALID_ARG,
           "validate com command NULL deveria retornar INVALID_ARG");
 }
 
@@ -449,7 +453,7 @@ static void test_validate_direct(void)
     c.producer_id = 1;
     c.message_count = 1;
     c.ack_mode = 1;
-    CHECK(command_validate(&c, 4) == MPMC_ERR_INVALID_ARG,
+    CHECK(command_validate(&c, 4).status == MPMC_ERR_INVALID_ARG,
           "kind fora do enum deveria retornar INVALID_ARG");
 
     /* ordem das checagens: faixas antes do índice */
@@ -458,7 +462,7 @@ static void test_validate_direct(void)
     c.producer_id = 99;   /* índice inválido */
     c.message_count = 0;  /* faixa inválida */
     c.ack_mode = 1;
-    CHECK(command_validate(&c, 4) == MPMC_ERR_INVALID_ARG,
+    CHECK(command_validate(&c, 4).status == MPMC_ERR_INVALID_ARG,
           "faixa deveria ser checada antes do índice");
 
     /* ack inválido com índice inválido: ack tem precedência */
@@ -467,7 +471,7 @@ static void test_validate_direct(void)
     c.producer_id = 99;
     c.message_count = 1;
     c.ack_mode = 3;
-    CHECK(command_validate(&c, 4) == MPMC_ERR_INVALID_ARG,
+    CHECK(command_validate(&c, 4).status == MPMC_ERR_INVALID_ARG,
           "ack deveria ser checado antes do índice");
 
     /* caso puramente de índice */
@@ -476,7 +480,7 @@ static void test_validate_direct(void)
     c.producer_id = 99;
     c.message_count = 1;
     c.ack_mode = 1;
-    CHECK(command_validate(&c, 4) == MPMC_ERR_INVALID_INDEX,
+    CHECK(command_validate(&c, 4).status == MPMC_ERR_INVALID_INDEX,
           "índice fora de 1..p deveria retornar INVALID_INDEX");
 }
 
@@ -511,12 +515,12 @@ static void test_no_side_effects_on_input(void)
     CHECK(memcmp(line, copy, sizeof line) == 0,
           "command_parse modificou a linha do chamador");
 
-    CHECK(command_parse("produz 2 3 1", &c) == MPMC_OK, "reuso 1");
+    CHECK(command_parse("produz 2 3 1", &c).status == MPMC_OK, "reuso 1");
     CHECK(c.kind == COMMAND_PRODUCE && c.producer_id == 2 &&
           c.message_count == 3 && c.ack_mode == 1,
           "reuso 1: valores incorretos");
 
-    CHECK(command_parse("consome 4 9 2", &c) == MPMC_OK, "reuso 2");
+    CHECK(command_parse("consome 4 9 2", &c).status == MPMC_OK, "reuso 2");
     CHECK(c.kind == COMMAND_CONSUME && c.producer_id == 4 &&
           c.message_count == 9 && c.ack_mode == 2,
           "reuso 2: valores incorretos");

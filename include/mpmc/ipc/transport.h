@@ -10,8 +10,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "mpmc/error.h"
 #include "mpmc/message.h"
-#include "mpmc/status.h"
 
 /**
  * @defgroup ipc Comunicação entre processos (IPC)
@@ -39,14 +39,13 @@ typedef struct ipc_context ipc_context_t;
  * @param out Recebe o ponteiro ao contexto, ou NULL em falha.
  * @param producer_count Número de estruturas lógicas; deve ser positivo.
  * @param mode Paradigma 1 ou 2.
- * @retval MPMC_OK Inicialização completa.
- * @retval MPMC_ERR_INVALID_ARG Entrada inválida.
- * @retval MPMC_ERR_SYS Falha do kernel ou alocação; a função limpa recursos
+ * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
+ * os valores possíveis de status e system_errno não podem ser verificados.
  *   criados parcialmente.
  * @par Propriedade
  * O supervisor é o único proprietário; ipc_destroy() deve ser chamado uma vez.
  */
-mpmc_status_t ipc_init(ipc_context_t **out, size_t producer_count, ipc_mode_t mode);
+mpmc_result_t ipc_init(ipc_context_t **out, size_t producer_count, ipc_mode_t mode);
 
 /**
  * @brief Informa a quantidade de estruturas lógicas disponíveis.
@@ -60,16 +59,14 @@ size_t ipc_producer_count(const ipc_context_t *context);
  * @param context Transporte inicializado e válido no processo atual.
  * @param producer_id Índice lógico da fila de destino, no intervalo 1..p; não é PID.
  * @param message Mensagem lógica; a implementação não altera o objeto passado.
- * @retval MPMC_OK Mensagem inserida no backend.
- * @retval MPMC_ERR_INVALID_INDEX Índice de destino fora do intervalo.
- * @retval MPMC_ERR_INTERRUPTED Envio interrompido por cancelamento.
- * @retval MPMC_ERR_SYS Falha em semop(), msgsnd() ou operações associadas.
+ * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
+ * os valores possíveis de status e system_errno não podem ser verificados.
  * @details Pode bloquear aguardando espaço. Confirmações, quando solicitadas,
  * são independentes da conclusão desta função: envio != consumo.
  * @pre message->ack_required exige ipc_ack_begin() prévio para o
  * message->operation_id. O backend preserva sender_pid, sequence e sent_at.
  */
-mpmc_status_t ipc_send(ipc_context_t *context, size_t producer_id, const message_t *message);
+mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message_t *message);
 
 /**
  * @brief Retira uma única mensagem de uma estrutura lógica.
@@ -77,20 +74,14 @@ mpmc_status_t ipc_send(ipc_context_t *context, size_t producer_id, const message
  * @param producer_id Índice lógico da fila de origem, no intervalo 1..p; não é PID do emissor.
  * @param out Recebe a mensagem removida se retornar MPMC_OK.
  * @param blocking Se true, aguarda um item; se false, não espera.
- * @retval MPMC_OK Mensagem efetivamente consumida.
- * @retval MPMC_ERR_WOULD_BLOCK Sem item para retirada imediata.
- * @retval MPMC_ERR_INVALID_INDEX Índice não existente.
- * @retval MPMC_ERR_INTERRUPTED Interrompido por shutdown/sinal.
- * @retval MPMC_ERR_SYS Falha no IPC ou no protocolo de contabilização.
- * @details O backend registra exatamente um consumo e, se
- * out->ack_required=true, emite uma confirmação para a mensagem identificada
- * por (out->operation_id, out->sender_pid, out->sequence). O operation_id do
- * trabalho consumidor não substitui nem modifica os metadados recebidos. Não
- * emitir ACK duplicado.
+ * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
+ * os valores possíveis de status e system_errno não podem ser verificados.
+ * @details O backend registra exatamente um consumo e sinaliza ao produtor
+ * quando a mensagem possuir ack_required=true. Não emitir ACK duplicado.
  * @warning A contagem e a publicação do ACK exigem desenho à prova de falhas
  * para evitar consumo contado mas não confirmado.
  */
-mpmc_status_t
+mpmc_result_t
 ipc_receive(ipc_context_t *context, size_t producer_id, message_t *out, bool blocking);
 
 /**
@@ -98,61 +89,57 @@ ipc_receive(ipc_context_t *context, size_t producer_id, message_t *out, bool blo
  * @param context Transporte no processo produtor.
  * @param operation_id ID único e não zero do trabalho produtor, atribuído pelo supervisor.
  * @param expected Número total de mensagens a confirmar, de 1 a 1024.
- * @retval MPMC_OK Canal/estado de confirmação pronto.
- * @retval MPMC_ERR_INVALID_ARG ID ou quantidade inválida.
- * @retval MPMC_ERR_SYS Falha de alocação de recurso de confirmação.
+ * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
+ * os valores possíveis de status e system_errno não podem ser verificados.
  * @pre Deve ser chamada ANTES do primeiro envio marcado com ack_required.
  */
-mpmc_status_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsigned expected);
+mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsigned expected);
 
 /**
  * @brief Espera o consumo efetivo de todas as mensagens de uma operação.
  * @param context Contexto do processo produtor.
- * @param operation_id Operação produtora previamente registrada com ipc_ack_begin();
- * não é o ID de um consumidor que possa ter retirado as mensagens.
- * @retval MPMC_OK Todas as confirmações chegaram.
- * @retval MPMC_ERR_INTERRUPTED Espera cancelada ou interrompida por shutdown.
- * @retval MPMC_ERR_SYS Falha no canal de controle.
+ * @param operation_id Operação previamente registrada com ipc_ack_begin().
+ * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
+ * os valores possíveis de status e system_errno não podem ser verificados.
  * @pre A operação já enviou as `expected` mensagens correspondentes.
  * @note ACKs recebidos antes desta chamada devem permanecer contabilizados.
  * @warning O protocolo de transporte deve evitar deadlock por saturação de
  * filas/semáforos de confirmação enquanto o envio ainda está em andamento.
  */
-mpmc_status_t ipc_ack_wait(ipc_context_t *context, uint64_t operation_id);
+mpmc_result_t ipc_ack_wait(ipc_context_t *context, uint64_t operation_id);
 
 /**
  * @brief Libera os recursos de ACK de uma operação específica.
  * @param context Contexto do produtor.
  * @param operation_id Identificador preparado em ipc_ack_begin().
- * @retval MPMC_OK Recursos de confirmação liberados.
- * @retval MPMC_ERR_SYS Erro ao liberar recurso IPC de confirmação.
+ * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
+ * os valores possíveis de status e system_errno não podem ser verificados.
  * @note Chamar ao final do trabalho, mesmo quando o envio/espera falhar.
  */
-mpmc_status_t ipc_ack_end(ipc_context_t *context, uint64_t operation_id);
+mpmc_result_t ipc_ack_end(ipc_context_t *context, uint64_t operation_id);
 
 /**
  * @brief Consolida eventos de controle e estatísticas no supervisor.
  * @param context Contexto pertencente ao processo supervisor.
- * @retval MPMC_OK Eventos disponíveis processados sem bloquear.
- * @retval MPMC_ERR_SYS Erro ao obter/publicar eventos de controle.
+ * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
+ * os valores possíveis de status e system_errno não podem ser verificados.
  * @details No modo 2, drena filas de eventos de consumo e atualiza os
  * contadores locais no supervisor. No modo 1, pode ser uma operação vazia:
  * os totais já estão armazenados em memória compartilhada.
  * @warning Não depende de o pai enxergar escritas no heap privado dos filhos.
  */
-mpmc_status_t ipc_poll_events(ipc_context_t *context);
+mpmc_result_t ipc_poll_events(ipc_context_t *context);
 
 /**
  * @brief Obtém o total de mensagens efetivamente consumidas de um índice.
  * @param context Contexto do supervisor.
  * @param producer_id Índice de origem, 1..p.
  * @param out_count Recebe contador acumulado desde ipc_init().
- * @retval MPMC_OK Contador consultado.
- * @retval MPMC_ERR_INVALID_INDEX Índice inválido.
- * @retval MPMC_ERR_SYS Falha ao ler/obter contador.
+ * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
+ * os valores possíveis de status e system_errno não podem ser verificados.
  * @pre No modo 2, chamar ipc_poll_events() antes de obter números finais.
  */
-mpmc_status_t ipc_consumed_count(ipc_context_t *context, size_t producer_id, uint64_t *out_count);
+mpmc_result_t ipc_consumed_count(ipc_context_t *context, size_t producer_id, uint64_t *out_count);
 
 /**
  * @brief Libera vínculos e estruturas locais do contexto em um worker.

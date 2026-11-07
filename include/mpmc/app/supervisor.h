@@ -13,8 +13,8 @@
 #include <sys/types.h>
 
 #include "mpmc/app/command.h"
+#include "mpmc/error.h"
 #include "mpmc/ipc/transport.h"
-#include "mpmc/status.h"
 
 /** @ingroup application
  * @{ */
@@ -59,9 +59,12 @@ typedef struct {
  * @param out Recebe a instância alocada; em falha recebe NULL.
  * @param producer_count Quantidade de estruturas lógicas, estritamente positiva.
  * @param mode Paradigma IPC_SHARED_MEMORY (1) ou IPC_MESSAGE_QUEUE (2).
- * @retval MPMC_OK Supervisor criado.
- * @retval MPMC_ERR_INVALID_ARG Parâmetros inválidos.
- * @retval MPMC_ERR_SYS Falha de alocação ou de chamada de sistema.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: estado local e self-pipe criados; instância escrita em out e system_errno zero.
+ * - MPMC_ERR_INVALID_ARG: out nulo, producer_count zero ou paradigma diferente de 1/2;
+ *   system_errno é zero.
+ * - MPMC_ERR_SYS: falha em calloc(), clock_gettime(), pipe() ou fcntl(); system_errno contém o
+ *   errno capturado na operação que falhou, preservado durante a limpeza.
  * @details Também cria o canal de eventos (self-pipe) não bloqueante usado para
  * acordar o loop de controle; veja supervisor_event_fd().
  * @note A inicialização dos backends IPC ainda não está conectada nesta
@@ -69,54 +72,72 @@ typedef struct {
  * @par Propriedade
  * O chamador deve chamar supervisor_shutdown() e supervisor_destroy().
  */
-mpmc_status_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_mode_t mode);
+mpmc_result_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_mode_t mode);
 
 /**
  * @brief Despacha um comando validado e retorna sem esperar um worker concluir.
  * @param supervisor Instância inicializada.
  * @param command Comando validado para esta instância.
- * @retval MPMC_OK Comando aceito; processo iniciado ou shutdown iniciado.
- * @retval MPMC_ERR_INVALID_ARG Comando não válido.
- * @retval MPMC_ERR_SYS Falha de fork ou outra operação do sistema.
- * @retval MPMC_ERR_SHUTDOWN Instância já está encerrando.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: filho criado e registrado, ou shutdown concluído; system_errno é zero. O sucesso do
+ *   despacho não implica sucesso do trabalho do filho.
+ * - MPMC_ERR_INVALID_ARG: supervisor ou command nulo, ou tipo de comando desconhecido;
+ *   system_errno é zero.
+ * - MPMC_ERR_SHUTDOWN: instância já marcada como encerrando; system_errno é zero.
+ * - MPMC_ERR_STATE: identificadores de operação esgotados; system_errno é zero.
+ * - MPMC_ERR_SYS: falha em realloc(), clock_gettime(), sigprocmask() ou fork(); no comando
+ *   shutdown, também pode propagar falha em kill(), waitpid() ou read(). system_errno contém o
+ *   errno capturado na operação que falhou. Em overflow de capacidade ou falha interna propagada
+ *   pelo shutdown, esse campo é zero.
  * @details Cada comando de trabalho recebe um operation_id não nulo antes de
  * fork(); o pai registra PID, tipo e identidade da operação sem executar o
  * trabalho. Até a implementação dos módulos workers/IPC, o filho reporta que
  * a operação não está disponível e termina com erro.
  * @note COMMAND_SHUTDOWN delega a supervisor_shutdown().
  */
-mpmc_status_t supervisor_dispatch(supervisor_t *supervisor, const command_t *command);
+mpmc_result_t supervisor_dispatch(supervisor_t *supervisor, const command_t *command);
 
 /**
  * @brief Recolhe filhos encerrados sem bloquear, quando solicitado.
  * @param supervisor Instância viva do supervisor.
  * @param blocking Se false, usa waitpid(..., WNOHANG) repetidamente; se true,
  * espera até não haver mais filhos registrados (utilizar após cancelamento).
- * @retval MPMC_OK Recolhimento realizado ou nenhum filho pendente.
- * @retval MPMC_ERR_SYS Erro irrecuperável em waitpid() ou registro de filho
- * cujo estado já foi coletado por outro processo. Um filho que termina por sinal
- * (por exemplo SIGKILL externo) NÃO é erro: é informado em stderr e o REPL e os
- * demais jobs seguem normalmente.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: verificação/coleta concluída ou nenhum filho pronto para coleta; system_errno é
+ *   zero.
+ * - MPMC_ERR_INVALID_ARG: supervisor nulo; system_errno é zero.
+ * - MPMC_ERR_SYS: falha em waitpid() ou em read() ao drenar o self-pipe, com o errno capturado
+ *   em system_errno. O campo é zero para EOF inesperado no pipe, estado de término inesperado ou
+ *   falta de capacidade para registrar o relatório.
+ *
+ * ECHILD é preservado em system_errno quando o estado de um filho registrado não está mais
+ * disponível. EINTR em waitpid() ou read() é repetido. O término do filho por código de falha ou
+ * sinal, por si só, não altera o status da coleta para erro.
  * @details EINTR é repetido; término natural, falha e sinal são associados ao
  * PID, tipo de trabalho e operation_id registrados, e cada filho recolhido
  * gera um child_report_t consultável por supervisor_report_get().
  * @note Tratadores SIGCHLD só sinalizam a necessidade de coleta; waitpid()
  * é executado fora do contexto de sinal.
  */
-mpmc_status_t supervisor_reap(supervisor_t *supervisor, bool blocking);
+mpmc_result_t supervisor_reap(supervisor_t *supervisor, bool blocking);
 
 /**
  * @brief Impede novos comandos, termina filhos e os recolhe.
  * @param supervisor Supervisor que ainda detém os recursos globais.
- * @retval MPMC_OK Encerramento executado sem falhas relevantes.
- * @retval MPMC_ERR_SYS Algum filho ou recurso não pôde ser encerrado/removido.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: encerramento e coleta concluídos sem falhas reportadas, inclusive em chamadas
+ *   repetidas; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: supervisor nulo; system_errno é zero.
+ * - MPMC_ERR_SYS: falha em kill(), waitpid() ou read(), com o errno capturado em system_errno.
+ *   ESRCH de kill() é ignorado. Falhas internas de coleta ou EOF inesperado no self-pipe são
+ *   propagados com system_errno zero.
  * @details Impede novos comandos, envia SIGTERM aos filhos, executa waitpid()
  * e processa o ponto de integração de eventos. A remoção de recursos IPC e o
  * relatório de métricas dependem dos backends ainda não implementados.
  * @post Nenhum filho registrado permanece ativo.
  * @note Deve ser segura contra chamadas repetidas (idempotência de shutdown).
  */
-mpmc_status_t supervisor_shutdown(supervisor_t *supervisor);
+mpmc_result_t supervisor_shutdown(supervisor_t *supervisor);
 
 /**
  * @brief Retorna quantos filhos já foram recolhidos e possuem relatório.
@@ -130,12 +151,15 @@ size_t supervisor_report_count(const supervisor_t *supervisor);
  * @param supervisor Instância do supervisor.
  * @param index Posição em [0, supervisor_report_count()).
  * @param[out] out Recebe o relatório; não é alterado em erro.
- * @retval MPMC_OK Relatório copiado.
- * @retval MPMC_ERR_INVALID_ARG Ponteiro nulo ou índice fora do intervalo.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: relatório selecionado copiado para out.
+ * - MPMC_ERR_INVALID_ARG: supervisor ou out nulo, ou index fora dos relatórios disponíveis.
+ *
+ * system_errno é zero em todos os resultados.
  * @note Os relatórios permanecem válidos após supervisor_shutdown(), até
  * supervisor_destroy().
  */
-mpmc_status_t
+mpmc_result_t
 supervisor_report_get(const supervisor_t *supervisor, size_t index, child_report_t *out);
 
 /**
@@ -143,15 +167,21 @@ supervisor_report_get(const supervisor_t *supervisor, size_t index, child_report
  * tempo total de operação do mpmc.
  * @param supervisor Instância do supervisor.
  * @param out Stream de saída (normalmente stdout).
- * @retval MPMC_OK Relatório escrito e descarregado.
- * @retval MPMC_ERR_INVALID_ARG Ponteiro nulo.
- * @retval MPMC_ERR_SYS Falha ao escrever em `out`.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: relatório escrito e stream descarregado; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: supervisor ou out nulo; system_errno é zero.
+ * - MPMC_ERR_SYS: falha em fputs(), fprintf() ou fflush(), com o errno capturado em
+ *   system_errno. Se apenas ferror() indicar erro no stream após o descarregamento, system_errno
+ *   é zero.
+ *
+ * Falha em clock_gettime() faz o tempo total informado ser zero; essa falha não é retornada como
+ * MPMC_ERR_SYS.
  * @details Uma linha por filho, na ordem de recolhimento: PID, operação, tipo,
  * término (`código N (sucesso|falha)` ou `sinal N`) e duração em `S.mmm s`. O tempo
  * total vai da criação do supervisor até a chamada, em CLOCK_MONOTONIC. Deve ser
  * chamada após supervisor_shutdown(); filhos ainda ativos são apenas contados.
  */
-mpmc_status_t supervisor_print_report(const supervisor_t *supervisor, FILE *out);
+mpmc_result_t supervisor_print_report(const supervisor_t *supervisor, FILE *out);
 
 /**
  * @brief Informa quantos avisos o supervisor imprimiu desde a última consulta.
@@ -173,8 +203,14 @@ size_t supervisor_producer_count(const supervisor_t *supervisor);
 /**
  * @brief Processa eventos de controle sem bloquear.
  * @param supervisor Instância viva do supervisor.
- * @retval MPMC_OK Eventos drenados ou nenhum evento disponível.
- * @retval MPMC_ERR_SYS Falha ao processar o canal de controle.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: self-pipe drenado ou sem bytes disponíveis (EAGAIN/EWOULDBLOCK); system_errno é
+ *   zero.
+ * - MPMC_ERR_INVALID_ARG: supervisor nulo; system_errno é zero.
+ * - MPMC_ERR_SYS: falha em read(), com o errno capturado em system_errno, ou EOF inesperado no
+ *   self-pipe, com system_errno zero.
+ *
+ * EINTR em read() é repetido e não é retornado como MPMC_ERR_INTERRUPTED.
  * @details Drena por completo o self-pipe (veja supervisor_event_fd()),
  * descartando os bytes de despertar acumulados por supervisor_notify_signal().
  * Deve ser chamada antes de waitpid(): um sinal que chegue depois da drenagem
@@ -182,7 +218,7 @@ size_t supervisor_producer_count(const supervisor_t *supervisor);
  * Também é o ponto em que o backend de IPC pode conectar a drenagem de suas
  * filas de eventos.
  */
-mpmc_status_t supervisor_poll_events(supervisor_t *supervisor);
+mpmc_result_t supervisor_poll_events(supervisor_t *supervisor);
 
 /**
  * @brief Retorna o descritor de leitura do canal de eventos (self-pipe).
