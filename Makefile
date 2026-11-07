@@ -54,7 +54,8 @@ $(UNIT_DIR)/test_command: tests/unit/test_command.c src/app/command.c src/error.
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
 $(UNIT_DIR)/test_supervisor: tests/unit/test_supervisor.c \
-		$(UNIT_DIR)/supervisor_for_test.o src/app/command.c src/error.c
+		$(UNIT_DIR)/supervisor_for_test.o src/app/command.c src/error.c \
+		src/ipc/transport.c src/ipc/msg_backend.c src/ipc/shm_backend.c src/ipc/msg.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -74,14 +75,20 @@ $(UNIT_DIR)/test_message_metadata: tests/unit/test_message_metadata.c src/worker
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+$(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c src/ipc/msg_backend.c src/ipc/msg.c src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
 unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
-		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_message_metadata
+		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_message_metadata \
+		$(UNIT_DIR)/test_msg_backend
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
 	@$(UNIT_DIR)/test_msg
 	@$(UNIT_DIR)/test_sem
 	@$(UNIT_DIR)/test_error
 	@$(UNIT_DIR)/test_message_metadata
+	@$(UNIT_DIR)/test_msg_backend
 
 # Testes básicos: o loop interativo deve aceitar o comando shutdown.
 test: all unit
