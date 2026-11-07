@@ -1,10 +1,23 @@
-#include "mpmc/workers/producer.h"
-
+/**
+ * @file test_message_metadata.c
+ * @brief Testes da construção dos metadados de mensagens no produtor.
+ * @ingroup tests
+ */
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
 
+#include "mpmc/workers/producer.h"
+
+/**
+ * @brief Verifica PID, sequência, política de ACK e timestamp dos metadados.
+ * @return Zero se todos os cenários passarem; um na primeira inconsistência,
+ * após escrever o diagnóstico em stderr.
+ * @details Exercita a sequência de um único emissor, rejeição de operation_id
+ * nulo sem alterar a saída e captura do timestamp no momento de construir cada mensagem.
+ * Não executa envio por transporte nem verifica o fluxo completo de um worker.
+ */
 int main(void) {
     producer_sequence_t sequence = {0};
     producer_job_t job = {
@@ -17,11 +30,10 @@ int main(void) {
 
     for (uint32_t index = 0u; index < 3u; ++index) {
         if (producer_message_next(&messages[index], &sequence, &job) != MPMC_OK
-            || messages[index].sender_pid != getpid()
-            || messages[index].sequence != index + 1u
-            || messages[index].operation_id != job.operation_id
-            || !messages[index].ack_required || messages[index].sent_at.tv_sec <= 0
-            || messages[index].sent_at.tv_nsec < 0 || messages[index].sent_at.tv_nsec >= 1000000000L) {
+            || messages[index].sender_pid != getpid() || messages[index].sequence != index + 1u
+            || messages[index].operation_id != job.operation_id || !messages[index].ack_required
+            || messages[index].sent_at.tv_sec <= 0 || messages[index].sent_at.tv_nsec < 0
+            || messages[index].sent_at.tv_nsec >= 1000000000L) {
             fputs("message metadata test failed\n", stderr);
             return 1;
         }
@@ -30,8 +42,8 @@ int main(void) {
     producer_job_t no_ack = job;
     no_ack.ack_mode = PRODUCER_ACK_NONE;
     message_t message;
-    if (producer_message_next(&message, &sequence, &no_ack) != MPMC_OK
-        || message.sequence != 4u || message.ack_required) {
+    if (producer_message_next(&message, &sequence, &no_ack) != MPMC_OK || message.sequence != 4u
+        || message.ack_required) {
         fputs("ack metadata test failed\n", stderr);
         return 1;
     }

@@ -32,13 +32,26 @@
 #include "mpmc/app/command.h"
 #include "mpmc/error.h"
 
+/**
+ * @brief Quantidade de verificações executadas nesta suíte.
+ */
 static unsigned g_checks;
+/**
+ * @brief Quantidade de verificações que registraram falha nesta suíte.
+ */
 static unsigned g_failures;
 
 /* ------------------------------------------------------------------ */
 /* Infraestrutura mínima                                              */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Registra uma verificação e informa a falha sem interromper a suíte.
+ * @param condition Expressão lógica avaliada uma única vez.
+ * @param ... Formato e argumentos de fprintf() para o diagnóstico em caso de falha.
+ * @details Incrementa o contador de verificações; se a condição for falsa,
+ * incrementa o contador de falhas e escreve o diagnóstico em stderr.
+ */
 #define CHECK(condition, ...)                                                                      \
     do {                                                                                           \
         ++g_checks;                                                                                \
@@ -51,10 +64,24 @@ static unsigned g_failures;
     } while (0)
 
 /* Sentinela para provar que *out não foi tocado quando o parse falha. */
+/**
+ * @brief Índice sentinela usado para detectar escrita indevida em uma saída.
+ */
 #define SENTINEL_INDEX ((size_t)0xDEADBEEF)
+/**
+ * @brief Contagem sentinela usada para detectar escrita indevida em uma saída.
+ */
 #define SENTINEL_COUNT ((unsigned)0xCAFE)
+/**
+ * @brief Política sentinela usada para detectar escrita indevida em uma saída.
+ */
 #define SENTINEL_ACK ((unsigned)0xBA5E)
 
+/**
+ * @brief Constrói um comando com valores sentinela para verificar preservação da saída.
+ * @return Comando zerado inicialmente, com kind=COMMAND_SHUTDOWN e os campos
+ * numéricos preenchidos pelas constantes SENTINEL_INDEX, SENTINEL_COUNT e SENTINEL_ACK.
+ */
 static command_t make_sentinel(void) {
     command_t c;
 
@@ -66,6 +93,12 @@ static command_t make_sentinel(void) {
     return c;
 }
 
+/**
+ * @brief Verifica os três campos numéricos sentinela de um comando.
+ * @param c Comando válido a examinar.
+ * @return Um se os três campos coincidirem com as sentinelas; zero caso contrário.
+ * @note Não compara kind nem background_token.
+ */
 static int sentinel_intact(const command_t *c) {
     return c->producer_id == SENTINEL_INDEX && c->message_count == SENTINEL_COUNT
         && c->ack_mode == SENTINEL_ACK;
@@ -75,7 +108,18 @@ static int sentinel_intact(const command_t *c) {
 /* Funções auxiliares                                                 */
 /* ------------------------------------------------------------------ */
 
-/* Caso feliz: parse aceita e validate aprova, com os campos esperados. */
+/**
+ * @brief Confere parsing, campos normalizados e validação de uma linha válida.
+ * @param line Linha de comando terminada em NUL.
+ * @param producers Quantidade de estruturas usada na validação semântica.
+ * @param kind Tipo de comando esperado.
+ * @param index Índice lógico esperado.
+ * @param n_msgs Quantidade de mensagens esperada.
+ * @param ack Política de confirmação esperada.
+ * @param background Valor esperado para a presença do sufixo &.
+ * @details Registra falhas pelos contadores da suíte. Se o parsing falhar,
+ * retorna antes de examinar os campos ou executar a validação semântica.
+ */
 static void expect_ok_bg(
     const char *line,
     unsigned producers,
@@ -140,6 +184,16 @@ static void expect_ok_bg(
     );
 }
 
+/**
+ * @brief Confere uma linha válida sem o sufixo de execução em background.
+ * @param line Linha de comando terminada em NUL.
+ * @param producers Quantidade de estruturas usada na validação semântica.
+ * @param kind Tipo de comando esperado.
+ * @param index Índice lógico esperado.
+ * @param n_msgs Quantidade de mensagens esperada.
+ * @param ack Política de confirmação esperada.
+ * @details Delega a expect_ok_bg() com background=false.
+ */
 static void expect_ok(
     const char *line,
     unsigned producers,
@@ -151,7 +205,11 @@ static void expect_ok(
     expect_ok_bg(line, producers, kind, index, n_msgs, ack, false);
 }
 
-/* Falha na etapa sintática: parse rejeita e *out fica intocado. */
+/**
+ * @brief Confere rejeição sintática sem sobrescrever os campos numéricos da saída.
+ * @param line Linha que deve ser rejeitada por command_parse().
+ * @details Espera MPMC_ERR_INVALID_ARG com system_errno zero e verifica as sentinelas.
+ */
 static void expect_parse_error(const char *line) {
     command_t c = make_sentinel();
     mpmc_result_t error = command_parse(line, &c);
@@ -166,7 +224,13 @@ static void expect_parse_error(const char *line) {
     CHECK(sentinel_intact(&c), "\"%s\": *out foi modificado em falha de parsing", line);
 }
 
-/* Falha na etapa semântica: parse aceita, validate rejeita com o código. */
+/**
+ * @brief Confere uma linha aceita pelo parser e rejeitada na validação semântica.
+ * @param line Linha sintaticamente válida a examinar.
+ * @param producers Quantidade de estruturas lógicas informada à validação.
+ * @param expected Categoria de erro esperada de command_validate().
+ * @details Se o parsing falhar, registra a inconsistência e não valida a saída.
+ */
 static void expect_validate_error(const char *line, unsigned producers, mpmc_status_t expected) {
     command_t c = make_sentinel();
     mpmc_result_t error = command_parse(line, &c);
@@ -202,6 +266,9 @@ static void expect_validate_error(const char *line, unsigned producers, mpmc_sta
 /* U01 — comandos válidos                                             */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere produção, consumo e shutdown com argumentos válidos.
+ */
 static void test_valid_commands(void) {
     expect_ok("produz 1 1 1", 4, COMMAND_PRODUCE, 1, 1, 1);
     expect_ok("produz 2 5 2", 4, COMMAND_PRODUCE, 2, 5, 2);
@@ -217,6 +284,9 @@ static void test_valid_commands(void) {
 /* U02 — falhas de sintaxe (command_parse)                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere rejeição de verbos, aridades e formatos numéricos inválidos.
+ */
 static void test_syntax_errors(void) {
     /* linha vazia ou só separadores */
     expect_parse_error("");
@@ -258,6 +328,9 @@ static void test_syntax_errors(void) {
 /* U03 — limites de n_msgs (command_validate)                         */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere as fronteiras de 1 a 1024 mensagens na validação semântica.
+ */
 static void test_message_count_bounds(void) {
     expect_validate_error("produz 1 0 1", 4, MPMC_ERR_INVALID_ARG);
     expect_ok("produz 1 1 1", 4, COMMAND_PRODUCE, 1, 1, 1);
@@ -274,6 +347,9 @@ static void test_message_count_bounds(void) {
 /* U04 — limites de ack (command_validate)                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere que somente as políticas de confirmação 1 e 2 são aceitas.
+ */
 static void test_ack_bounds(void) {
     expect_validate_error("produz 1 5 0", 4, MPMC_ERR_INVALID_ARG);
     expect_ok("produz 1 5 1", 4, COMMAND_PRODUCE, 1, 5, 1);
@@ -291,6 +367,9 @@ static void test_ack_bounds(void) {
 /* U05 — produz 0 válido, consome 0 rejeitado                         */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere a aceitação de produz 0 e a rejeição de consome 0.
+ */
 static void test_index_zero(void) {
     expect_ok("produz 0 1 1", 4, COMMAND_PRODUCE, 0, 1, 1);
     expect_ok("produz 0 8 2", 4, COMMAND_PRODUCE, 0, 8, 2);
@@ -307,6 +386,9 @@ static void test_index_zero(void) {
 /* U06 — índice contra p (command_validate)                           */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere a faixa de índices para diferentes quantidades de estruturas.
+ */
 static void test_index_bounds(void) {
     /* p = 4: 1..4 válidos, 5+ inválidos */
     expect_ok("produz 1 1 1", 4, COMMAND_PRODUCE, 1, 1, 1);
@@ -333,6 +415,9 @@ static void test_index_bounds(void) {
 /* U07 — sufixo '&' (command_parse)                                   */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere o sufixo & separado ou colado e rejeita posições inválidas.
+ */
 static void test_ampersand_suffix(void) {
     expect_ok_bg("produz 1 5 1 &", 4, COMMAND_PRODUCE, 1, 5, 1, true);
     expect_ok_bg("produz 1 5 1&", 4, COMMAND_PRODUCE, 1, 5, 1, true);
@@ -361,6 +446,9 @@ static void test_ampersand_suffix(void) {
 /* U08 — overflow e limites de tipo (command_parse)                   */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere overflow numérico, limites dos tipos e distinção das faixas de domínio.
+ */
 static void test_overflow(void) {
     /*
      * --- 1. Valores que excedem uintmax_t em qualquer plataforma ---
@@ -420,6 +508,9 @@ static void test_overflow(void) {
 /* U09 — separação de responsabilidades                               */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere a separação entre reconhecimento sintático e validação semântica.
+ */
 static void test_stage_separation(void) {
     command_t c = make_sentinel();
 
@@ -461,6 +552,9 @@ static void test_stage_separation(void) {
 /* U10 — guards de argumento                                          */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere a rejeição de argumentos nulos sem sobrescrever as sentinelas.
+ */
 static void test_argument_guards(void) {
     command_t c = make_sentinel();
 
@@ -485,6 +579,9 @@ static void test_argument_guards(void) {
 /* U11 — validate sobre structs construídos à mão                     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere a validação de comandos construídos diretamente, sem passar pelo parser.
+ */
 static void test_validate_direct(void) {
     command_t c;
 
@@ -537,6 +634,9 @@ static void test_validate_direct(void) {
 /* U12 — espaçamento e normalização                                   */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere espaços, tabulações e terminações de linha aceitos pelo parser.
+ */
 static void test_whitespace(void) {
     expect_ok("produz   1   5   1", 4, COMMAND_PRODUCE, 1, 5, 1);
     expect_ok("\tproduz\t1\t5\t1\t", 4, COMMAND_PRODUCE, 1, 5, 1);
@@ -551,6 +651,9 @@ static void test_whitespace(void) {
 /* U13 — pureza e reuso                                               */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere a preservação da linha original e o reuso do objeto de saída.
+ */
 static void test_no_side_effects_on_input(void) {
     char line[] = "produz 1 5 1 &";
     char copy[sizeof line];
@@ -578,6 +681,10 @@ static void test_no_side_effects_on_input(void) {
 /* Execução dos testes                                                */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Executa os casos da suíte e apresenta o resultado das verificações.
+ * @return Zero se nenhuma verificação falhar; um se houver falha ou erro de preparação.
+ */
 int main(void) {
     test_valid_commands();
     test_syntax_errors();

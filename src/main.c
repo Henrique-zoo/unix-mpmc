@@ -106,7 +106,6 @@ int main(int argc, char *argv[]) {
  *   inválido, quantidade acima de MPMC_MAX_PRODUCERS ou paradigma diferente de 1/2. Se
  *   strtoumax() falhar na conversão de um argumento, system_errno preserva o errno capturado,
  *   inclusive ERANGE; nas demais rejeições, system_errno é zero.
- *         argumentos inválido, ou ponteiro de saída nulo.
  *
  * @post Em caso de sucesso, *out contém a configuração validada.
  * Em caso de erro, *out permanece inalterado, quando válido.
@@ -160,7 +159,6 @@ static mpmc_result_t parse_args(int argc, char *argv[], mpmc_config_t *out) {
  * - MPMC_ERR_INVALID_ARG: text ou out nulo, texto vazio, caractere não decimal, valor zero,
  *   valor não representável em size_t ou falha de strtoumax(). system_errno contém o errno
  *   capturado quando strtoumax() falha, inclusive ERANGE; nos demais casos, é zero.
- *         valor nulo, estouro numérico ou ponteiro inválido.
  *
  * @post Em caso de sucesso, *out contém o valor convertido.
  * Em caso de erro, *out permanece inalterado, quando válido.

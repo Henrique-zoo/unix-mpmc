@@ -2,6 +2,7 @@
 /**
  * @file test_sem.c
  * @brief Testa semáforos reais e injeta falhas de semop() no objeto de teste.
+ * @ingroup tests
  */
 #include <errno.h>
 #include <limits.h>
@@ -13,11 +14,29 @@
 
 #include "mpmc/ipc/sem.h"
 
+/**
+ * @brief Quantidade de verificações executadas nesta suíte.
+ */
 static unsigned checks;
+/**
+ * @brief Quantidade de verificações que registraram falha nesta suíte.
+ */
 static unsigned failures;
+/**
+ * @brief Conjunto criado pela suíte; -1 indica ausência de recurso a remover.
+ */
 static int owned_semid = -1;
+/**
+ * @brief Erro simulado de semop(); zero mantém a chamada real ao kernel.
+ */
 static int injected_semop_errno;
 
+/**
+ * @brief Registra uma verificação e informa a falha sem interromper a suíte.
+ * @param condition Expressão lógica avaliada uma única vez.
+ * @details Incrementa o contador de verificações; se a condição for falsa,
+ * incrementa o contador de falhas e escreve o diagnóstico em stderr.
+ */
 #define CHECK(condition)                                                                           \
     do {                                                                                           \
         ++checks;                                                                                  \
@@ -27,6 +46,12 @@ static int injected_semop_errno;
         }                                                                                          \
     } while (0)
 
+/**
+ * @brief Executa uma operação uma vez e confere status e system_errno.
+ * @param call Expressão que retorna mpmc_result_t.
+ * @param expected_status Categoria de resultado esperada.
+ * @param expected_errno Valor esperado para o errno armazenado no resultado.
+ */
 #define CHECK_RESULT(call, expected_status, expected_errno)                                        \
     do {                                                                                           \
         mpmc_result_t result_ = (call);                                                            \
@@ -34,7 +59,15 @@ static int injected_semop_errno;
         CHECK(result_.system_errno == (expected_errno));                                           \
     } while (0)
 
-/** @brief Substitui semop() somente no objeto de teste de sem.c. */
+/**
+ * @brief Intercepta semop() somente no objeto de teste das primitivas.
+ * @param semid Identificador repassado à chamada real quando não há injeção.
+ * @param operations Vetor de operações repassado à chamada real.
+ * @param count Quantidade de operações no vetor.
+ * @return Zero em sucesso da chamada real; -1 em falha real ou injetada.
+ * @details Se injected_semop_errno for não zero, não acessa IPC: atribui esse
+ * código a errno e retorna -1. Caso contrário, preserva o comportamento de semop().
+ */
 int mpmc_test_semop(int semid, struct sembuf *operations, size_t count) {
     if (injected_semop_errno != 0) {
         errno = injected_semop_errno;
@@ -48,10 +81,18 @@ static void cleanup(void) {
     if (owned_semid >= 0) (void)semctl(owned_semid, 0, IPC_RMID);
 }
 
+/**
+ * @brief Permite interromper semop() pela entrega de SIGALRM.
+ * @param signal_number Número do sinal recebido; ignorado.
+ * @details Não realiza operações em contexto de sinal.
+ */
 static void on_alarm(int signal_number) {
     (void)signal_number;
 }
 
+/**
+ * @brief Confere argumentos inválidos e a preservação da saída na criação rejeitada.
+ */
 static void test_arguments(void) {
     int sentinel = -123;
 
@@ -67,6 +108,9 @@ static void test_arguments(void) {
     CHECK_RESULT(sysv_sem_remove(-1), MPMC_ERR_INVALID_ARG, 0);
 }
 
+/**
+ * @brief Confere valores, índices, limites de conversão, P/V e espera não bloqueante por zero.
+ */
 static void test_values_and_indices(void) {
     CHECK_RESULT(sysv_sem_set(owned_semid, 0, 1), MPMC_OK, 0);
     CHECK_RESULT(sysv_sem_set(owned_semid, 1, 0), MPMC_OK, 0);
@@ -98,10 +142,11 @@ static void test_values_and_indices(void) {
 static void test_alter_only_permission(void) {
     struct semid_ds info;
 
+    /** @brief Variantes do argumento de semctl(); buf é usada em IPC_STAT e IPC_SET. */
     union {
-        int val;
-        struct semid_ds *buf;
-        unsigned short *array;
+        int val;               /**< Variante de valor para SETVAL. */
+        struct semid_ds *buf;  /**< Metadados consultados e atualizados no teste de permissões. */
+        unsigned short *array; /**< Variante de vetor para GETALL ou SETALL. */
     } argument = {.buf = &info};
 
     int rc = semctl(owned_semid, 0, IPC_STAT, argument);
@@ -145,9 +190,10 @@ static void test_interruption(void) {
 
 /** @brief Verifica erros sem depender da temporização entre processos. */
 static void test_injected_errors(void) {
+    /** @brief Correspondência esperada entre o errno simulado e a categoria do resultado. */
     const struct {
-        int error;
-        mpmc_status_t status;
+        int error;            /**< Código que o substituto de semop() atribui a errno. */
+        mpmc_status_t status; /**< Categoria esperada do wrapper para esse código. */
     } cases[] = {
         {EIDRM, MPMC_ERR_SHUTDOWN},
         {EINVAL, MPMC_ERR_INVALID_ARG},
@@ -165,6 +211,10 @@ static void test_injected_errors(void) {
     }
 }
 
+/**
+ * @brief Executa os casos da suíte e apresenta o resultado das verificações.
+ * @return Zero se nenhuma verificação falhar; um se houver falha ou erro de preparação.
+ */
 int main(void) {
     if (atexit(cleanup) != 0) return EXIT_FAILURE;
 

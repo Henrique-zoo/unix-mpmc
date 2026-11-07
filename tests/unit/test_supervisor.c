@@ -35,9 +35,22 @@
 #include "mpmc/app/supervisor.h"
 #include "mpmc/error.h"
 
+/**
+ * @brief Quantidade de verificações executadas nesta suíte.
+ */
 static unsigned g_checks;
+/**
+ * @brief Quantidade de verificações que registraram falha nesta suíte.
+ */
 static unsigned g_failures;
 
+/**
+ * @brief Registra uma verificação e informa a falha sem interromper a suíte.
+ * @param condition Expressão lógica avaliada uma única vez.
+ * @param ... Formato e argumentos de fprintf() para o diagnóstico em caso de falha.
+ * @details Incrementa o contador de verificações; se a condição for falsa,
+ * incrementa o contador de falhas e escreve o diagnóstico em stderr.
+ */
 #define CHECK(condition, ...)                                                                      \
     do {                                                                                           \
         ++g_checks;                                                                                \
@@ -53,10 +66,20 @@ static unsigned g_failures;
 /* Injeção de falha em fork()                                         */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Número de próximas chamadas a fork() que devem falhar com EAGAIN.
+ */
 static int g_fork_failures_left;
 
 /** Substitui fork() em supervisor.c (compilado com -Dfork=mpmc_test_fork). */
 pid_t mpmc_test_fork(void);
+/**
+ * @brief Substitui fork() somente no objeto do supervisor usado nos testes.
+ * @return PID positivo no pai ou zero no filho quando fork() funcionar; -1 em
+ * falha real ou quando houver uma falha programada em g_fork_failures_left.
+ * @details Na falha programada, decrementa o contador e define errno=EAGAIN.
+ * Fora desse caso, devolve diretamente o resultado de fork().
+ */
 pid_t mpmc_test_fork(void) {
     if (g_fork_failures_left > 0) {
         --g_fork_failures_left;
@@ -70,6 +93,12 @@ pid_t mpmc_test_fork(void) {
 /* Utilitários                                                        */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Suspende o teste aproximadamente pelo intervalo solicitado.
+ * @param milliseconds Intervalo não negativo, em milissegundos.
+ * @details Repete nanosleep() com o tempo restante após EINTR. Outra falha encerra
+ * a espera sem propagação de erro; este auxiliar não serve como relógio de precisão.
+ */
 static void sleep_ms(long milliseconds) {
     struct timespec delay = {
         .tv_sec = milliseconds / 1000,
@@ -78,6 +107,12 @@ static void sleep_ms(long milliseconds) {
     while (nanosleep(&delay, &delay) == -1 && errno == EINTR);
 }
 
+/**
+ * @brief Constrói um comando de trabalho com parâmetros válidos para os cenários.
+ * @param kind Tipo de trabalho a atribuir ao comando.
+ * @return Comando com índice 1, uma mensagem e ack_mode igual a 2.
+ * @pre kind deve identificar o cenário que o teste pretende despachar.
+ */
 static command_t make_command(command_kind_t kind) {
     command_t command;
     memset(&command, 0, sizeof command);
@@ -88,10 +123,18 @@ static command_t make_command(command_kind_t kind) {
     return command;
 }
 
-/** Primeiro erro diferente de OK devolvido por supervisor_reap() em wait_for_reports(). */
+/** @brief Primeiro erro de coleta observado por wait_for_reports(), até o teste reinicializá-lo. */
 static mpmc_result_t g_reap_error = (mpmc_result_t){.status = MPMC_OK};
 
-/** Faz reap não bloqueante até haver `wanted` relatórios ou estourar o prazo. */
+/**
+ * @brief Faz coletas não bloqueantes até obter a quantidade de relatórios desejada.
+ * @param supervisor Instância viva a consultar.
+ * @param wanted Quantidade mínima de relatórios que satisfaz a espera.
+ * @param timeout_ms Limite aproximado, não negativo, em milissegundos.
+ * @return true se a quantidade for alcançada; false após esgotar as tentativas.
+ * @details Consulta a cada 10 ms e preserva o primeiro erro de supervisor_reap()
+ * em g_reap_error. Um erro de coleta não encerra sozinho as tentativas.
+ */
 static bool wait_for_reports(supervisor_t *supervisor, size_t wanted, int timeout_ms) {
     for (int waited = 0; waited <= timeout_ms; waited += 10) {
         mpmc_result_t error = supervisor_reap(supervisor, false);
@@ -106,6 +149,10 @@ static bool wait_for_reports(supervisor_t *supervisor, size_t wanted, int timeou
 
 /**
  * @brief Executa supervisor_print_report() em um tmpfile e devolve o texto em `buffer`.
+ * @param supervisor Instância a apresentar; pode ser NULL para exercitar a validação.
+ * @param[out] buffer Destino válido do texto, sempre terminado em NUL.
+ * @param size Capacidade positiva do destino, incluindo o terminador.
+ * @pre buffer deve possuir pelo menos size bytes e size deve ser maior que zero.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: supervisor_print_report() concluiu e a leitura do arquivo foi tentada; system_errno
  *   é zero.
@@ -137,7 +184,13 @@ static mpmc_result_t capture_report(const supervisor_t *supervisor, char *buffer
     return error;
 }
 
-/** Conta as linhas de `text` que contêm `needle`. */
+/**
+ * @brief Conta linhas cuja porção inicial contém a substring procurada.
+ * @param text Texto válido e terminado em NUL, com linhas separadas por LF.
+ * @param needle Substring válida e terminada em NUL a procurar em cada linha.
+ * @return Quantidade de linhas cuja cópia inicial, limitada a 255 bytes, contém needle.
+ * @note A última linha também é examinada quando não possui LF final.
+ */
 static size_t count_lines_with(const char *text, const char *needle) {
     size_t count = 0u;
     for (const char *line = text; *line != '\0';) {
@@ -157,6 +210,12 @@ static size_t count_lines_with(const char *text, const char *needle) {
     return count;
 }
 
+/**
+ * @brief Cria um supervisor com duas estruturas no modo de memória compartilhada.
+ * @return Instância criada, ou NULL se supervisor_create() falhar.
+ * @details Registra falha na preparação quando o resultado ou a instância não forem
+ * os esperados. O chamador continua responsável pelo shutdown e pela destruição.
+ */
 static supervisor_t *new_supervisor(void) {
     supervisor_t *supervisor = NULL;
     mpmc_result_t error = supervisor_create(&supervisor, 2u, IPC_SHARED_MEMORY);
@@ -167,9 +226,13 @@ static supervisor_t *new_supervisor(void) {
 
 #ifdef DEBUG
 /**
- * Lista os PIDs filhos do processo de teste via pgrep. Retorna -1 se falhar.
- * O shell criado por popen() também é filho: ele imprime o próprio PID primeiro
- * (`echo $$`) para ser descartado da contagem.
+ * @brief Lista filhos do processo de teste consultando pgrep por meio de popen().
+ * @param[out] out Vetor que recebe os PIDs encontrados, excluído o shell auxiliar.
+ * @param max Capacidade não negativa do vetor.
+ * @return Quantidade armazenada, limitada a max; -1 se popen() falhar ou se não
+ * for possível ler o PID do shell auxiliar.
+ * @details O shell imprime seu próprio PID antes de executar pgrep, permitindo
+ * excluí-lo. O estado retornado por pclose() não é propagado.
  */
 static int list_children(pid_t *out, int max) {
     char command_line[96];
@@ -194,11 +257,21 @@ static int list_children(pid_t *out, int max) {
     return count;
 }
 
+/**
+ * @brief Verifica se pgrep pode ser encontrado pelo shell.
+ * @return true se a consulta executada por system() retornar zero; false caso contrário.
+ */
 static bool have_pgrep(void) {
     return system("command -v pgrep >/dev/null 2>&1") == 0;
 }
 
-/** Espera até que existam exatamente `wanted` filhos vivos (pgrep). */
+/**
+ * @brief Aguarda aproximadamente dois segundos pela quantidade exata de filhos.
+ * @param[out] out Vetor válido com capacidade para 16 PIDs.
+ * @param wanted Quantidade exata que encerra antecipadamente a espera.
+ * @return Última contagem de list_children(), inclusive -1 em falha de consulta.
+ * @details Realiza até cem consultas, separadas por esperas de 20 ms.
+ */
 static int wait_for_children(pid_t *out, int wanted) {
     int count = 0;
     for (int attempt = 0; attempt < 100; ++attempt) {
@@ -214,6 +287,9 @@ static int wait_for_children(pid_t *out, int wanted) {
 /* Casos                                                              */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Confere coleta natural, identidade dos trabalhos e conteúdo do relatório final.
+ */
 static void test_natural_exit_report(void) {
     supervisor_t *supervisor = new_supervisor();
     command_t produce = make_command(COMMAND_PRODUCE);
@@ -265,6 +341,9 @@ static void test_natural_exit_report(void) {
     supervisor_destroy(supervisor);
 }
 
+/**
+ * @brief Confere relatório vazio, argumentos nulos e preservação do erro de escrita.
+ */
 static void test_print_report_empty_and_guards(void) {
     supervisor_t *supervisor = new_supervisor();
     char text[1024];
@@ -293,6 +372,9 @@ static void test_print_report_empty_and_guards(void) {
     supervisor_destroy(supervisor);
 }
 
+/**
+ * @brief Confere consultas inválidas sem alterar a saída de supervisor_report_get().
+ */
 static void test_report_get_guards(void) {
     supervisor_t *supervisor = new_supervisor();
     child_report_t report;
@@ -314,6 +396,9 @@ static void test_report_get_guards(void) {
     supervisor_destroy(supervisor);
 }
 
+/**
+ * @brief Confere falhas de fork(), restauração de sinais e preservação do próximo operation_id.
+ */
 static void test_fork_failure(void) {
     supervisor_t *supervisor = new_supervisor();
     command_t produce = make_command(COMMAND_PRODUCE);
@@ -359,6 +444,9 @@ static void test_fork_failure(void) {
 }
 
 #ifdef DEBUG
+/**
+ * @brief Confere que a morte de um job por sinal preserva os demais e fica no relatório.
+ */
 static void test_signal_kill_is_not_fatal(void) {
     supervisor_t *supervisor = new_supervisor();
     command_t produce = make_command(COMMAND_PRODUCE);
@@ -423,6 +511,9 @@ static void test_signal_kill_is_not_fatal(void) {
     supervisor_destroy(supervisor);
 }
 
+/**
+ * @brief Confere a coleta de jobs bloqueados e a preservação dos relatórios no shutdown repetido.
+ */
 static void test_shutdown_reports(void) {
     supervisor_t *supervisor = new_supervisor();
     command_t produce = make_command(COMMAND_PRODUCE);
@@ -457,6 +548,9 @@ static void test_shutdown_reports(void) {
     supervisor_destroy(supervisor);
 }
 
+/**
+ * @brief Confere que uma falha de fork() não remove nem altera um job já ativo.
+ */
 static void test_fork_failure_with_active_job(void) {
     supervisor_t *supervisor = new_supervisor();
     command_t produce = make_command(COMMAND_PRODUCE);
@@ -481,6 +575,10 @@ static void test_fork_failure_with_active_job(void) {
 /* Execução                                                           */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief Executa os casos da suíte e apresenta o resultado das verificações.
+ * @return Zero se nenhuma verificação falhar; um se houver falha ou erro de preparação.
+ */
 int main(void) {
     test_natural_exit_report();
     test_report_get_guards();

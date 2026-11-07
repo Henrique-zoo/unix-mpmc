@@ -13,9 +13,9 @@
 
 /** @brief Argumentos utilizados por semctl(). */
 union mpmc_semun {
-    int val;
-    struct semid_ds *buf;
-    unsigned short *array;
+    int val;               /**< Valor utilizado na operação SETVAL. */
+    struct semid_ds *buf;  /**< Variante de argumento para consultas como IPC_STAT. */
+    unsigned short *array; /**< Variante de argumento para GETALL ou SETALL. */
 };
 
 /**

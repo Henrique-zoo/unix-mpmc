@@ -86,6 +86,10 @@ mpmc_result_t sysv_shm_remove(int shmid) {
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
+/**
+ * @details Passa o buffer do chamador diretamente a shmctl(IPC_STAT), sem
+ * alocação de memória temporária. O errno é copiado antes de qualquer outra chamada.
+ */
 mpmc_result_t sysv_shm_stat(int shmid, struct shmid_ds *out_info) {
     if (shmid < 0 || out_info == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 

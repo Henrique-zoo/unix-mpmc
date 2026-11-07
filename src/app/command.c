@@ -25,20 +25,38 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/**
+ * @brief Quantidade máxima de tokens, incluindo o sufixo separado &.
+ */
 #define CMD_MAX_TOKENS 5u
+/**
+ * @brief Menor quantidade de mensagens aceita pela validação semântica.
+ */
 #define CMD_NMSGS_MIN 1u
+/**
+ * @brief Maior quantidade de mensagens aceita pela validação semântica.
+ */
 #define CMD_NMSGS_MAX 1024u
+/**
+ * @brief Menor valor válido para a política de confirmação.
+ */
 #define CMD_ACK_MIN 1u
+/**
+ * @brief Maior valor válido para a política de confirmação.
+ */
 #define CMD_ACK_MAX 2u
 
 /** @brief Fatia imutável da linha original. */
 typedef struct {
-    const char *text;
-    size_t length;
+    const char *text; /**< Início da fatia emprestada da linha; não exige NUL no fim. */
+    size_t length;    /**< Quantidade de bytes pertencentes ao token. */
 } token_t;
 
 /**
- * @brief Testa se o caractere separa tokens em uma linha do REPL. */
+ * @brief Testa se um caractere separa tokens na gramática do REPL.
+ * @param character Byte a examinar, sem interpretação dependente da localidade.
+ * @return true para espaço, tabulação, CR ou LF; false para os demais bytes.
+ */
 static bool is_blank(unsigned char character) {
     return character == (unsigned char)' ' || character == (unsigned char)'\t'
         || character == (unsigned char)'\r' || character == (unsigned char)'\n';
@@ -70,7 +88,13 @@ static bool next_token(const char **cursor, token_t *token) {
     return true;
 }
 
-/** @brief Compara um token com um literal, sem exigir terminador no token. */
+/**
+ * @brief Compara uma fatia com uma string terminada em NUL.
+ * @param token Fatia cuja leitura é limitada por length.
+ * @param text String de referência, válida e terminada em NUL.
+ * @return true se tamanho e bytes coincidirem; false em qualquer diferença.
+ * @note O token não precisa possuir um terminador após seus bytes.
+ */
 static bool token_equals(token_t token, const char *text) {
     size_t index = 0;
 

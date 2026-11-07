@@ -42,6 +42,8 @@ mpmc_result_t sysv_msg_create(int *out_msqid);
  *   system_errno contém o errno capturado na operação que falhou.
  * @details Wrapper monta internamente o envelope `{long mtype; unsigned char[]}`
  * necessário para a chamada de sistema. Não pode serializar ponteiros locais.
+ * @pre Se size for positivo, payload deve apontar para pelo menos size bytes legíveis.
+ * @pre size deve permitir a soma com o cabeçalho long sem overflow de size_t.
  */
 mpmc_result_t sysv_msg_send(int msqid, long type, const void *payload, size_t size, bool nowait);
 
@@ -65,6 +67,10 @@ mpmc_result_t sysv_msg_send(int msqid, long type, const void *payload, size_t si
  *   operação que falhou.
  * @note Não usar MSG_NOERROR para truncar silenciosamente mensagens.
  * @note O valor retornado em out_size exclui `long mtype`.
+ * @pre out_size deve apontar para um ssize_t válido. Se capacity for positiva,
+ * out_payload deve possuir pelo menos capacity bytes disponíveis para escrita.
+ * @pre capacity deve permitir a soma com o cabeçalho long sem overflow de size_t.
+ * @post Em falha, out_size e o buffer de saída permanecem inalterados.
  */
 mpmc_result_t sysv_msg_receive(
     int msqid, long desired_type, void *out_payload, size_t capacity, bool nowait, ssize_t *out_size

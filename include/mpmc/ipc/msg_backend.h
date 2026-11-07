@@ -2,6 +2,8 @@
  * @file msg_backend.h
  * @brief Backend de filas de mensagens e eventos System V.
  * @ingroup backends
+ * @note Esta interface descreve contratos propostos. As funções deste backend
+ * ainda não possuem implementação; os estados de retorno não foram fixados.
  */
 #ifndef MPMC_IPC_MSG_BACKEND_H
 #define MPMC_IPC_MSG_BACKEND_H

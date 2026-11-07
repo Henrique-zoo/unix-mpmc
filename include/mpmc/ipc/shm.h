@@ -154,8 +154,10 @@ mpmc_result_t sysv_shm_remove(int shmid);
  * @return Estrutura mpmc_result_t com um dos seguintes estados:
  * - MPMC_OK: informações recuperadas com sucesso.
  * - MPMC_ERR_INVALID_ARG: identificador negativo ou ponteiro de saída nulo.
- * - MPMC_ERR_SYS: falha em shmctl(), com o erro original armazenado em
- *   system_errno.
+ * - MPMC_ERR_SYS: falha em shmctl(IPC_STAT); system_errno contém o errno
+ *   capturado nessa falha.
+ *
+ * Nos resultados MPMC_OK e MPMC_ERR_INVALID_ARG, system_errno é zero.
  *
  * @pre out_info deve apontar para uma estrutura shmid_ds válida.
  *

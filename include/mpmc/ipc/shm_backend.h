@@ -2,6 +2,8 @@
  * @file shm_backend.h
  * @brief Backend de buffer circular em memória compartilhada com semáforos.
  * @ingroup backends
+ * @note Estão implementados a criação, o fechamento local e a destruição dos
+ * segmentos. Envio, recebimento, ACKs e contagens abaixo são contratos propostos.
  */
 #ifndef MPMC_IPC_SHM_BACKEND_H
 #define MPMC_IPC_SHM_BACKEND_H
