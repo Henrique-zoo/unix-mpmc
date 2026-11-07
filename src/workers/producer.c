@@ -3,9 +3,8 @@
 #include <time.h>
 #include <unistd.h>
 
-mpmc_status_t producer_message_next(
-    message_t *out, producer_sequence_t *sequence, const producer_job_t *job
-) {
+mpmc_status_t
+producer_message_next(message_t *out, producer_sequence_t *sequence, const producer_job_t *job) {
     if (out == NULL || sequence == NULL || job == NULL || job->operation_id == 0u
         || (job->ack_mode != PRODUCER_ACK_WAIT && job->ack_mode != PRODUCER_ACK_NONE)) {
         return MPMC_ERR_INVALID_ARG;

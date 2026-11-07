@@ -23,10 +23,11 @@ typedef enum {
 
 /** @brief Configuração imutável de um processo consumidor. */
 typedef struct {
-    size_t producer_id;           /**< Índice lógico da estrutura de onde retirar, 1..p; não é PID. */
-    unsigned message_count;       /**< Quantidade solicitada, 1..1024. */
+    size_t producer_id;     /**< Índice lógico da estrutura de onde retirar, 1..p; não é PID. */
+    unsigned message_count; /**< Quantidade solicitada, 1..1024. */
     consumer_ack_mode_t ack_mode; /**< Aguarda ou retorna com consumo parcial. */
-    uint64_t operation_id;        /**< ID deste trabalho consumidor; não altera o operation_id das mensagens. */
+    uint64_t
+        operation_id; /**< ID deste trabalho consumidor; não altera o operation_id das mensagens. */
 } consumer_job_t;
 
 /** @brief Resultado observado em uma operação de consumo. */
