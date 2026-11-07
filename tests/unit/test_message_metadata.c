@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 int main(void) {
@@ -44,6 +45,44 @@ int main(void) {
         || memcmp(&unchanged, &before, sizeof unchanged) != 0) {
         fputs("invalid operation_id test failed\n", stderr);
         return 1;
+    }
+
+    {
+        producer_sequence_t timed_sequence = {0};
+        struct timespec created;
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 20L * 1000L * 1000L};
+        message_t first;
+        message_t second;
+        struct timespec window_start;
+        struct timespec window_end;
+
+        clock_gettime(CLOCK_REALTIME, &created);
+        nanosleep(&pause, NULL);
+
+        clock_gettime(CLOCK_REALTIME, &window_start);
+        if (producer_message_next(&first, &timed_sequence, &job) != MPMC_OK) {
+            fputs("sent_at timing test failed (primeira)\n", stderr);
+            return 1;
+        }
+        nanosleep(&pause, NULL);
+        if (producer_message_next(&second, &timed_sequence, &job) != MPMC_OK) {
+            fputs("sent_at timing test failed (segunda)\n", stderr);
+            return 1;
+        }
+        clock_gettime(CLOCK_REALTIME, &window_end);
+
+        long long created_ns = (long long)created.tv_sec * 1000000000LL + created.tv_nsec;
+        long long start_ns = (long long)window_start.tv_sec * 1000000000LL + window_start.tv_nsec;
+        long long end_ns = (long long)window_end.tv_sec * 1000000000LL + window_end.tv_nsec;
+        long long first_ns = (long long)first.sent_at.tv_sec * 1000000000LL + first.sent_at.tv_nsec;
+        long long second_ns =
+            (long long)second.sent_at.tv_sec * 1000000000LL + second.sent_at.tv_nsec;
+
+        if (first_ns < start_ns || first_ns - created_ns < 20LL * 1000LL * 1000LL
+            || second_ns > end_ns || second_ns - first_ns < 20LL * 1000LL * 1000LL) {
+            fputs("sent_at não representa o instante do envio\n", stderr);
+            return 1;
+        }
     }
 
     puts("Message metadata tests passed.");
