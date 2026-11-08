@@ -10,10 +10,13 @@
  */
 #include <errno.h>
 #include <signal.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "mpmc/ipc/msg.h"
 #include "mpmc/ipc/msg_backend.h"
 
 static int failed(const char *text);
@@ -23,6 +26,12 @@ static void test_queue_isolation(void);
 static void test_fifo(void);
 static void test_nonblocking_receive(void);
 static void check_message(const message_t *received, const message_t *expected);
+static void test_send_uses_blocking_mode(void);
+static void test_queue_cleanup(void);
+mpmc_result_t mpmc_test_msg_create(int *out_msqid);
+mpmc_result_t mpmc_test_msg_remove(int msqid);
+mpmc_result_t
+mpmc_test_msg_send(int msqid, long type, const void *payload, size_t size, bool nowait);
 
 /**
  * @brief Quantidade de verificações executadas nesta suíte.
@@ -33,6 +42,120 @@ static unsigned checks;
  * @brief Quantidade de verificações que registraram falha nesta suíte.
  */
 static unsigned failures;
+
+/**
+ * @brief Limite de identificadores registrados durante a injeção de falhas.
+ */
+#define TEST_QUEUE_LIMIT 8u
+
+/**
+ * @brief Número de chamadas realizadas ao substituto de criação.
+ */
+static unsigned create_calls;
+
+/**
+ * @brief Número da chamada de criação que deve falhar; zero desabilita a falha.
+ */
+static unsigned fail_create_call;
+
+/**
+ * @brief Indica se os identificadores de filas devem ser registrados.
+ */
+static bool track_queue_cleanup;
+
+/**
+ * @brief Identificadores das filas criadas durante o cenário de falha.
+ */
+static int created_queue_ids[TEST_QUEUE_LIMIT];
+
+/**
+ * @brief Resultados das tentativas de remoção das filas.
+ */
+static mpmc_result_t removed_queue_results[TEST_QUEUE_LIMIT];
+
+/**
+ * @brief Identificadores das filas cuja remoção foi solicitada.
+ */
+static int removed_queue_ids[TEST_QUEUE_LIMIT];
+
+/**
+ * @brief Quantidade de filas criadas e registradas.
+ */
+static size_t created_queue_count;
+
+/**
+ * @brief Quantidade de tentativas de remoção registradas.
+ */
+static size_t removed_queue_count;
+
+/**
+ * @brief Quantidade de envios realizados pelo backend durante o teste.
+ */
+static unsigned send_calls;
+
+/**
+ * @brief Último valor de nowait recebido pelo substituto de envio.
+ */
+static bool last_send_nowait;
+
+/**
+ * @brief Substitui a criação de filas durante os testes.
+ * @param out_msqid Identificador da fila criada.
+ * @return Resultado da criação real ou erro simulado.
+ * @details Permite provocar uma falha em uma chamada específica de criação.
+ */
+mpmc_result_t mpmc_test_msg_create(int *out_msqid) {
+    ++create_calls;
+
+    if (fail_create_call != 0u && create_calls == fail_create_call) {
+        return (mpmc_result_t){
+            .status = MPMC_ERR_SYS,
+            .system_errno = ENOSPC,
+        };
+    }
+
+    mpmc_result_t result = sysv_msg_create(out_msqid);
+
+    if (track_queue_cleanup && result.status == MPMC_OK && created_queue_count < TEST_QUEUE_LIMIT) {
+        created_queue_ids[created_queue_count++] = *out_msqid;
+    }
+
+    return result;
+}
+
+/**
+ * @brief Substitui a remoção de filas e registra os resultados.
+ * @param msqid Identificador da fila a remover.
+ * @return Resultado da remoção real.
+ */
+mpmc_result_t mpmc_test_msg_remove(int msqid) {
+    mpmc_result_t result = sysv_msg_remove(msqid);
+
+    if (track_queue_cleanup && removed_queue_count < TEST_QUEUE_LIMIT) {
+        removed_queue_ids[removed_queue_count] = msqid;
+        removed_queue_results[removed_queue_count] = result;
+        ++removed_queue_count;
+    }
+
+    return result;
+}
+
+/**
+ * @brief Registra o modo de envio solicitado pelo backend.
+ * @param msqid Identificador da fila.
+ * @param type Tipo da mensagem.
+ * @param payload Corpo da mensagem.
+ * @param size Tamanho do corpo.
+ * @param nowait Indica se o envio deve ser não bloqueante.
+ * @return Resultado do envio real.
+ */
+mpmc_result_t
+mpmc_test_msg_send(int msqid, long type, const void *payload, size_t size, bool nowait) {
+    ++send_calls;
+    last_send_nowait = nowait;
+
+    return sysv_msg_send(msqid, type, payload, size, nowait);
+}
 
 /**
  * @brief Registra uma verificação sem interromper a suíte.
@@ -243,6 +366,8 @@ static void test_fifo(void) {
      * A espera por ACK só é executada quando a segunda mensagem foi
      * efetivamente recebida e corresponde à operação registrada.
      */
+    bool ack_message_received = received.operation_id == second.operation_id;
+
     check_message(&received, &second);
 
     struct sigaction action = {.sa_handler = on_alarm};
@@ -252,7 +377,7 @@ static void test_fifo(void) {
     int rc = sigaction(SIGALRM, &action, &previous);
     CHECK(rc == 0);
 
-    if (rc == 0) {
+    if (rc == 0 && ack_message_received) {
         alarm(2);
         result = msg_backend_ack_wait(backend, 31u);
         alarm(0);
@@ -323,6 +448,96 @@ static void check_message(const message_t *received, const message_t *expected) 
 }
 
 /**
+ * @brief Verifica que o backend solicita envio bloqueante.
+ * @details O envio bloqueante permite que msgsnd() aplique backpressure
+ * quando a capacidade da fila é atingida.
+ */
+static void test_send_uses_blocking_mode(void) {
+    msg_backend_t *backend = NULL;
+    mpmc_result_t result = msg_backend_create(&backend, 1u);
+
+    CHECK(result.status == MPMC_OK);
+    CHECK(backend != NULL);
+
+    if (result.status != MPMC_OK || backend == NULL) return;
+
+    message_t message = {
+        .sender_pid = getpid(),
+        .sequence = 1u,
+        .operation_id = 50u,
+    };
+
+    send_calls = 0u;
+    last_send_nowait = true;
+
+    result = msg_backend_send(backend, 1u, &message);
+
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+    CHECK(send_calls == 1u);
+    CHECK(!last_send_nowait);
+
+    msg_backend_destroy(backend);
+}
+
+/**
+ * @brief Verifica a remoção das filas após uma falha parcial na criação.
+ * @details Simula uma falha na terceira chamada de criação e verifica
+ * se as duas filas criadas anteriormente foram removidas.
+ */
+static void test_queue_cleanup(void) {
+    msg_backend_t *backend = NULL;
+
+    create_calls = 0u;
+    fail_create_call = 3u;
+    created_queue_count = 0u;
+    removed_queue_count = 0u;
+    track_queue_cleanup = true;
+
+    mpmc_result_t result = msg_backend_create(&backend, 3u);
+
+    track_queue_cleanup = false;
+    fail_create_call = 0u;
+
+    CHECK(result.status == MPMC_ERR_SYS);
+    CHECK(result.system_errno == ENOSPC);
+    CHECK(backend == NULL);
+
+    CHECK(create_calls == 3u);
+    CHECK(created_queue_count == 2u);
+    CHECK(removed_queue_count == 2u);
+
+    if (created_queue_count == 2u && removed_queue_count == 2u) {
+        for (size_t index = 0u; index < 2u; ++index) {
+            CHECK(removed_queue_ids[index] == created_queue_ids[index]);
+            CHECK(removed_queue_results[index].status == MPMC_OK);
+            CHECK(removed_queue_results[index].system_errno == 0);
+        }
+    }
+
+    /* Evita deixar recursos caso a falha simulada não tenha ocorrido. */
+    if (backend != NULL) {
+        msg_backend_destroy(backend);
+    }
+
+    /* Remove eventuais filas que tenham permanecido após uma falha de cleanup. */
+    for (size_t index = 0u; index < created_queue_count; ++index) {
+        bool removed = false;
+
+        for (size_t removed_index = 0u; removed_index < removed_queue_count; ++removed_index) {
+            if (removed_queue_ids[removed_index] == created_queue_ids[index]
+                && removed_queue_results[removed_index].status == MPMC_OK) {
+                removed = true;
+                break;
+            }
+        }
+
+        if (!removed) {
+            (void)sysv_msg_remove(created_queue_ids[index]);
+        }
+    }
+}
+/**
  * @brief Executa os testes das filas de dados, cenário de dois consumidores e confirmações
  * seletivas.
  * @return Zero se todos os cenários passarem; um se falha.
@@ -332,6 +547,8 @@ int main(void) {
     test_queue_isolation();
     test_fifo();
     test_nonblocking_receive();
+    test_send_uses_blocking_mode();
+    test_queue_cleanup();
 
     msg_backend_t *parent = NULL;
     mpmc_result_t result = msg_backend_create(&parent, 2u);
