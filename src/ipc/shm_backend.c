@@ -106,6 +106,53 @@ cleanup:
     return result;
 }
 
+mpmc_result_t
+shm_backend_send(shm_backend_t *backend, size_t producer_id, const message_t *message) {
+    (void)backend;
+    (void)producer_id;
+    (void)message;
+    return (mpmc_result_t){.status = MPMC_ERR_STATE};
+}
+
+mpmc_result_t
+shm_backend_receive(shm_backend_t *backend, size_t producer_id, message_t *out, bool blocking) {
+    (void)backend;
+    (void)producer_id;
+    (void)out;
+    (void)blocking;
+    return (mpmc_result_t){.status = MPMC_ERR_STATE};
+}
+
+mpmc_result_t
+shm_backend_ack_begin(shm_backend_t *backend, uint64_t operation_id, unsigned expected) {
+    (void)backend;
+    (void)operation_id;
+    (void)expected;
+    return (mpmc_result_t){.status = MPMC_ERR_STATE};
+}
+
+mpmc_result_t shm_backend_ack_wait(shm_backend_t *backend, uint64_t operation_id) {
+    (void)backend;
+    (void)operation_id;
+    return (mpmc_result_t){.status = MPMC_ERR_STATE};
+}
+
+mpmc_result_t shm_backend_ack_end(shm_backend_t *backend, uint64_t operation_id) {
+    (void)backend;
+    (void)operation_id;
+    return (mpmc_result_t){.status = MPMC_ERR_STATE};
+}
+
+mpmc_result_t
+shm_backend_consumed_count(shm_backend_t *backend, size_t producer_id, uint64_t *out_count) {
+    if (backend == NULL || out_count == NULL || producer_id == 0u
+        || producer_id > backend->producer_count) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    }
+    *out_count = 0u;
+    return (mpmc_result_t){.status = MPMC_OK};
+}
+
 /**
  * @details Compartilha shm_backend_cleanup() com shm_backend_destroy(), usando
  * remove_global=false para preservar os segmentos globais do supervisor.

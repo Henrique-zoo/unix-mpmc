@@ -34,6 +34,7 @@ typedef struct {
 /** @brief Estado privado mantido exclusivamente pelo processo supervisor. */
 struct supervisor {
     size_t producer_count;      /**< Quantidade de estruturas configuradas. */
+    ipc_context_t *ipc;         /**< Recursos IPC globais pertencentes ao supervisor. */
     child_record_t *children;   /**< Vetor dinâmico de filhos ativos. */
     size_t child_count;         /**< Número de registros ocupados. */
     size_t child_capacity;      /**< Capacidade alocada do vetor. */
@@ -261,6 +262,12 @@ mpmc_result_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_m
         free(supervisor);
         return error;
     }
+    error = ipc_init(&supervisor->ipc, producer_count, mode);
+    if (error.status != MPMC_OK) {
+        close_event_pipe(supervisor);
+        free(supervisor);
+        return error;
+    }
     *out = supervisor;
     return (mpmc_result_t){.status = MPMC_OK};
 }
@@ -320,7 +327,7 @@ mpmc_result_t supervisor_poll_events(supervisor_t *supervisor) {
             continue;
         }
         if (read_errno == EAGAIN || read_errno == EWOULDBLOCK) {
-            return (mpmc_result_t){.status = MPMC_OK};
+            return ipc_poll_events(supervisor->ipc);
         }
         return (mpmc_result_t){
             .status = MPMC_ERR_SYS,
@@ -687,7 +694,13 @@ static void format_end(const child_report_t *report, char *buffer, size_t size) 
  * contém ">>", para não ser confundida com o prompt.
  */
 mpmc_result_t supervisor_print_report(const supervisor_t *supervisor, FILE *out) {
-    if (supervisor == NULL || out == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    if (supervisor == NULL || out == NULL) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    }
+    mpmc_result_t event_error = ipc_poll_events((ipc_context_t *)supervisor->ipc);
+    if (event_error.status != MPMC_OK) {
+        return event_error;
+    }
 
     struct timespec now;
     uint64_t total_ns = 0u;
@@ -752,6 +765,17 @@ mpmc_result_t supervisor_print_report(const supervisor_t *supervisor, FILE *out)
             };
         }
     }
+    for (size_t producer_id = 1u; producer_id <= supervisor->producer_count; ++producer_id) {
+        uint64_t consumed = 0u;
+        mpmc_result_t count_error =
+            ipc_consumed_count(supervisor->ipc, producer_id, &consumed);
+        if (count_error.status != MPMC_OK) {
+            return count_error;
+        }
+        if (fprintf(out, "Consumidos pela estrutura %zu: %" PRIu64 "\n", producer_id, consumed) < 0) {
+            return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+        }
+    }
 
     char total_text[32];
     format_duration(total_text, sizeof total_text, total_ns);
@@ -791,6 +815,7 @@ supervisor_report_get(const supervisor_t *supervisor, size_t index, child_report
 void supervisor_destroy(supervisor_t *supervisor) {
     if (supervisor == NULL) return;
     close_event_pipe(supervisor);
+    ipc_destroy(supervisor->ipc);
     free(supervisor->children);
     free(supervisor->reports);
     free(supervisor);

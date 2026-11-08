@@ -54,7 +54,9 @@ $(UNIT_DIR)/test_command: tests/unit/test_command.c src/app/command.c src/error.
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
 $(UNIT_DIR)/test_supervisor: tests/unit/test_supervisor.c \
-		$(UNIT_DIR)/supervisor_for_test.o src/app/command.c src/error.c
+		$(UNIT_DIR)/supervisor_for_test.o src/app/command.c src/error.c \
+		src/ipc/transport.c src/ipc/msg_backend.c src/ipc/shm_backend.c src/ipc/msg.c \
+		src/ipc/shm.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -94,8 +96,18 @@ $(UNIT_DIR)/test_message_metadata: tests/unit/test_message_metadata.c src/worker
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+$(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c src/ipc/msg_backend.c src/ipc/msg.c src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/test_isolation: tests/unit/test_isolation.c src/app/command.c src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
 unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
-		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_shm $(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_message_metadata
+		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
+		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_message_metadata \
+		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
 	@$(UNIT_DIR)/test_msg
@@ -104,6 +116,8 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 	@$(UNIT_DIR)/test_shm
 	@$(UNIT_DIR)/test_shm_backend
 	@$(UNIT_DIR)/test_message_metadata
+	@$(UNIT_DIR)/test_msg_backend
+	@$(UNIT_DIR)/test_isolation
 
 # Teste do REPL com pseudo-terminal (POSIX; não exige -lutil nem ferramentas externas).
 INTEGRATION_DIR := $(BUILD_DIR)/integration
@@ -116,6 +130,8 @@ $(INTEGRATION_DIR)/test_repl: tests/integration/test_repl.c
 test: all unit $(INTEGRATION_DIR)/test_repl
 	@printf 'shutdown\n' | ./mpmc 2 1 > /dev/null
 	@printf 'shutdown\n' | ./mpmc 2 2 > /dev/null
+	@sh tests/integration/test_args.sh ./mpmc
+	@sh tests/integration/test_invalid_commands.sh ./mpmc
 	@sh tests/integration/test_repl.sh ./mpmc
 	@$(INTEGRATION_DIR)/test_repl ./mpmc
 	@echo 'Unit, startup and REPL tests passed.'
