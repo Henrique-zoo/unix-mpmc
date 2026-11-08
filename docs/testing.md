@@ -18,7 +18,7 @@ não é suficiente para provar correção concorrente.
 | U04 | `command` | `ack` igual a 0, 1, 2, 3 |
 | U05 | `command` | `produz 0` aceito; `consome 0` rejeitado |
 | U06 | `command` | `i` maior que `p` rejeitado |
-| U07 | `producer` | Mapeamento *striped* com `n` divisível/não divisível por `p` |
+| U07 | `producer` | Mapeamento *striped* com `n` divisível/não divisível por `p` (`test_producer_routing`: função pura `producer_route_destination`, `p=1`, `n<p`, `n=1024`, pré-condições `p>0` e ordinal de base 1) |
 | U08 | `message` | Sequências crescentes por PID de produtor; timestamps preenchidos |
 | U09 | `status` | Conversão de códigos de retorno a mensagens legíveis |
 | U10 | `message`/ACK | Identidade `(operation_id, sender_pid, sequence)` preservada até o ACK; `sent_at` não é usado como chave |
@@ -98,7 +98,7 @@ recursos IPC de outros usuários/processos por `ipcrm`.
 
 ```bash
 make debug
-make unit   # testes de command, supervisor, msg, sem, error, wrappers, backend e buffer shm
+make unit   # testes de command, supervisor, msg, sem, error, wrappers, backend, buffer shm e roteamento cíclico do produtor
 make test   # unitários + smoke + integração do REPL
 make docs
 ```
