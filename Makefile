@@ -144,7 +144,10 @@ $(UNIT_DIR)/msg_backend_for_test.o: src/ipc/msg_backend.c \
 		-c $< -o $@
 
 $(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c \
-		$(UNIT_DIR)/msg_backend_for_test.o src/ipc/msg.c src/error.c
+        $(UNIT_DIR)/msg_backend_for_test.o src/ipc/msg.c src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_producer: tests/unit/test_producer.c $(WORKERS_DIR)/producer.c \
 		$(WORKERS_DIR)/producer_routing.c
 	@mkdir -p $(dir $@)
