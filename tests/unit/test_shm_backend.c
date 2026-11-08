@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "mpmc/ipc/shm_backend.h"
+#include "shm_ring.h"
 
 /**
  * @brief Capacidade dos vetores de segmentos e de rastreamento de alocações.
@@ -56,8 +57,14 @@ static unsigned failures;
 typedef struct {
     bool created;  /**< Criação simulada ainda não seguida de remoção global bem-sucedida. */
     bool attached; /**< Associação simulada ainda não seguida de detach bem-sucedido. */
-    unsigned char data[MPMC_SHM_SEGMENT_BYTES]; /**< Área de dados devolvida na associação. */
+    /** @brief Área de dados alinhada para o buffer compartilhado. */
+    alignas(shm_ring_t) unsigned char data[MPMC_SHM_SEGMENT_BYTES];
 } fake_segment_t;
+
+static_assert(
+    offsetof(fake_segment_t, data) % alignof(shm_ring_t) == 0,
+    "os dados de cada segmento simulado devem estar alinhados para shm_ring_t"
+);
 
 /** @brief Armazena cópias dos diagnósticos recebidos pela callback de cleanup. */
 typedef struct {
@@ -430,6 +437,9 @@ static void test_null_and_invalid_arguments(void) {
  */
 static void test_success(void) {
     reset_case();
+    for (size_t i = 0; i < PRODUCER_COUNT; ++i) {
+        memset(segments[i].data, 0xA5, sizeof segments[i].data);
+    }
     error_log_t log = {0};
     const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
     shm_backend_t *backend = NULL;
@@ -438,6 +448,10 @@ static void test_success(void) {
     CHECK(create_calls == PRODUCER_COUNT && attach_calls == PRODUCER_COUNT);
     for (size_t i = 0; i < PRODUCER_COUNT; ++i) {
         CHECK(segments[i].created && segments[i].attached);
+        const shm_ring_t *ring = (const void *)segments[i].data;
+        CHECK(ring->head == 0 && ring->tail == 0 && ring->count == 0);
+        CHECK(ring->capacity == 63);
+        CHECK(ring->consumed_total == 0);
     }
     check_result(shm_backend_destroy(backend, &reporter), MPMC_OK, 0);
     CHECK(detach_calls == PRODUCER_COUNT && remove_calls == PRODUCER_COUNT);

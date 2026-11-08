@@ -31,7 +31,6 @@ producer_message_next(message_t *out, producer_sequence_t *sequence, const produ
         .sequence = next,
         .sent_at = sent_at,
         .operation_id = job->operation_id,
-        .ack_required = job->ack_mode == PRODUCER_ACK_WAIT,
     };
     sequence->last_sequence = next;
     return MPMC_OK;

@@ -65,8 +65,9 @@ size_t ipc_producer_count(const ipc_context_t *context);
  * os valores possíveis de status e system_errno não podem ser verificados.
  * @details Pode bloquear aguardando espaço. Confirmações, quando solicitadas,
  * são independentes da conclusão desta função: envio != consumo.
- * @pre message->ack_required exige ipc_ack_begin() prévio para o
- * message->operation_id. O backend preserva sender_pid, sequence e sent_at.
+ * @pre Para solicitar confirmação, chamar ipc_ack_begin() para o
+ * message->operation_id antes do primeiro envio. O backend consulta esse contexto
+ * para determinar a política de ACK e preserva todos os campos da mensagem.
  */
 mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message_t *message);
 
@@ -79,7 +80,9 @@ mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message
  * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
  * os valores possíveis de status e system_errno não podem ser verificados.
  * @details O backend registra exatamente um consumo e sinaliza ao produtor
- * quando a mensagem possuir ack_required=true. Não emitir ACK duplicado.
+ * quando o protocolo do backend indicar solicitação de ACK para a operação.
+ * No modo 1, consulta o registro compartilhado; no modo 2, interpreta o mtype
+ * do envelope de dados. Não emitir ACK duplicado.
  * @warning A contagem e a publicação do ACK exigem desenho à prova de falhas
  * para evitar consumo contado mas não confirmado.
  */
@@ -93,7 +96,7 @@ ipc_receive(ipc_context_t *context, size_t producer_id, message_t *out, bool blo
  * @param expected Número total de mensagens a confirmar, de 1 a 1024.
  * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
  * os valores possíveis de status e system_errno não podem ser verificados.
- * @pre Deve ser chamada ANTES do primeiro envio marcado com ack_required.
+ * @pre Deve ser chamada ANTES do primeiro envio da operação que espera ACKs.
  */
 mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsigned expected);
 

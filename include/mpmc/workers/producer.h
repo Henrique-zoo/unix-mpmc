@@ -51,6 +51,7 @@ typedef struct {
  * @details Só avança a sequência se conseguir obter o timestamp. Cada processo
  * produtor deve manter seu próprio estado, inicializado em zero; assim, a
  * primeira mensagem é 1 e mensagens striped continuam na mesma sequência.
+ * O modo de ACK é validado como parte do trabalho, mas não é gravado na mensagem.
  * Não envia a mensagem nem depende de um backend IPC.
  * @post Em falha, a mensagem e o estado sequencial permanecem inalterados.
  * @note Retorna diretamente mpmc_status_t. No resultado MPMC_ERR_SYS,

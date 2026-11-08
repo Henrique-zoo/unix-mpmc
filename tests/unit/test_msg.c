@@ -560,6 +560,47 @@ static void test_receive_returns_kernel_payload(void) {
     drop_queue(msqid);
 }
 
+/** @brief Confere tipo e FIFO, mensagens vazias e preservação das saídas em falhas. */
+static void test_receive_returns_type(void) {
+    int msqid = new_queue();
+    const long types[] = {2, 1, 2};
+    for (unsigned char i = 0; i < 3; ++i) {
+        CHECK_STATUS(sysv_msg_send(msqid, types[i], &i, sizeof i, false), MPMC_OK);
+    }
+    for (unsigned char i = 0; i < 3; ++i) {
+        unsigned char got = 0xA5;
+        ssize_t size = -1;
+        long type = -1;
+        CHECK_STATUS(
+            sysv_msg_receive_typed(msqid, 0, &got, sizeof got, true, &size, &type), MPMC_OK
+        );
+        CHECK(got == i && size == 1 && type == types[i], "tipo ou FIFO incorreto na recepcao");
+    }
+
+    unsigned char got = 0xA5;
+    ssize_t size = -1;
+    long type = -1;
+    CHECK_ERROR(
+        sysv_msg_receive_typed(msqid, 0, &got, sizeof got, true, &size, &type),
+        MPMC_ERR_WOULD_BLOCK,
+        ENOMSG
+    );
+    CHECK(got == 0xA5 && size == -1 && type == -1, "saidas alteradas em ENOMSG");
+
+    unsigned char large[4] = {1, 2, 3, 4};
+    CHECK_STATUS(sysv_msg_send(msqid, 2, large, sizeof large, false), MPMC_OK);
+    CHECK_ERROR(
+        sysv_msg_receive_typed(msqid, 0, &got, sizeof got, true, &size, &type), MPMC_ERR_SYS, E2BIG
+    );
+    CHECK(got == 0xA5 && size == -1 && type == -1, "saidas alteradas em E2BIG");
+    CHECK_STATUS(sysv_msg_receive(msqid, 0, large, sizeof large, true, &size), MPMC_OK);
+
+    CHECK_STATUS(sysv_msg_send(msqid, 7, NULL, 0, false), MPMC_OK);
+    CHECK_STATUS(sysv_msg_receive_typed(msqid, 0, NULL, 0, true, &size, &type), MPMC_OK);
+    CHECK(size == 0 && type == 7, "tipo perdido na mensagem sem corpo");
+    drop_queue(msqid);
+}
+
 /**
  * @brief Executa os casos da suíte e apresenta o resultado das verificações.
  * @return Zero se nenhuma verificação falhar; um se houver falha ou erro de preparação.
@@ -571,6 +612,7 @@ int main(void) {
     test_zero_size_message();
     test_send_stores_type_and_payload();
     test_receive_returns_kernel_payload();
+    test_receive_returns_type();
     test_fifo_order();
     test_type_filtering();
     test_receive_nowait_empty();

@@ -42,9 +42,16 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count);
  * @param backend Instância herdada no processo produtor.
  * @param producer_id Índice de destino, 1..p.
  * @param message Mensagem lógica a copiar para o envelope System V.
- * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
- * os valores possíveis de status e system_errno não podem ser verificados.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: mensagem inserida na fila; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: backend ou message nulo, ou producer_id fora de 1..p;
+ *   system_errno é zero.
+ * - MPMC_ERR_INTERRUPTED: msgsnd() interrompida por sinal; system_errno contém EINTR.
+ * - MPMC_ERR_SYS: falha em malloc() no wrapper ou em msgsnd(); system_errno
+ *   preserva o errno capturado na operação que falhou.
  * @details Prepara estrutura cujo primeiro campo é `long mtype` positivo.
+ * Usa mtype=2 se a operação possui contexto local de ACK ativo; caso contrário,
+ * usa mtype=1. A política não acrescenta campos ao corpo message_t.
  * O tamanho enviado a msgsnd() exclui esse campo. O envelope não armazena
  * ponteiros de memória privados do processo produtor.
  * @warning Um ACK por mensagem em fila auxiliar limitada pode causar
@@ -59,10 +66,23 @@ msg_backend_send(msg_backend_t *backend, size_t producer_id, const message_t *me
  * @param producer_id Índice lógico de origem, 1..p.
  * @param out Destino da mensagem recebida.
  * @param blocking Habilita espera por mensagem; false usa IPC_NOWAIT.
- * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
- * os valores possíveis de status e system_errno não podem ser verificados.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: mensagem retirada, evento publicado e ACK enviado se solicitado;
+ *   system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: backend ou out nulo, ou producer_id fora de 1..p;
+ *   system_errno é zero.
+ * - MPMC_ERR_WOULD_BLOCK: fila vazia com blocking=false; system_errno contém ENOMSG
+ *   capturado em msgrcv().
+ * - MPMC_ERR_INTERRUPTED: msgrcv() interrompida por sinal; system_errno contém EINTR.
+ * - MPMC_ERR_STATE: tipo de dados diferente de 1/2; system_errno é zero.
+ * - MPMC_ERR_SYS: falha em malloc(), msgrcv() ou msgsnd(), com errno capturado em
+ *   system_errno; um corpo de tamanho incompatível também retorna este estado,
+ *   mas com system_errno zero.
  * @details A remoção de dados e a publicação de eventos/ACKs não são uma
- * transação atômica de kernel; especificar recuperação antes de implementar.
+ * transação atômica de kernel; a recuperação de interrupções entre etapas é pendente.
+ * Recebe com tipo zero para manter FIFO entre os dois tipos de dados e usa
+ * o mtype recebido para decidir se deve emitir ACK.
+ * @note Usa sysv_msg_receive_typed() para obter o tipo sem adicioná-lo a message_t.
  */
 mpmc_result_t
 msg_backend_receive(msg_backend_t *backend, size_t producer_id, message_t *out, bool blocking);
