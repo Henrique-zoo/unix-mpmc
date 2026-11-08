@@ -39,10 +39,14 @@ sempre para baixo:
 - Para cada comando `produz`/`consome`, é criado um filho.
 - O filho herda identificadores IPC e handles após `fork`, mas **não** compartilha
   automaticamente as variáveis normais do heap com o pai.
-- `ipc_worker_close` desaloca o estado local do filho; **não** chama `IPC_RMID`.
+- `ipc_worker_close` desaloca o estado local do filho; **não** chama `IPC_RMID`. É chamada
+  uma única vez pelo ponto de entrada do filho depois que `producer_run()`/`consumer_run()`
+  retornam, qualquer que seja o resultado; essas funções não fecham nem destroem o contexto.
 - `ipc_destroy` remove recursos persistentes e é executado só pelo supervisor, após
   os filhos terem terminado/recolhidos.
 - Se a inicialização falhar na metade, `ipc_init` deve reverter as estruturas já criadas.
+- Falhas ao liberar recursos não substituem o primeiro erro do trabalho. Os contratos
+  completos, com os retornos de cada função, estão em `transport.h`, `producer.h` e `consumer.h`.
 
 O supervisor registra `pid`, `operation_id`, tipo de comando e timestamps monotônicos no
 fork e na coleta do término. Processos que saíram espontaneamente devem ser recolhidos
@@ -67,6 +71,17 @@ um `SIGTERM` enviado por `shutdown` imediatamente após o despacho cairia no tra
 REPL (que apenas marca uma flag) e o filho o ignoraria, travando o `waitpid()` bloqueante. O
 descritor de leitura/escrita do self-pipe é movido para fora de 0..2, para não colidir com
 `stdin` quando o processo é iniciado com descritores padrão fechados.
+
+## Resultados dos filhos para o supervisor
+
+Nenhum resultado depende do heap do filho. Erro e cancelamento chegam pelo estado de término
+coletado com `waitpid()` (código de saída ou sinal, em `child_report_t`): código zero significa
+trabalho concluído por completo; código diferente de zero, falha ou consumo parcial; sinal,
+cancelamento (`shutdown` envia `SIGTERM`) ou morte. A quantidade consumida chega por estrutura
+lógica, pelo backend: eventos consolidados por `ipc_poll_events()` no modo 2 e contador em memória
+compartilhada no modo 1, lidos com `ipc_consumed_count()`. A quantidade de um único trabalho
+consumidor existe só em `consumer_result_t`, no filho, e é apresentada por ele; levá-la ao
+supervisor exigiria um canal novo, a ser acordado em #16.
 
 ## Interface pública versus backends
 
@@ -148,8 +163,10 @@ Consulte @ref ipc_protocol e @ref testing_plan.
 - #13 e #14: completar as garantias de progresso e recuperação do backend de filas.
   A integração atual usa sysv_msg_receive_typed() e os tipos de dados 1/2 para
   distinguir operações sem/com ACK, recebendo por tipo zero para preservar FIFO.
-- #16: completar a fachada de transporte, que já despacha para os backends, e
-  atualizar os contratos de fechamento para propagar resultados e diagnósticos de cleanup.
+- #16: a fachada de transporte já despacha para os backends e seus contratos estão
+  fixados em `transport.h` (#45). Falta propagar resultados e diagnósticos de cleanup
+  em `ipc_worker_close`/`ipc_destroy` e testar com os dois backends reais; no modo 1,
+  envio, recebimento, ACK e contagem ainda são stubs (#10 e #11).
 - #17: chamar producer_message_next() imediatamente antes de cada ipc_send() no
   filho, usando o operation_id atribuído pelo supervisor. O helper atual só é
   exercitado pelos testes; ainda não existe envio real pela aplicação.
