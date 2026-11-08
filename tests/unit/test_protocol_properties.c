@@ -596,8 +596,12 @@ typedef struct {
     alignas(16) unsigned char bytes[MPMC_SHM_SEGMENT_BYTES + GUARD];
 } segment_t;
 
-static void
-ring_invariants(const shm_ring_t *ring, size_t pushed, size_t popped, const char *where) {
+static void ring_invariants(
+    const shm_ring_t *ring,
+    size_t pushed,
+    size_t popped,
+    const char *where
+) {
     CHECK(ring->capacity == SHM_RING_CAPACITY, "%s: capacity", where);
     CHECK(
         ring->head < ring->capacity && ring->tail < ring->capacity,

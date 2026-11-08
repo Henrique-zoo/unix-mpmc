@@ -6,8 +6,11 @@
  */
 #include "producer_routing.h"
 
-mpmc_status_t
-producer_route_destination(size_t ordinal, size_t producer_count, size_t *out_destination) {
+mpmc_status_t producer_route_destination(
+    size_t ordinal,
+    size_t producer_count,
+    size_t *out_destination
+) {
     if (out_destination == NULL || producer_count == 0u || ordinal == 0u) {
         return MPMC_ERR_INVALID_ARG;
     }

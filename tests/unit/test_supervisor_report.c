@@ -185,8 +185,11 @@ mpmc_result_t mpmc_test_ipc_poll_events(ipc_context_t *context) {
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
-mpmc_result_t
-mpmc_test_ipc_consumed_count(ipc_context_t *context, size_t producer_id, uint64_t *out_count) {
+mpmc_result_t mpmc_test_ipc_consumed_count(
+    ipc_context_t *context,
+    size_t producer_id,
+    uint64_t *out_count
+) {
     if (!g_fixture.active || context != &g_ipc_context || out_count == NULL || producer_id == 0u
         || producer_id > FIXTURE_PRODUCERS) {
         g_fixture.bad_ipc_context = true;

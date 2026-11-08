@@ -281,16 +281,23 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
     return g_result;
 }
 
-mpmc_result_t
-msg_backend_send(msg_backend_t *backend, size_t producer_id, const message_t *message) {
+mpmc_result_t msg_backend_send(
+    msg_backend_t *backend,
+    size_t producer_id,
+    const message_t *message
+) {
     call_t *call = record(CALL_MSG_SEND, backend);
     call->index = producer_id;
     call->message = message;
     return g_result;
 }
 
-mpmc_result_t
-msg_backend_receive(msg_backend_t *backend, size_t producer_id, message_t *out, bool blocking) {
+mpmc_result_t msg_backend_receive(
+    msg_backend_t *backend,
+    size_t producer_id,
+    message_t *out,
+    bool blocking
+) {
     call_t *call = record(CALL_MSG_RECEIVE, backend);
     call->index = producer_id;
     call->out = out;
@@ -301,8 +308,11 @@ msg_backend_receive(msg_backend_t *backend, size_t producer_id, message_t *out, 
     return g_result;
 }
 
-mpmc_result_t
-msg_backend_ack_begin(msg_backend_t *backend, uint64_t operation_id, unsigned expected) {
+mpmc_result_t msg_backend_ack_begin(
+    msg_backend_t *backend,
+    uint64_t operation_id,
+    unsigned expected
+) {
     call_t *call = record(CALL_MSG_ACK_BEGIN, backend);
     call->operation_id = operation_id;
     call->expected = expected;
@@ -326,8 +336,11 @@ mpmc_result_t msg_backend_poll_events(msg_backend_t *backend) {
     return g_result;
 }
 
-mpmc_result_t
-msg_backend_consumed_count(msg_backend_t *backend, size_t producer_id, uint64_t *out_count) {
+mpmc_result_t msg_backend_consumed_count(
+    msg_backend_t *backend,
+    size_t producer_id,
+    uint64_t *out_count
+) {
     call_t *call = record(CALL_MSG_COUNT, backend);
     call->index = producer_id;
     call->out = out_count;
@@ -350,7 +363,9 @@ void msg_backend_destroy(msg_backend_t *backend) {
 /* ------------------------------------------------------------------ */
 
 mpmc_result_t shm_backend_create(
-    shm_backend_t **out, size_t producer_count, const shm_cleanup_reporter_t *reporter
+    shm_backend_t **out,
+    size_t producer_count,
+    const shm_cleanup_reporter_t *reporter
 ) {
     call_t *call = record(CALL_SHM_CREATE, NULL);
     call->index = producer_count;
@@ -362,16 +377,23 @@ mpmc_result_t shm_backend_create(
     return g_result;
 }
 
-mpmc_result_t
-shm_backend_send(shm_backend_t *backend, size_t producer_id, const message_t *message) {
+mpmc_result_t shm_backend_send(
+    shm_backend_t *backend,
+    size_t producer_id,
+    const message_t *message
+) {
     call_t *call = record(CALL_SHM_SEND, backend);
     call->index = producer_id;
     call->message = message;
     return g_result;
 }
 
-mpmc_result_t
-shm_backend_receive(shm_backend_t *backend, size_t producer_id, message_t *out, bool blocking) {
+mpmc_result_t shm_backend_receive(
+    shm_backend_t *backend,
+    size_t producer_id,
+    message_t *out,
+    bool blocking
+) {
     call_t *call = record(CALL_SHM_RECEIVE, backend);
     call->index = producer_id;
     call->out = out;
@@ -382,8 +404,11 @@ shm_backend_receive(shm_backend_t *backend, size_t producer_id, message_t *out, 
     return g_result;
 }
 
-mpmc_result_t
-shm_backend_ack_begin(shm_backend_t *backend, uint64_t operation_id, unsigned expected) {
+mpmc_result_t shm_backend_ack_begin(
+    shm_backend_t *backend,
+    uint64_t operation_id,
+    unsigned expected
+) {
     call_t *call = record(CALL_SHM_ACK_BEGIN, backend);
     call->operation_id = operation_id;
     call->expected = expected;
@@ -402,8 +427,11 @@ mpmc_result_t shm_backend_ack_end(shm_backend_t *backend, uint64_t operation_id)
     return g_result;
 }
 
-mpmc_result_t
-shm_backend_consumed_count(shm_backend_t *backend, size_t producer_id, uint64_t *out_count) {
+mpmc_result_t shm_backend_consumed_count(
+    shm_backend_t *backend,
+    size_t producer_id,
+    uint64_t *out_count
+) {
     call_t *call = record(CALL_SHM_COUNT, backend);
     call->index = producer_id;
     call->out = out_count;
@@ -413,8 +441,10 @@ shm_backend_consumed_count(shm_backend_t *backend, size_t producer_id, uint64_t 
     return g_result;
 }
 
-mpmc_result_t
-shm_backend_worker_close(shm_backend_t *backend, const shm_cleanup_reporter_t *reporter) {
+mpmc_result_t shm_backend_worker_close(
+    shm_backend_t *backend,
+    const shm_cleanup_reporter_t *reporter
+) {
     call_t *call = record(CALL_SHM_CLOSE, backend);
     call->reporter = reporter;
     return g_result;
