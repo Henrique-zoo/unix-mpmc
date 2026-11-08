@@ -117,6 +117,11 @@ $(UNIT_DIR)/test_producer_routing: tests/unit/test_producer_routing.c \
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(WORKERS_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+$(UNIT_DIR)/test_protocol_properties: tests/unit/test_protocol_properties.c \
+		src/error.c $(WORKERS_DIR)/producer.c $(WORKERS_DIR)/producer_routing.c $(SHM_RING_OBJECT)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(WORKERS_DIR) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c src/ipc/msg_backend.c src/ipc/msg.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
@@ -148,7 +153,7 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
 		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation \
 		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_transport_contract \
-		$(UNIT_DIR)/test_transport
+		$(UNIT_DIR)/test_transport $(UNIT_DIR)/test_protocol_properties
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
 	@$(UNIT_DIR)/test_msg
@@ -164,6 +169,7 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 	@$(UNIT_DIR)/test_producer_routing
 	@$(UNIT_DIR)/test_transport_contract
 	@$(UNIT_DIR)/test_transport
+	@$(UNIT_DIR)/test_protocol_properties
 
 # Teste do REPL com pseudo-terminal (POSIX; não exige -lutil nem ferramentas externas).
 INTEGRATION_DIR := $(BUILD_DIR)/integration
