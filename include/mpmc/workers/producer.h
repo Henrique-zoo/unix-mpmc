@@ -2,6 +2,8 @@
  * @file producer.h
  * @brief Lógica de execução de processos produtores.
  * @ingroup workers
+ * @note producer_message_next() está implementado. producer_run() ainda não possui
+ * implementação: sua documentação é o contrato previsto (pendente: #17).
  */
 #ifndef MPMC_WORKERS_PRODUCER_H
 #define MPMC_WORKERS_PRODUCER_H
@@ -64,15 +66,34 @@ producer_message_next(message_t *out, producer_sequence_t *sequence, const produ
  * @brief Produz as mensagens de um trabalho a partir do processo filho.
  * @param transport Contexto IPC herdado via fork(), pronto para envio.
  * @param job Descrição validada e imutável da operação.
- * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
- * os valores possíveis de status e system_errno não podem ser verificados.
- * @details Gera sender_pid=getpid(), sequência iniciando em 1 e sent_at
- * do CLOCK_REALTIME. Usa ipc_send() para o destino selecionado; para
- * producer_id=0, alterna destinos `1 + ((seq-1) % p)`. Na opção ack=1,
- * executa begin/wait/end; na opção ack=2, não solicita confirmação.
+ * @return Contrato previsto; producer_run() ainda não possui implementação (pendente: #17).
+ * O resultado é mpmc_result_t e deve ter status MPMC_OK somente quando as `message_count`
+ * mensagens foram enviadas e, com PRODUCER_ACK_WAIT, todas foram confirmadas. Nos demais
+ * casos, é o primeiro erro da sequência abaixo, sem alteração:
+ * - MPMC_ERR_INVALID_ARG: transport ou job nulo ou inválido; system_errno é zero.
+ * - Qualquer status de ipc_send(), ipc_ack_begin(), ipc_ack_wait() ou ipc_ack_end(), com
+ *   o system_errno original (ver transport.h para os valores de cada modo).
+ * - O resultado de producer_message_next(), convertido a mpmc_result_t: em
+ *   MPMC_ERR_SYS, producer_run() deve capturar errno imediatamente, pois aquele retorno
+ *   não o transporta.
+ * @details Para cada mensagem, chama producer_message_next() imediatamente antes de
+ * ipc_send(), de modo que sender_pid=getpid(), a sequência (iniciando em 1) e sent_at
+ * (CLOCK_REALTIME) descrevam o envio. Para producer_id=0, o destino da mensagem k é
+ * `1 + ((k-1) % p)`, com p = ipc_producer_count(). Ordem das operações:
+ * - PRODUCER_ACK_WAIT: ipc_ack_begin(operation_id, message_count) antes do primeiro
+ *   envio; ipc_send() de cada mensagem; ipc_ack_wait() depois do último envio;
+ *   ipc_ack_end() ao final, em sucesso, erro ou cancelamento, se ipc_ack_begin()
+ *   tiver retornado MPMC_OK. Se ipc_ack_begin() falhar, nada é enviado.
+ * - PRODUCER_ACK_NONE: somente os envios; nenhuma operação de ACK é chamada.
+ * O primeiro erro interrompe o trabalho e não é substituído por falhas posteriores
+ * de ipc_ack_end(); se o trabalho tiver êxito e ipc_ack_end() falhar, esse é o resultado.
+ * MPMC_ERR_INTERRUPTED e MPMC_ERR_SHUTDOWN encerram o trabalho do mesmo modo. As
+ * mensagens já inseridas não são retiradas.
  * @pre Deve ser chamada em um filho do supervisor, não no processo principal.
- * @post O worker deve liberar recursos locais usando ipc_worker_close() antes
- * de finalizar o processo; o supervisor mantém posse dos recursos globais.
+ * @post O resultado não é entregue por heap: o supervisor o conhece pelo estado de
+ * término do filho (ver transport.h). producer_run() não chama ipc_worker_close() nem
+ * ipc_destroy(); o ponto de entrada do filho chama ipc_worker_close() uma única vez,
+ * qualquer que seja o resultado, e então encerra o processo.
  * @warning Envio pode bloquear por esgotamento de capacidade mesmo com ack=2.
  */
 mpmc_result_t producer_run(ipc_context_t *transport, const producer_job_t *job);
