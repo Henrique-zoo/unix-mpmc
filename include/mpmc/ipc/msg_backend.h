@@ -44,10 +44,11 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count);
  * @param message Mensagem lógica a copiar para o envelope System V.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: mensagem inserida na fila; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: backend ou message nulo, ou producer_id fora de 1..p;
- *   system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: backend ou message nulo, ou producer_id fora de 1..p,
+ *   com system_errno zero; ou msgsnd() retornou EINVAL/EFAULT, preservado em system_errno.
  * - MPMC_ERR_INTERRUPTED: msgsnd() interrompida por sinal; system_errno contém EINTR.
- * - MPMC_ERR_SYS: falha em malloc() no wrapper ou em msgsnd(); system_errno
+ * - MPMC_ERR_SHUTDOWN: msgsnd() retornou EIDRM, preservado em system_errno.
+ * - MPMC_ERR_SYS: falha em malloc() no wrapper ou outra falha em msgsnd(); system_errno
  *   preserva o errno capturado na operação que falhou.
  * @details Prepara estrutura cujo primeiro campo é `long mtype` positivo.
  * Usa mtype=2 se a operação possui contexto local de ACK ativo; caso contrário,
@@ -57,8 +58,11 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count);
  * @warning Um ACK por mensagem em fila auxiliar limitada pode causar
  * deadlock por contrapressão. Ver docs/protocol.md para mitigação exigida.
  */
-mpmc_result_t
-msg_backend_send(msg_backend_t *backend, size_t producer_id, const message_t *message);
+mpmc_result_t msg_backend_send(
+    msg_backend_t *backend,
+    size_t producer_id,
+    const message_t *message
+);
 
 /**
  * @brief Retira uma mensagem, contabiliza e encaminha seu ACK se necessário.
@@ -69,13 +73,16 @@ msg_backend_send(msg_backend_t *backend, size_t producer_id, const message_t *me
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: mensagem retirada, evento publicado e ACK enviado se solicitado;
  *   system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: backend ou out nulo, ou producer_id fora de 1..p;
- *   system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: backend ou out nulo, ou producer_id fora de 1..p,
+ *   com system_errno zero; ou msgrcv()/msgsnd() retornou EINVAL/EFAULT,
+ *   preservado em system_errno.
  * - MPMC_ERR_WOULD_BLOCK: fila vazia com blocking=false; system_errno contém ENOMSG
  *   capturado em msgrcv().
- * - MPMC_ERR_INTERRUPTED: msgrcv() interrompida por sinal; system_errno contém EINTR.
+ * - MPMC_ERR_INTERRUPTED: msgrcv()/msgsnd() interrompida por sinal;
+ *   system_errno contém EINTR.
+ * - MPMC_ERR_SHUTDOWN: msgrcv()/msgsnd() retornou EIDRM, preservado em system_errno.
  * - MPMC_ERR_STATE: tipo de dados diferente de 1/2; system_errno é zero.
- * - MPMC_ERR_SYS: falha em malloc(), msgrcv() ou msgsnd(), com errno capturado em
+ * - MPMC_ERR_SYS: falha em malloc() ou outra falha em msgrcv()/msgsnd(), com errno capturado em
  *   system_errno; um corpo de tamanho incompatível também retorna este estado,
  *   mas com system_errno zero.
  * @details A remoção de dados e a publicação de eventos/ACKs não são uma
@@ -84,8 +91,12 @@ msg_backend_send(msg_backend_t *backend, size_t producer_id, const message_t *me
  * o mtype recebido para decidir se deve emitir ACK.
  * @note Usa sysv_msg_receive_typed() para obter o tipo sem adicioná-lo a message_t.
  */
-mpmc_result_t
-msg_backend_receive(msg_backend_t *backend, size_t producer_id, message_t *out, bool blocking);
+mpmc_result_t msg_backend_receive(
+    msg_backend_t *backend,
+    size_t producer_id,
+    message_t *out,
+    bool blocking
+);
 
 /**
  * @brief Prepara rastreamento de ACK por operação produtora.
@@ -96,8 +107,11 @@ msg_backend_receive(msg_backend_t *backend, size_t producer_id, message_t *out, 
  * os valores possíveis de status e system_errno não podem ser verificados.
  * @note O canal deve distinguir a operação, e não apenas o índice da fila.
  */
-mpmc_result_t
-msg_backend_ack_begin(msg_backend_t *backend, uint64_t operation_id, unsigned expected);
+mpmc_result_t msg_backend_ack_begin(
+    msg_backend_t *backend,
+    uint64_t operation_id,
+    unsigned expected
+);
 
 /**
  * @brief Aguarda ACKs de todas as mensagens da operação indicada.
@@ -139,8 +153,11 @@ mpmc_result_t msg_backend_poll_events(msg_backend_t *backend);
  * os valores possíveis de status e system_errno não podem ser verificados.
  * @pre Chamar msg_backend_poll_events() antes do relatório final.
  */
-mpmc_result_t
-msg_backend_consumed_count(msg_backend_t *backend, size_t producer_id, uint64_t *out_count);
+mpmc_result_t msg_backend_consumed_count(
+    msg_backend_t *backend,
+    size_t producer_id,
+    uint64_t *out_count
+);
 
 /**
  * @brief Libera somente o estado local do processo filho.

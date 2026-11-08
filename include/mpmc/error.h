@@ -54,6 +54,11 @@
  * @par Responsabilidades
  * - Os módulos de IPC interpretam os erros das chamadas de sistema
  *   e preservam suas causas.
+ * - Os wrappers delegam ao kernel a validação dos argumentos das chamadas.
+ *   Somente restrições das operações em C, como saídas desreferenciadas,
+ *   conversões sem perda e tamanhos de envelopes, são verificadas localmente.
+ * - As camadas superiores validam o modelo da aplicação e seus estados,
+ *   que não são conhecidos pelo kernel.
  * - Os demais módulos propagam ou tratam os resultados tipados.
  * - A camada de apresentação decide como contextualizar e comunicar
  *   os erros ao usuário.

@@ -18,6 +18,7 @@
 
 #include <errno.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -165,6 +166,8 @@ static void arm_alarm(long millis) {
  * - MPMC_ERR_WOULD_BLOCK: fila ficou sem capacidade em um envio não bloqueante; system_errno
  *   contém EAGAIN.
  * - MPMC_ERR_INTERRUPTED: msgsnd() retornou EINTR, preservado em system_errno.
+ * - MPMC_ERR_INVALID_ARG: msgsnd() retornou EINVAL/EFAULT, preservado em system_errno.
+ * - MPMC_ERR_SHUTDOWN: msgsnd() retornou EIDRM, preservado em system_errno.
  * - MPMC_ERR_SYS: falha em malloc() ou msgsnd() por outra causa; system_errno contém o errno
  *   capturado na operação que falhou.
  *
@@ -195,7 +198,7 @@ static void test_create_remove(void) {
 
     CHECK_STATUS(sysv_msg_remove(a), MPMC_OK);
     CHECK_STATUS(sysv_msg_remove(b), MPMC_OK);
-    CHECK_STATUS(sysv_msg_remove(a), MPMC_ERR_SYS); /* já removida */
+    CHECK_ERROR(sysv_msg_remove(a), MPMC_ERR_INVALID_ARG, EINVAL); /* já removida */
 }
 
 /**
@@ -206,9 +209,36 @@ static void test_failures_are_propagated(void) {
     char out;
     ssize_t size = 0;
 
-    CHECK_ERROR(sysv_msg_send(-1, 1, &byte, 1, true), MPMC_ERR_SYS, EINVAL);
-    CHECK_ERROR(sysv_msg_receive(-1, 0, &out, 1, true, &size), MPMC_ERR_SYS, EINVAL);
-    CHECK_ERROR(sysv_msg_remove(-1), MPMC_ERR_SYS, EINVAL);
+    CHECK_ERROR(sysv_msg_send(-1, 1, &byte, 1, true), MPMC_ERR_INVALID_ARG, EINVAL);
+    CHECK_ERROR(sysv_msg_receive(-1, 0, &out, 1, true, &size), MPMC_ERR_INVALID_ARG, EINVAL);
+    CHECK_ERROR(sysv_msg_remove(-1), MPMC_ERR_INVALID_ARG, EINVAL);
+}
+
+/** @brief Distingue tipos rejeitados pelo kernel de argumentos usados em cópias locais. */
+static void test_kernel_and_local_arguments(void) {
+    int msqid = new_queue();
+    char body = 'x';
+    char out = '?';
+    ssize_t size = -1;
+    long type = -1;
+
+    CHECK_ERROR(sysv_msg_send(msqid, 0, &body, 1, true), MPMC_ERR_INVALID_ARG, EINVAL);
+    CHECK_ERROR(sysv_msg_send(msqid, -1, &body, 1, true), MPMC_ERR_INVALID_ARG, EINVAL);
+    CHECK_ERROR(sysv_msg_send(msqid, 1, NULL, 1, true), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_ERROR(sysv_msg_send(msqid, 1, &body, SIZE_MAX, true), MPMC_ERR_INVALID_ARG, 0);
+
+    CHECK_STATUS(sysv_msg_send(msqid, 1, &body, 1, true), MPMC_OK);
+    CHECK_ERROR(sysv_msg_receive(msqid, 0, &out, 1, true, NULL), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_ERROR(sysv_msg_receive(msqid, 0, NULL, 1, true, &size), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_ERROR(
+        sysv_msg_receive_typed(msqid, 0, &out, SIZE_MAX, true, &size, &type),
+        MPMC_ERR_INVALID_ARG,
+        0
+    );
+    CHECK(out == '?' && size == -1 && type == -1, "rejeição local alterou as saídas");
+    CHECK_STATUS(sysv_msg_receive_typed(msqid, 0, &out, 1, true, &size, &type), MPMC_OK);
+    CHECK(out == body && size == 1 && type == 1, "rejeição local removeu a mensagem");
+    drop_queue(msqid);
 }
 
 /**
@@ -450,7 +480,7 @@ static void test_message_size_limit(void) {
     memset(sent, 0xA5, msgmax + 1);
 
     /* Acima de MSGMAX o kernel recusa, e o wrapper propaga a falha. */
-    CHECK_STATUS(sysv_msg_send(msqid, 1, sent, msgmax + 1, true), MPMC_ERR_SYS);
+    CHECK_ERROR(sysv_msg_send(msqid, 1, sent, msgmax + 1, true), MPMC_ERR_INVALID_ARG, EINVAL);
 
     /* Exatamente MSGMAX é aceito, desde que a fila comporte (MSGMNB). */
     if (msgmax <= msgmnb) {
@@ -608,6 +638,7 @@ static void test_receive_returns_type(void) {
 int main(void) {
     test_create_remove();
     test_failures_are_propagated();
+    test_kernel_and_local_arguments();
     test_roundtrip_preserves_payload();
     test_zero_size_message();
     test_send_stores_type_and_payload();
