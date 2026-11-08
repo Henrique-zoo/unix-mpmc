@@ -323,7 +323,8 @@ static void check_message(const message_t *received, const message_t *expected) 
 }
 
 /**
- * @brief Executa os testes das filas de dados, cenário de dois consumidores e confirmações seletivas.
+ * @brief Executa os testes das filas de dados, cenário de dois consumidores e confirmações
+ * seletivas.
  * @return Zero se todos os cenários passarem; um se falha.
  */
 int main(void) {
