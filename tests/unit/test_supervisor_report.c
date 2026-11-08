@@ -154,9 +154,7 @@ int mpmc_test_clock_gettime(clockid_t clock_id, struct timespec *out) {
     return 0;
 }
 
-mpmc_result_t mpmc_test_ipc_init(
-    ipc_context_t **out, size_t producer_count, ipc_mode_t mode
-) {
+mpmc_result_t mpmc_test_ipc_init(ipc_context_t **out, size_t producer_count, ipc_mode_t mode) {
     if (!g_fixture.active || out == NULL) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
@@ -187,11 +185,10 @@ mpmc_result_t mpmc_test_ipc_poll_events(ipc_context_t *context) {
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
-mpmc_result_t mpmc_test_ipc_consumed_count(
-    ipc_context_t *context, size_t producer_id, uint64_t *out_count
-) {
-    if (!g_fixture.active || context != &g_ipc_context || out_count == NULL
-        || producer_id == 0u || producer_id > FIXTURE_PRODUCERS) {
+mpmc_result_t
+mpmc_test_ipc_consumed_count(ipc_context_t *context, size_t producer_id, uint64_t *out_count) {
+    if (!g_fixture.active || context != &g_ipc_context || out_count == NULL || producer_id == 0u
+        || producer_id > FIXTURE_PRODUCERS) {
         g_fixture.bad_ipc_context = true;
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
@@ -267,9 +264,7 @@ static void reset_fixture(void) {
     g_fixture.consumed[2] = 41u;
 }
 
-static bool report_for_pid(
-    const supervisor_t *supervisor, pid_t pid, child_report_t *out
-) {
+static bool report_for_pid(const supervisor_t *supervisor, pid_t pid, child_report_t *out) {
     for (size_t index = 0u; index < supervisor_report_count(supervisor); ++index) {
         child_report_t candidate;
         if (supervisor_report_get(supervisor, index, &candidate).status != MPMC_OK) {
@@ -283,9 +278,7 @@ static bool report_for_pid(
     return false;
 }
 
-static mpmc_result_t capture_report(
-    const supervisor_t *supervisor, char *buffer, size_t size
-) {
+static mpmc_result_t capture_report(const supervisor_t *supervisor, char *buffer, size_t size) {
     if (buffer == NULL || size < 2u) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
@@ -345,14 +338,12 @@ static void test_controlled_report_presentation(void) {
     supervisor_t *supervisor = NULL;
     mpmc_result_t result = supervisor_create(&supervisor, FIXTURE_PRODUCERS, IPC_SHARED_MEMORY);
     CHECK(
-        result.status == MPMC_OK && supervisor != NULL,
-        "supervisor_create deve aceitar a fixture"
+        result.status == MPMC_OK && supervisor != NULL, "supervisor_create deve aceitar a fixture"
     );
     CHECK(result.system_errno == 0, "criação bem-sucedida deve zerar system_errno");
     CHECK(g_fixture.init_calls == 1u, "IPC controlado inicializado uma vez");
     CHECK(
-        supervisor_producer_count(supervisor) == FIXTURE_PRODUCERS,
-        "quantidade lógica configurada"
+        supervisor_producer_count(supervisor) == FIXTURE_PRODUCERS, "quantidade lógica configurada"
     );
 
     if (supervisor == NULL) {
@@ -372,17 +363,11 @@ static void test_controlled_report_presentation(void) {
      * 4101 ainda não está pronto. 4102 e 4103 terminam primeiro.
      * A compactação interna do vetor não deve afetar a identidade dos relatórios.
      */
-    CHECK(
-        supervisor_reap(supervisor, false).status == MPMC_OK,
-        "primeira coleta não bloqueante"
-    );
+    CHECK(supervisor_reap(supervisor, false).status == MPMC_OK, "primeira coleta não bloqueante");
     CHECK(supervisor_report_count(supervisor) == 2u, "dois relatórios na primeira coleta");
 
     g_fixture.children[0].ready = true;
-    CHECK(
-        supervisor_reap(supervisor, false).status == MPMC_OK,
-        "segunda coleta não bloqueante"
-    );
+    CHECK(supervisor_reap(supervisor, false).status == MPMC_OK, "segunda coleta não bloqueante");
     CHECK(supervisor_report_count(supervisor) == FIXTURE_CHILDREN, "todos os filhos recolhidos");
 
     child_report_t report;
@@ -398,8 +383,7 @@ static void test_controlled_report_presentation(void) {
             "PID 4101 terminou com sucesso"
         );
         CHECK(
-            report.duration_ns == 200000000u,
-            "PID 4101 atravessou a mudança de segundo com 200 ms"
+            report.duration_ns == 200000000u, "PID 4101 atravessou a mudança de segundo com 200 ms"
         );
         CHECK(report.duration_ns < UINT64_C(1000000000), "duração positiva sem underflow");
     }
@@ -453,15 +437,9 @@ static void test_controlled_report_presentation(void) {
     );
     CHECK(strstr(output, "Filhos recolhidos: 3\n") != NULL, "total de filhos recolhidos");
 
-    check_report_line(
-        output, 4101, 1u, "produz", "código 0 (sucesso)", "0.200 s"
-    );
-    check_report_line(
-        output, 4102, 2u, "consome", "sinal 15", "0.000 s"
-    );
-    check_report_line(
-        output, 4103, 3u, "produz", "código 7 (falha)", "0.000 s"
-    );
+    check_report_line(output, 4101, 1u, "produz", "código 0 (sucesso)", "0.200 s");
+    check_report_line(output, 4102, 2u, "consome", "sinal 15", "0.000 s");
+    check_report_line(output, 4103, 3u, "produz", "código 7 (falha)", "0.000 s");
 
     CHECK(
         strstr(output, "Consumidos pela estrutura 1: 17\n") != NULL
