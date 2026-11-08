@@ -138,4 +138,7 @@ encontre esse buffer quando for chamada. O registro é armazenado pela atribuiç
 `log->items[log->count++] = *error`, que copia todos os campos.
 
 Os contratos públicos permanecem em `include/mpmc/ipc/shm_backend.h`. O arquivo
-`src/ipc/shm_backend.c` descreve a implementação e o contrato das auxiliares privadas.
+`src/ipc/shm_backend/lifecycle.c` descreve a implementação e o contrato das auxiliares
+privadas de criação e liberação dos recursos.
+A representação do contexto e dos registros de segmentos fica em
+`src/ipc/shm_backend/shm_backend_internal.h`.

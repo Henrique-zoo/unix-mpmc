@@ -220,6 +220,16 @@ unix-mpmc/
 │   ├── app/                  # Implementações de command/repl/supervisor
 │   ├── workers/              # Implementações de producer/consumer
 │   └── ipc/                  # Implementações de transporte e wrappers
+│       ├── transport.c
+│       ├── msg_backend.c
+│       ├── shm.c
+│       ├── sem.c
+│       ├── msg.c
+│       └── shm_backend/      # Implementação e detalhes privados deste backend
+│           ├── lifecycle.c  # Criação, inicialização e liberação dos recursos
+│           ├── shm_backend_internal.h # Tipos privados do contexto e dos segmentos
+│           ├── shm_ring.h   # Layout e contratos privados do buffer circular
+│           └── shm_ring.c   # Operações locais do buffer; sincronização no backend
 ├── docs/
 │   ├── architecture.md      # Fronteiras e dependências
 │   ├── protocol.md          # Contratos concorrentes e confirmações
@@ -230,8 +240,9 @@ unix-mpmc/
 └── build/                   # Gerado; não versionado
 ```
 
-Os arquivos `.c` listados acima são **alvos de implementação**, não arquivos entregues
-neste pacote de documentação.
+O cabeçalho `include/mpmc/ipc/shm_backend.h` concentra os contratos do backend de
+memória compartilhada. Seus arquivos de implementação e eventuais cabeçalhos
+privados ficam em `src/ipc/shm_backend/`.
 
 ### Caminho de execução
 
@@ -296,7 +307,10 @@ capacity = floor((2048 - tamanho_do_cabeçalho_alinhado) / tamanho_da_entrada_al
 ```
 
 Os valores exatos dependem do layout em C e de seu alinhamento (`sizeof`, `alignof`).
-O layout deve ser dimensionado/verificado antes de implementar o algoritmo.
+O [layout definido no protocolo](docs/protocol.md) usa cabeçalho alinhado de 16 bytes
+e mensagens de 32 bytes, resultando em 63 posições. Os índices e a ocupação usam
+`uint8_t`, o menor tipo inteiro sem sinal de largura fixa que comporta seus limites.
+Esse layout deve ser verificado com `static_assert` ao implementar o algoritmo.
 
 Semáforos típicos por estrutura:
 
@@ -338,8 +352,11 @@ Uma mensagem guarda:
 - `sequence`: número sequencial **do processo emissor** (1, 2, ...);
 - `sent_at`: instante de envio (`CLOCK_REALTIME`), incluindo nanossegundos;
 - `operation_id`: identificador único atribuído pelo supervisor, para correlacionar
-  confirmações e facilitar observabilidade;
-- `ack_required`: indica solicitação de confirmação de consumo (`produz ... 1`).
+  confirmações e facilitar observabilidade.
+
+A solicitação de confirmação pertence à operação e é preparada por `ipc_ack_begin()`
+antes dos envios de `produz ... 1`. O consumidor a identifica pela tabela de operações
+na memória compartilhada ou pelo `mtype` do envelope nas filas.
 
 Uma operação de consumo bem-sucedida remove cada mensagem **exatamente uma vez**. O
 protocolo de confirmação sinaliza que a mensagem **foi consumida**, e não apenas enviada ou

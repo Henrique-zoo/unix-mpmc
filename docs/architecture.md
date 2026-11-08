@@ -75,6 +75,29 @@ backend selecionado. As funções `shm_backend_*` e `msg_backend_*` são interna
 implementação, mesmo quando seus protótipos são publicados em `include/` para
 facilitar a documentação técnica.
 
+A implementação de `shm_backend` fica no diretório `src/ipc/shm_backend/`.
+O arquivo `lifecycle.c` contém a criação, a inicialização e a liberação dos
+recursos. `shm_ring.c` implementa as operações locais do buffer circular, cujo
+layout e contratos privados ficam em `shm_ring.h`. A interface para a fachada
+permanece em `include/mpmc/ipc/shm_backend.h`.
+
+Tipos que precisam ser conhecidos por vários arquivos de implementação devem
+ser definidos em um cabeçalho privado no mesmo diretório. `shm_ring_t` já segue
+essa organização. `shm_backend_internal.h` define `shm_segment_t` e a representação
+completa de `struct shm_backend`, incluindo o vetor local de segmentos e seus
+mapeamentos. `lifecycle.c` usa esse cabeçalho, que também fica disponível para as
+demais operações internas do backend. O layout e as operações do buffer continuam
+em `shm_ring.h`, independentes dos tipos de contexto do backend.
+Um arquivo `shm_backend.c` pode conter rotinas comuns se houver necessidade,
+mas definir tipos nele não os torna visíveis aos demais arquivos `.c`.
+
+O layout compartilhado do buffer circular é responsabilidade de `shm_backend`.
+Seus metadados de endereçamento e ocupação usam os menores tipos inteiros sem sinal
+de largura fixa compatíveis com os limites definidos em @ref ipc_wire_formats.
+A implementação deve verificar esses limites, tamanhos e alinhamentos com
+`static_assert`; os tipos do layout não impõem a largura dos índices ou ponteiros
+usados nas APIs e no estado local dos processos.
+
 Os wrappers `sysv_*` preservam os contratos das chamadas de sistema, verificam
 resultados e retornam `mpmc_result_t`, com a categoria em `status` e a causa original em
 `system_errno`. A causa é capturada antes de qualquer limpeza e propagada sem depender
@@ -122,8 +145,11 @@ Consulte @ref ipc_protocol e @ref testing_plan.
 
 ## Pendências de integração
 
-- #16: implementar a fachada de transporte e atualizar os contratos de fechamento
-  para propagar os resultados e diagnósticos de cleanup dos backends.
+- #13 e #14: completar as garantias de progresso e recuperação do backend de filas.
+  A integração atual usa sysv_msg_receive_typed() e os tipos de dados 1/2 para
+  distinguir operações sem/com ACK, recebendo por tipo zero para preservar FIFO.
+- #16: completar a fachada de transporte, que já despacha para os backends, e
+  atualizar os contratos de fechamento para propagar resultados e diagnósticos de cleanup.
 - #17: chamar producer_message_next() imediatamente antes de cada ipc_send() no
   filho, usando o operation_id atribuído pelo supervisor. O helper atual só é
   exercitado pelos testes; ainda não existe envio real pela aplicação.
