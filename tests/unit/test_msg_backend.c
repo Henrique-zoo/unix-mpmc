@@ -1,8 +1,8 @@
-#include "mpmc/ipc/msg_backend.h"
-
 #include <stdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "mpmc/ipc/msg_backend.h"
 
 static int failed(const char *text) {
     fprintf(stderr, "%s\n", text);

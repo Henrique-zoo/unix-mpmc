@@ -230,22 +230,21 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
             break;
         }
 
-        if (ready == 0 || (wake->revents & POLLIN) != 0) {
-            mpmc_result_t service_error = service_supervisor(supervisor);
-            if (service_error.status != MPMC_OK) {
-                char error_text[256];
-                (void)mpmc_error_format(service_error, error_text, sizeof error_text);
-                fprintf(
-                    stderr,
-                    "mpmc: falha ao processar eventos dos processos filhos: %s\n",
-                    error_text
-                );
-                result = service_error;
-                break;
-            }
-            if (supervisor_take_notices(supervisor) > 0u && tty_output) {
-                need_prompt = true;
-            }
+        /* O supervisor é servido a cada iteração, mesmo com stdin sempre pronto: nesse caso
+         * poll() nunca estoura o tempo e um filho bloqueado em msgsnd() numa fila de eventos
+         * cheia ficaria sem ser drenado. A chamada não bloqueia. */
+        mpmc_result_t service_error = service_supervisor(supervisor);
+        if (service_error.status != MPMC_OK) {
+            char error_text[256];
+            (void)mpmc_error_format(service_error, error_text, sizeof error_text);
+            fprintf(
+                stderr, "mpmc: falha ao processar eventos dos processos filhos: %s\n", error_text
+            );
+            result = service_error;
+            break;
+        }
+        if (supervisor_take_notices(supervisor) > 0u && tty_output) {
+            need_prompt = true;
         }
         if (ready == 0 || input->revents == 0) {
             continue;
