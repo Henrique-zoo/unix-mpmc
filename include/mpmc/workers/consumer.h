@@ -2,8 +2,8 @@
  * @file consumer.h
  * @brief Lógica de execução de processos consumidores.
  * @ingroup workers
- * @note consumer_run() ainda não possui implementação; sua documentação descreve
- * o contrato previsto para o fluxo do processo consumidor (pendente: #19).
+ * @note O worker usa exclusivamente a fachada ipc_* e não gerencia o ciclo de vida
+ * do contexto herdado.
  */
 #ifndef MPMC_WORKERS_CONSUMER_H
 #define MPMC_WORKERS_CONSUMER_H
@@ -43,7 +43,7 @@ typedef struct {
  * @param transport Backend IPC inicializado e herdado no filho.
  * @param job Configuração validada da operação de consumo.
  * @param out Resultado preenchido inclusive em consumo parcial.
- * @return Contrato previsto; consumer_run() ainda não possui implementação (pendente: #19).
+ * @return Resultado igual a out->error.
  * O valor retornado é igual a out->error, e out->consumed_count nunca excede `message_count`:
  * - MPMC_OK: as `message_count` mensagens foram retiradas.
  * - MPMC_ERR_INVALID_ARG: transport, job ou out nulo, ou job inválido. Com out não nulo,
