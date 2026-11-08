@@ -102,9 +102,15 @@ $(UNIT_DIR)/test_shm_ring: tests/unit/test_shm_ring.c $(SHM_RING_OBJECT)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
 
-$(UNIT_DIR)/test_message_metadata: tests/unit/test_message_metadata.c src/workers/producer.c
+$(UNIT_DIR)/test_message_metadata: tests/unit/test_message_metadata.c src/workers/producer.c \
+		$(WORKERS_DIR)/producer_routing.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/test_producer: tests/unit/test_producer.c $(WORKERS_DIR)/producer.c \
+		$(WORKERS_DIR)/producer_routing.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Dclock_gettime=mpmc_test_clock_gettime $^ $(LDLIBS) -o $@
 
 $(UNIT_DIR)/test_producer_routing: tests/unit/test_producer_routing.c \
 		$(WORKERS_DIR)/producer_routing.c $(WORKERS_DIR)/producer.c
@@ -128,7 +134,7 @@ $(UNIT_DIR)/test_isolation: tests/unit/test_isolation.c src/app/command.c src/er
 unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
 		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
 		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
-		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation \
+		$(UNIT_DIR)/test_producer $(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation \
 		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_transport_contract
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor

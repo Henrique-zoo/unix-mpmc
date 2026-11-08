@@ -2,8 +2,6 @@
  * @file producer.h
  * @brief Lógica de execução de processos produtores.
  * @ingroup workers
- * @note producer_message_next() está implementado. producer_run() ainda não possui
- * implementação: sua documentação é o contrato previsto (pendente: #17).
  */
 #ifndef MPMC_WORKERS_PRODUCER_H
 #define MPMC_WORKERS_PRODUCER_H
