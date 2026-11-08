@@ -29,9 +29,9 @@ a arquitetura proposta e os nomes de teste são escolhas do projeto.
 | Consumidor `ack=2`: erro e quantidade consumida | `consumer`, `transport` | I04, I05 |
 | Processos filhos concorrem com o REPL | `supervisor`, `repl` | I03, I08, I09 |
 | `shutdown` encerra produtores/consumidores | `supervisor`, `transport` | I12, I13, I14 |
-| Apresenta duração de cada processo | `supervisor` | I21 |
-| Apresenta total consumido por estrutura | `transport`, `shm_backend`, `msg_backend`, `supervisor` | I10, I19 |
-| Apresenta duração total do `mpmc` | `supervisor` | I21 |
+| Apresenta duração de cada processo | `supervisor` | U16, I21 |
+| Apresenta total consumido por estrutura | `transport`, `shm_backend`, `msg_backend`, `supervisor` | U16 (contagens controladas), I10, I19 (integração) |
+| Apresenta duração total do `mpmc` | `supervisor` | U16, I21 |
 | Remove todos os objetos de IPC | `transport`, `shm_backend`, `msg_backend`, wrappers `sysv_*` | I01, I12, I16 |
 
 ## Divergências textuais identificadas

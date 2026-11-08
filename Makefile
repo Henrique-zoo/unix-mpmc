@@ -52,6 +52,22 @@ $(UNIT_DIR)/supervisor_for_test.o: src/app/supervisor.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Dfork=mpmc_test_fork -c $< -o $@
 
+# Fixture isolada do relatório: substitui processos, relógio e fachada IPC.
+$(UNIT_DIR)/supervisor_report_for_test.o: src/app/supervisor.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		-Dfork=mpmc_test_fork -Dwaitpid=mpmc_test_waitpid \
+		-Dclock_gettime=mpmc_test_clock_gettime \
+		-Dipc_init=mpmc_test_ipc_init -Dipc_destroy=mpmc_test_ipc_destroy \
+		-Dipc_poll_events=mpmc_test_ipc_poll_events \
+		-Dipc_consumed_count=mpmc_test_ipc_consumed_count \
+		-c $< -o $@
+
+$(UNIT_DIR)/test_supervisor_report: tests/unit/test_supervisor_report.c \
+		$(UNIT_DIR)/supervisor_report_for_test.o
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_command: tests/unit/test_command.c src/app/command.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
@@ -153,9 +169,11 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
 		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation \
 		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_transport_contract \
-		$(UNIT_DIR)/test_transport $(UNIT_DIR)/test_protocol_properties
+		$(UNIT_DIR)/test_transport $(UNIT_DIR)/test_protocol_properties \
+		$(UNIT_DIR)/test_supervisor_report
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
+	@$(UNIT_DIR)/test_supervisor_report
 	@$(UNIT_DIR)/test_msg
 	@$(UNIT_DIR)/test_sem
 	@$(UNIT_DIR)/test_error
