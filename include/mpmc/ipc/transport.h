@@ -22,6 +22,15 @@
  * classificadas como MPMC_ERR_INVALID_ARG; EIDRM resulta em MPMC_ERR_SHUTDOWN.
  * MPMC_ERR_NO_SPACE permanece reservado para a tabela de ACK da issue #11.
  *
+ * @par Falhas fatais no modo 1
+ * ipc_send(), ipc_receive() e ipc_consumed_count() seguem a política de
+ * @ref shm_operation_failures. Rejeições locais com system_errno zero, ausência
+ * de itens e interrupção da aquisição não invalidam o contexto por si mesmas.
+ * As demais falhas de semop() exigem suspender o uso de dados e estatísticas do
+ * contexto e encaminhar o encerramento coordenado ao supervisor. A fachada
+ * apenas propaga o resultado: não marca o contexto como inválido nem avisa outros
+ * processos. A integração do encerramento por falha fatal pertence à issue #20.
+ *
  * @par Propriedade dos recursos
  * - O supervisor cria o contexto com ipc_init() e o remove uma única vez com
  *   ipc_destroy(), depois de recolher todos os filhos.
@@ -160,8 +169,9 @@ size_t ipc_producer_count(const ipc_context_t *context);
  * @details Pode bloquear aguardando espaço, inclusive quando o produtor não pediu ACK.
  * Envio != consumo: confirmações são independentes da conclusão desta função. Uma
  * mensagem já inserida não pode ser retirada pelo produtor se um envio posterior falhar.
- * @warning No modo 1, falha da publicação final pode ocorrer após a inserção;
- * consultar shm_backend_send() antes de decidir repetir um envio que retornou erro.
+ * @warning No modo 1, falha da publicação final pode ocorrer após a inserção e
+ * torna o contexto inutilizável. Não repetir o envio; aplicar a política de
+ * @ref shm_operation_failures.
  * @pre Para solicitar confirmação, chamar ipc_ack_begin() para o
  * message->operation_id antes do primeiro envio. O backend consulta esse contexto
  * para determinar a política de ACK e preserva todos os campos da mensagem.
@@ -197,10 +207,12 @@ mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message
  * quando a operação pediu ACK; o worker não duplica a confirmação. No modo 1,
  * blocking=false ainda pode aguardar o mutex; a retirada não emite ACK nesta etapa.
  * @warning No modo 1, falha de publicação ocorre depois da retirada e da contagem,
- * podendo deixar out preenchido; a operação não é desfeita. Ver shm_backend_receive().
- * @warning MPMC_ERR_STATE e MPMC_ERR_SYS podem ocorrer depois de a mensagem sair da
- * fila: ela não é devolvida, out pode estar preenchido e o consumo pode não ter sido
- * contado nem confirmado. O chamador não deve contá-la como consumida nem repetir o ACK.
+ * podendo deixar out preenchido; a operação não é desfeita e o contexto torna-se
+ * inutilizável. Não repetir o recebimento; aplicar @ref shm_operation_failures.
+ * @warning No modo 2, MPMC_ERR_STATE e MPMC_ERR_SYS podem ocorrer depois de a
+ * mensagem sair da fila: ela não é devolvida, out pode estar preenchido e o consumo
+ * pode não ter sido contado nem confirmado. O chamador não deve contá-la como
+ * consumida nem repetir o ACK.
  * A recuperação dessa janela é pendente (ver docs/protocol.md).
  */
 mpmc_result_t ipc_receive(
@@ -303,6 +315,9 @@ mpmc_result_t ipc_poll_events(ipc_context_t *context);
  * @pre No modo 2, chamar ipc_poll_events() antes de obter números finais.
  * @note No modo 1, o total é lido sob mutex e a saída só é preenchida após liberá-lo
  * com sucesso. Inclui retiradas executadas mesmo se a publicação da vaga falhou.
+ * @warning No modo 1, a falha na liberação do mutex torna o contexto inutilizável,
+ * embora out_count permaneça inalterado. Aplicar @ref shm_operation_failures;
+ * não consultar estatísticas de um contexto que já sofreu uma falha fatal.
  */
 mpmc_result_t ipc_consumed_count(ipc_context_t *context, size_t producer_id, uint64_t *out_count);
 

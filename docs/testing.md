@@ -180,8 +180,15 @@ observações ao pai; sua ordem não é usada como evidência da ordem de retira
 Somente o objeto de operações do teste substitui `sysv_sem_apply`/`sysv_sem_change`:
 normalmente delega às primitivas reais, mas permite falhar uma aquisição ou publicação.
 Os cenários distinguem buffer/saída inalterados de uma alteração já executada antes
-de a publicação falhar, inclusive na leitura do contador. O cleanup de segurança
-encerra/recolhe apenas os filhos próprios e remove apenas os recursos do contexto.
+de a publicação falhar, inclusive na leitura do contador. Após cada falha fatal
+injetada, o teste destrói o contexto; não tenta repetir a operação nem comprova
+recuperação dos contadores. Isso corresponde à obrigação de descarte descrita em
+@ref shm_operation_failures. Os testes de interrupção da aquisição e recepção vazia
+verificam que esses retornos não deixam reservas parciais nem alteram o buffer.
+A comunicação de falhas fatais ao supervisor e o shutdown coordenado continuam
+pendentes de integração na #20 e não são comprovados por esta suíte.
+O cleanup de segurança encerra/recolhe apenas os filhos próprios e remove apenas
+os recursos do contexto.
 Esses testes não comprovam o protocolo de ACK, que continua pendente.
 
 Para Linux e macOS, SIGALRM é instalado com `sigaction()` sem SA_RESTART e fica

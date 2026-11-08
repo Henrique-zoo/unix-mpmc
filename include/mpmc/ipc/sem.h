@@ -125,8 +125,9 @@ mpmc_result_t sysv_sem_change(int semid, unsigned index, short delta, bool nowai
  * @note Todos os elementos do vetor se referem ao mesmo conjunto semid.
  *
  * @warning O protocolo do backend de memória compartilhada não utiliza
- * SEM_UNDO. A recuperação de reservas e o tratamento de cancelamentos
- * permanecem sob responsabilidade do backend.
+ * SEM_UNDO. A atomicidade deste vetor não abrange alterações de memória entre
+ * chamadas distintas. O backend define o contrato das reservas e das falhas;
+ * o chamador coordena o encerramento quando o contexto se torna inutilizável.
  */
 mpmc_result_t sysv_sem_apply(int semid, struct sembuf *operations, size_t count);
 

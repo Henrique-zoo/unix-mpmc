@@ -255,17 +255,36 @@ separada de `empty` nesse caminho. A publicação também é atômica individual
 3. Executa `[V(mutex), V(empty)]` em outra `semop()` para publicar a vaga.
    A implementação atual ainda não consulta o registro de ACK nem confirma o consumo.
 
-**Falhas e sinais.** Se o vetor de aquisição falhar, a operação não altera o buffer.
-Se o vetor final falhar, a inserção ou retirada já ocorreu e não é desfeita; no
-recebimento, a saída e a contagem também já foram alteradas. A implementação não
-mascara `SIGTERM`/`SIGINT` entre aquisição e publicação. A atomicidade de cada vetor
-não protege todo esse intervalo contra término de processo.
+**Falhas e sinais.** Se o vetor de aquisição falhar, nenhuma reserva parcial
+permanece e a operação não altera o buffer. Rejeições locais de argumentos
+(`system_errno == 0`), `MPMC_ERR_WOULD_BLOCK` na recepção vazia e
+`MPMC_ERR_INTERRUPTED` na aquisição não invalidam o contexto por si mesmas.
 
-No shutdown global, todos os filhos são encerrados e recolhidos antes da remoção
-dos recursos, e essas reservas são descartadas junto com o contexto. Cancelar
-somente um trabalho e continuar usando o contexto exige outro protocolo de
-cancelamento, a definir nas issues #10 e #20. Simplesmente bloquear os sinais
-antes de um semop() bloqueante pode impedir que SIGTERM cancele a espera.
+As demais falhas de `semop()` são **fatais ao contexto inteiro**, inclusive
+argumentos rejeitados pelo kernel, perda de permissão e remoção do conjunto. Se o
+vetor final falhar, a inserção ou retirada já ocorreu e não é desfeita; no
+recebimento, a saída e a contagem também já foram alteradas. O vetor final falha
+atomicamente, portanto pode deixar o mutex adquirido e o item ou a vaga sem
+publicação. Não se deve repetir o envio/recebimento inteiro nem reparar os
+contadores com outros workers ativos. `mpmc_result_t` não identifica a etapa da
+falha; por isso a política de falha fatal também abrange os erros de recursos
+anteriores à alteração do buffer. Ver @ref shm_operation_failures.
+
+Cabe ao chamador suspender todas as operações de dados e estatísticas do contexto,
+propagar a falha ao supervisor e encaminhar o encerramento coordenado. Não há
+marca de inutilização, bloqueio automático de novas chamadas ou notificação de
+outros processos pelo backend. A integração dessa reação pertence à #20: cada
+filho fecha somente seu estado local, e o supervisor encerra e recolhe todos os
+filhos antes da remoção dos recursos globais.
+
+A implementação não mascara `SIGTERM`/`SIGINT` entre aquisição e publicação. A
+atomicidade de cada vetor não protege todo esse intervalo contra término de
+processo. No shutdown global, as reservas restantes são descartadas junto com o
+contexto; não é necessário restaurá-las para reutilização. Término de um worker
+nesse intervalo também exige descartar o contexto. Cancelamento isolado com
+preservação do contexto exigiria outro protocolo e está fora do contrato da #10.
+Simplesmente bloquear os sinais antes de um `semop()` bloqueante pode impedir que
+SIGTERM cancele a espera.
 
 **ACK por operação (`ack=1`, contrato previsto).** O segmento `C` deverá guardar 64 posições de 8 bytes,
 cada uma com um `operation_id` (0 = livre). O conjunto `K` tem o semáforo 0 como
@@ -297,8 +316,9 @@ Propriedades exigidas para a implementação desse desenho:
 
 **Estatísticas.** `shm_backend_consumed_count()` lê `consumed_total` sob `mutex`.
 Só preenche a saída após liberar o mutex com sucesso. O total contabiliza retiradas
-executadas, inclusive se a publicação posterior da vaga falhar. `ipc_poll_events()`
-não faz nada neste modo.
+executadas, inclusive se a publicação posterior da vaga falhar. Falha na liberação
+do mutex é fatal ao contexto mesmo preservando a saída. Após uma falha fatal, não
+se deve tentar ler os totais desse contexto. `ipc_poll_events()` não faz nada neste modo.
 
 ### Backend 2: filas de mensagens System V
 
@@ -407,8 +427,12 @@ do trabalho. Os retornos por função estão em `transport.h`.
 - Esperas bloqueantes (`semop`, `msgsnd`, `msgrcv`, `nanosleep`) não repetem `EINTR`
   por conta própria; devolvem `MPMC_ERR_INTERRUPTED`, e o worker decide encerrar.
 - No modo 1, os vetores de aquisição/publicação são atômicos individualmente, mas
-  SIGTERM/SIGINT não são mascarados no intervalo entre eles. O protocolo para
-  cancelamento com preservação do contexto continua pendente (#10/#20).
+  SIGTERM/SIGINT não são mascarados no intervalo entre eles. Término de processo
+  nesse intervalo exige descartar o contexto por encerramento coordenado; não há
+  garantia de cancelamento isolado com preservação do contexto na #10.
+- Falhas fatais de IPC exigem interromper o uso de dados e estatísticas do contexto.
+  Sua comunicação ao supervisor e o encaminhamento do shutdown são integração da #20;
+  a propagação do erro pelo backend não executa esse encerramento automaticamente.
 - O supervisor remove os recursos (`IPC_RMID`) somente depois de recolher todos os filhos.
 
 ## Semáforos e invariantes da memória compartilhada
@@ -429,10 +453,13 @@ Semáforos de cada estrutura (índices e valores iniciais em @ref ipc_wire_forma
 não finalizadas durante transições; não é correto comparar ingenuamente `semval(empty)`
 com `capacity - count` a qualquer instante sem considerar operações em voo.
 
-Sequências normais: produtor `P(empty)`, `P(mutex)`, grava/avança, `V(mutex)`, `V(full)`;
-consumidor `P(full)`, `P(mutex)`, lê/avança, `V(mutex)`, `V(empty)`.
+Sequências normais: produtor `[P(empty), P(mutex)]`, grava/avança,
+`[V(mutex), V(full)]`; consumidor `[P(full), P(mutex)]`, lê/avança,
+`[V(mutex), V(empty)]`. Cada par entre colchetes é um único vetor atômico de `semop()`.
 Operações com possibilidade de bloqueio devem ocorrer **fora da seção crítica**.
-Ao tratar interrupções e falhas, não deixar vagas/itens reservados sem compensação.
+A aquisição interrompida ou rejeitada não deixa vagas/itens parcialmente reservados.
+Uma falha fatal após aquisição ou término de processo nesse intervalo exige
+descartar o contexto; não há garantia de compensação para reutilizá-lo.
 
 A contagem total de mensagens consumidas deve ser persistida em memória visível aos
 processos, atualizada atomicamente/sob exclusão mútua.
