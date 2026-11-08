@@ -373,10 +373,19 @@ static void test_operation_ids_distinct(void) {
             (unsigned long long)report.operation_id
         );
         if (report.operation_id >= 1u && report.operation_id <= JOBS) {
-            CHECK(!seen[report.operation_id], "operation_id %llu repetido", (unsigned long long)report.operation_id);
+            CHECK(
+                !seen[report.operation_id],
+                "operation_id %llu repetido",
+                (unsigned long long)report.operation_id
+            );
             seen[report.operation_id] = true;
-            command_kind_t expected = report.operation_id % 2u == 1u ? COMMAND_PRODUCE : COMMAND_CONSUME;
-            CHECK(report.kind == expected, "tipo do operation_id %llu", (unsigned long long)report.operation_id);
+            command_kind_t expected =
+                report.operation_id % 2u == 1u ? COMMAND_PRODUCE : COMMAND_CONSUME;
+            CHECK(
+                report.kind == expected,
+                "tipo do operation_id %llu",
+                (unsigned long long)report.operation_id
+            );
         }
     }
     for (unsigned id = 1u; id <= JOBS; ++id) {

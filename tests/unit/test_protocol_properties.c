@@ -80,7 +80,8 @@ mpmc_result_t ipc_ack_end(ipc_context_t *context, uint64_t operation_id) {
 /* 1. Conversão de status                                                    */
 /* ------------------------------------------------------------------------- */
 
-/** @brief Cada status conhecido tem texto não vazio e distinto; desconhecidos compartilham um texto próprio. */
+/** @brief Cada status conhecido tem texto não vazio e distinto; desconhecidos compartilham um texto
+ * próprio. */
 static void test_status_conversion(void) {
     const mpmc_status_t all[] = {
         MPMC_OK,
@@ -119,7 +120,9 @@ static void test_status_conversion(void) {
         int n = mpmc_error_format((mpmc_result_t){.status = all[i]}, big, sizeof big);
         CHECK(n == (int)strlen(text) && strcmp(big, text) == 0, "format sem errno, status %zu", i);
 
-        n = mpmc_error_format((mpmc_result_t){.status = all[i], .system_errno = ENOENT}, big, sizeof big);
+        n = mpmc_error_format(
+            (mpmc_result_t){.status = all[i], .system_errno = ENOENT}, big, sizeof big
+        );
         CHECK(n == (int)strlen(big), "retorno de format com errno, status %zu", i);
         CHECK(strstr(big, strerror(ENOENT)) != NULL, "errno ausente na mensagem, status %zu", i);
         CHECK(big[strlen(big) - 1u] == '.', "mensagem sem ponto final, status %zu", i);
@@ -128,8 +131,12 @@ static void test_status_conversion(void) {
 
     /* Causas diferentes geram mensagens diferentes para a mesma categoria. */
     char other[256];
-    mpmc_error_format((mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = ENOENT}, big, sizeof big);
-    mpmc_error_format((mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EACCES}, other, sizeof other);
+    mpmc_error_format(
+        (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = ENOENT}, big, sizeof big
+    );
+    mpmc_error_format(
+        (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EACCES}, other, sizeof other
+    );
     CHECK(strcmp(big, other) != 0, "errno diferentes devem gerar textos diferentes");
 
     /* Truncamento: sempre terminado em NUL, retorno é o tamanho completo. */
@@ -174,7 +181,9 @@ static void test_metadata_composition(void) {
     CHECK(m.sender_pid == getpid(), "sender_pid deve ser getpid()");
     CHECK(m.sequence == 1u && sequence.last_sequence == 1u, "primeira sequência deve ser 1");
     CHECK(m.operation_id == UINT64_MAX, "operation_id de 64 bits não pode ser truncado");
-    CHECK(m.sent_at.tv_sec > 0 && m.sent_at.tv_nsec >= 0 && m.sent_at.tv_nsec < 1000000000L, "sent_at");
+    CHECK(
+        m.sent_at.tv_sec > 0 && m.sent_at.tv_nsec >= 0 && m.sent_at.tv_nsec < 1000000000L, "sent_at"
+    );
 
     /* producer_id é destino lógico: não altera os metadados da mensagem. */
     producer_job_t other_dest = job;
@@ -182,8 +191,11 @@ static void test_metadata_composition(void) {
     producer_sequence_t seq_b = {0};
     message_t mb;
     CHECK(producer_message_next(&mb, &seq_b, &other_dest) == MPMC_OK, "geração com destino 0");
-    CHECK(mb.sequence == m.sequence && mb.operation_id == m.operation_id && mb.sender_pid == m.sender_pid,
-          "producer_id não pode influenciar sender_pid/sequence/operation_id");
+    CHECK(
+        mb.sequence == m.sequence && mb.operation_id == m.operation_id
+            && mb.sender_pid == m.sender_pid,
+        "producer_id não pode influenciar sender_pid/sequence/operation_id"
+    );
 
     /* Modo de ACK não altera os metadados. */
     producer_job_t none = job;
@@ -220,8 +232,10 @@ static void test_metadata_composition(void) {
     CHECK(memcmp(&guard, &before, sizeof guard) == 0, "saída intacta no esgotamento");
 
     producer_sequence_t edge = {.last_sequence = UINT32_MAX - 1u};
-    CHECK(producer_message_next(&guard, &edge, &job) == MPMC_OK && guard.sequence == UINT32_MAX,
-          "última sequência válida");
+    CHECK(
+        producer_message_next(&guard, &edge, &job) == MPMC_OK && guard.sequence == UINT32_MAX,
+        "última sequência válida"
+    );
 }
 
 /** @brief Operações intercaladas no mesmo processo: sequência única, contadores separados. */
@@ -325,7 +339,10 @@ static void test_sequence_per_process(void) {
     /* A sequência do pai avança antes dos forks: filhos não podem herdá-la. */
     producer_sequence_t parent_sequence = {0};
     producer_job_t parent_job = {
-        .producer_id = 1u, .message_count = 1u, .ack_mode = PRODUCER_ACK_NONE, .operation_id = 9u,
+        .producer_id = 1u,
+        .message_count = 1u,
+        .ack_mode = PRODUCER_ACK_NONE,
+        .operation_id = 9u,
     };
     message_t scratch;
     for (int i = 0; i < 3; ++i) {
@@ -399,7 +416,9 @@ static void test_sequence_per_process(void) {
         do {
             r = waitpid(pids[c], &status, 0);
         } while (r < 0 && errno == EINTR);
-        CHECK(r == pids[c] && WIFEXITED(status) && WEXITSTATUS(status) == 0, "filho %d recolhido", c);
+        CHECK(
+            r == pids[c] && WIFEXITED(status) && WEXITSTATUS(status) == 0, "filho %d recolhido", c
+        );
     }
     CHECK(started == CHILDREN, "todos os filhos criados");
 
@@ -438,7 +457,9 @@ static int check_striped(size_t p, size_t n) {
         size_t expected = 1u + ((k - 1u) % p);
         if (producer_route_destination(k, p, &dest) != MPMC_OK || dest != expected || dest < 1u
             || dest > p) {
-            fprintf(stderr, "p=%zu n=%zu k=%zu: obtido %zu esperado %zu\n", p, n, k, dest, expected);
+            fprintf(
+                stderr, "p=%zu n=%zu k=%zu: obtido %zu esperado %zu\n", p, n, k, dest, expected
+            );
             ok = 0;
             continue;
         }
@@ -457,7 +478,15 @@ static int check_striped(size_t p, size_t n) {
     for (size_t d = 1; d <= p && d < 1026u; ++d) {
         size_t want = base + (d <= extra ? 1u : 0u); /* distribuição o mais uniforme possível */
         if (counts[d] != want) {
-            fprintf(stderr, "p=%zu n=%zu destino %zu: %zu mensagens, esperado %zu\n", p, n, d, counts[d], want);
+            fprintf(
+                stderr,
+                "p=%zu n=%zu destino %zu: %zu mensagens, esperado %zu\n",
+                p,
+                n,
+                d,
+                counts[d],
+                want
+            );
             ok = 0;
         }
         sum += counts[d];
@@ -493,14 +522,27 @@ static void test_striped_distribution(void) {
 
     /* Extremos sem overflow. */
     size_t dest = 0u;
-    CHECK(producer_route_destination(SIZE_MAX, SIZE_MAX, &dest) == MPMC_OK && dest == SIZE_MAX, "extremo p=n=SIZE_MAX");
-    CHECK(producer_route_destination(1u, SIZE_MAX, &dest) == MPMC_OK && dest == 1u, "k=1, p=SIZE_MAX");
-    CHECK(producer_route_destination(SIZE_MAX, 1u, &dest) == MPMC_OK && dest == 1u, "p=1 sempre destino 1");
+    CHECK(
+        producer_route_destination(SIZE_MAX, SIZE_MAX, &dest) == MPMC_OK && dest == SIZE_MAX,
+        "extremo p=n=SIZE_MAX"
+    );
+    CHECK(
+        producer_route_destination(1u, SIZE_MAX, &dest) == MPMC_OK && dest == 1u, "k=1, p=SIZE_MAX"
+    );
+    CHECK(
+        producer_route_destination(SIZE_MAX, 1u, &dest) == MPMC_OK && dest == 1u,
+        "p=1 sempre destino 1"
+    );
 
     /* Entradas inválidas: erro e saída intacta. */
     dest = 12345u;
-    CHECK(producer_route_destination(0u, 4u, &dest) == MPMC_ERR_INVALID_ARG && dest == 12345u, "ordinal 0");
-    CHECK(producer_route_destination(1u, 0u, &dest) == MPMC_ERR_INVALID_ARG && dest == 12345u, "p = 0");
+    CHECK(
+        producer_route_destination(0u, 4u, &dest) == MPMC_ERR_INVALID_ARG && dest == 12345u,
+        "ordinal 0"
+    );
+    CHECK(
+        producer_route_destination(1u, 0u, &dest) == MPMC_ERR_INVALID_ARG && dest == 12345u, "p = 0"
+    );
     CHECK(producer_route_destination(1u, 4u, NULL) == MPMC_ERR_INVALID_ARG, "saída nula");
 }
 
@@ -534,7 +576,9 @@ static void test_striped_with_metadata(void) {
         }
         size_t sum = 0u;
         for (size_t d = 1; d <= p; ++d) sum += per_dest[d];
-        CHECK(ok && sum == n && sequence.last_sequence == n, "striped + metadados p=%zu n=%zu", p, n);
+        CHECK(
+            ok && sum == n && sequence.last_sequence == n, "striped + metadados p=%zu n=%zu", p, n
+        );
     }
 }
 
@@ -552,12 +596,25 @@ typedef struct {
     alignas(16) unsigned char bytes[MPMC_SHM_SEGMENT_BYTES + GUARD];
 } segment_t;
 
-static void ring_invariants(const shm_ring_t *ring, size_t pushed, size_t popped, const char *where) {
+static void
+ring_invariants(const shm_ring_t *ring, size_t pushed, size_t popped, const char *where) {
     CHECK(ring->capacity == SHM_RING_CAPACITY, "%s: capacity", where);
-    CHECK(ring->head < ring->capacity && ring->tail < ring->capacity, "%s: índices fora de 0..cap-1", where);
+    CHECK(
+        ring->head < ring->capacity && ring->tail < ring->capacity,
+        "%s: índices fora de 0..cap-1",
+        where
+    );
     CHECK(ring->count <= ring->capacity, "%s: count > capacity", where);
-    CHECK(ring->count == pushed - popped, "%s: count=%u esperado %zu", where, ring->count, pushed - popped);
-    CHECK((ring->head + ring->count) % ring->capacity == ring->tail, "%s: head+count != tail", where);
+    CHECK(
+        ring->count == pushed - popped,
+        "%s: count=%u esperado %zu",
+        where,
+        ring->count,
+        pushed - popped
+    );
+    CHECK(
+        (ring->head + ring->count) % ring->capacity == ring->tail, "%s: head+count != tail", where
+    );
     CHECK(ring->consumed_total == popped, "%s: consumed_total", where);
 }
 
@@ -572,13 +629,23 @@ static message_t make_message(uint32_t n) {
 
 static void test_segment_capacity(void) {
     /* Layout. */
-    CHECK(sizeof(message_t) == 32u && alignof(message_t) == 8u, "message_t 32 bytes, alinhamento 8");
-    CHECK(sizeof(shm_ring_t) == 16u && offsetof(shm_ring_t, messages) == 16u, "cabeçalho de 16 bytes");
+    CHECK(
+        sizeof(message_t) == 32u && alignof(message_t) == 8u, "message_t 32 bytes, alinhamento 8"
+    );
+    CHECK(
+        sizeof(shm_ring_t) == 16u && offsetof(shm_ring_t, messages) == 16u, "cabeçalho de 16 bytes"
+    );
     CHECK(offsetof(shm_ring_t, messages) % alignof(message_t) == 0u, "messages alinhado");
     CHECK(SHM_RING_CAPACITY == 63u, "SHM_RING_CAPACITY == 63");
     CHECK(16u + SHM_RING_CAPACITY * sizeof(message_t) == 2032u, "63 mensagens terminam em 2032");
-    CHECK(MPMC_SHM_SEGMENT_BYTES - 2032u == 16u && 16u < sizeof(message_t), "sobra de 16 bytes não comporta a 64ª mensagem");
-    CHECK(16u + (SHM_RING_CAPACITY + 1u) * sizeof(message_t) > MPMC_SHM_SEGMENT_BYTES, "64 mensagens não cabem");
+    CHECK(
+        MPMC_SHM_SEGMENT_BYTES - 2032u == 16u && 16u < sizeof(message_t),
+        "sobra de 16 bytes não comporta a 64ª mensagem"
+    );
+    CHECK(
+        16u + (SHM_RING_CAPACITY + 1u) * sizeof(message_t) > MPMC_SHM_SEGMENT_BYTES,
+        "64 mensagens não cabem"
+    );
     CHECK(SHM_RING_CAPACITY <= UINT8_MAX, "capacidade cabe em uint8_t");
 
     /* Segmento simulado, pré-preenchido com lixo e com guarda após os 2048 bytes. */
@@ -588,12 +655,19 @@ static void test_segment_capacity(void) {
     shm_ring_t *ring = (shm_ring_t *)(void *)segment.bytes;
     shm_ring_init(ring);
 
-    CHECK(ring->head == 0 && ring->tail == 0 && ring->count == 0 && ring->consumed_total == 0u, "init zera o estado");
+    CHECK(
+        ring->head == 0 && ring->tail == 0 && ring->count == 0 && ring->consumed_total == 0u,
+        "init zera o estado"
+    );
     ring_invariants(ring, 0u, 0u, "init");
     CHECK((uintptr_t)&ring->messages[0] % alignof(message_t) == 0u, "mensagem 0 alinhada");
-    CHECK((uintptr_t)&ring->messages[SHM_RING_CAPACITY - 1u] % alignof(message_t) == 0u, "última mensagem alinhada");
     CHECK(
-        (const unsigned char *)(&ring->messages[SHM_RING_CAPACITY - 1u] + 1) <= segment.bytes + MPMC_SHM_SEGMENT_BYTES,
+        (uintptr_t)&ring->messages[SHM_RING_CAPACITY - 1u] % alignof(message_t) == 0u,
+        "última mensagem alinhada"
+    );
+    CHECK(
+        (const unsigned char *)(&ring->messages[SHM_RING_CAPACITY - 1u] + 1)
+            <= segment.bytes + MPMC_SHM_SEGMENT_BYTES,
         "última mensagem termina dentro do segmento"
     );
 
@@ -605,7 +679,10 @@ static void test_segment_capacity(void) {
         ++pushed;
     }
     ring_invariants(ring, pushed, popped, "cheio");
-    CHECK(ring->count == ring->capacity && ring->head == 0 && ring->tail == 0, "cheio: tail dá a volta");
+    CHECK(
+        ring->count == ring->capacity && ring->head == 0 && ring->tail == 0,
+        "cheio: tail dá a volta"
+    );
 
     /* Nada fora da área de mensagens foi tocado: sobra [2032, 2048) e guarda. */
     int slack_intact = 1;
@@ -619,10 +696,13 @@ static void test_segment_capacity(void) {
         message_t m = shm_ring_pop(ring);
         message_t want = make_message(i);
         ++popped;
-        CHECK(m.sequence == want.sequence && m.sender_pid == want.sender_pid
-                  && m.operation_id == want.operation_id && m.sent_at.tv_sec == want.sent_at.tv_sec
-                  && m.sent_at.tv_nsec == want.sent_at.tv_nsec,
-              "FIFO/conteúdo na posição %u", i);
+        CHECK(
+            m.sequence == want.sequence && m.sender_pid == want.sender_pid
+                && m.operation_id == want.operation_id && m.sent_at.tv_sec == want.sent_at.tv_sec
+                && m.sent_at.tv_nsec == want.sent_at.tv_nsec,
+            "FIFO/conteúdo na posição %u",
+            i
+        );
     }
     ring_invariants(ring, pushed, popped, "vazio");
 
@@ -642,8 +722,9 @@ static void test_segment_capacity(void) {
             ++popped;
             if (m.sequence != next_out++) fifo_ok = 0;
         }
-        if (ring->head >= ring->capacity || ring->tail >= ring->capacity || ring->count > ring->capacity
-            || ring->count != pushed - popped || ring->consumed_total != popped) {
+        if (ring->head >= ring->capacity || ring->tail >= ring->capacity
+            || ring->count > ring->capacity || ring->count != pushed - popped
+            || ring->consumed_total != popped) {
             fifo_ok = 0;
         }
     }
@@ -655,7 +736,10 @@ static void test_segment_capacity(void) {
     }
     CHECK(fifo_ok && next_in == next_out, "FIFO após drenagem completa");
     ring_invariants(ring, pushed, popped, "final");
-    CHECK(popped > 2u * SHM_RING_CAPACITY && ring->consumed_total > UINT8_MAX, "consumed_total acumula além de uint8_t e da capacidade");
+    CHECK(
+        popped > 2u * SHM_RING_CAPACITY && ring->consumed_total > UINT8_MAX,
+        "consumed_total acumula além de uint8_t e da capacidade"
+    );
 
     slack_intact = 1;
     for (size_t b = 2032u; b < sizeof segment.bytes; ++b) {
