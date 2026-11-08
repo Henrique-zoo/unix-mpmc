@@ -39,8 +39,13 @@ static void test_would_block_publishes_nothing(void);
 static void test_contract_violations(void);
 mpmc_result_t mpmc_test_msg_create(int *out_msqid);
 mpmc_result_t mpmc_test_msg_remove(int msqid);
-mpmc_result_t
-mpmc_test_msg_send(int msqid, long type, const void *payload, size_t size, bool nowait);
+mpmc_result_t mpmc_test_msg_send(
+    int msqid,
+    long type,
+    const void *payload,
+    size_t size,
+    bool nowait
+);
 
 /**
  * @brief Quantidade de verificações executadas nesta suíte.
@@ -203,8 +208,13 @@ mpmc_result_t mpmc_test_msg_remove(int msqid) {
  * @param nowait Indica se o envio deve ser não bloqueante.
  * @return Resultado do envio real.
  */
-mpmc_result_t
-mpmc_test_msg_send(int msqid, long type, const void *payload, size_t size, bool nowait) {
+mpmc_result_t mpmc_test_msg_send(
+    int msqid,
+    long type,
+    const void *payload,
+    size_t size,
+    bool nowait
+) {
     ++send_calls;
     last_send_nowait = nowait;
     last_send_msqid = msqid;
