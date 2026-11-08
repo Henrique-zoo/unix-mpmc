@@ -59,8 +59,11 @@ static void handle_termination_signal(int signal_number) {
  * - MPMC_OK: tratador instalado e ação anterior preservada em previous; system_errno é zero.
  * - MPMC_ERR_SYS: falha em sigaction(); system_errno contém o errno capturado nessa falha.
  */
-static mpmc_result_t
-install_signal_handler(int signal_number, void (*handler)(int), struct sigaction *previous) {
+static mpmc_result_t install_signal_handler(
+    int signal_number,
+    void (*handler)(int),
+    struct sigaction *previous
+) {
     struct sigaction action = {0};
     action.sa_handler = handler;
     sigemptyset(&action.sa_mask);

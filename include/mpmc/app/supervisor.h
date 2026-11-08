@@ -160,8 +160,11 @@ size_t supervisor_report_count(const supervisor_t *supervisor);
  * @note Os relatórios permanecem válidos após supervisor_shutdown(), até
  * supervisor_destroy().
  */
-mpmc_result_t
-supervisor_report_get(const supervisor_t *supervisor, size_t index, child_report_t *out);
+mpmc_result_t supervisor_report_get(
+    const supervisor_t *supervisor,
+    size_t index,
+    child_report_t *out
+);
 
 /**
  * @brief Imprime o relatório final: duração e status de cada filho recolhido e o
