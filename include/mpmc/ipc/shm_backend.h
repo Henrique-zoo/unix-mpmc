@@ -5,6 +5,30 @@
  * @note Estão implementados o ciclo de vida dos segmentos e semáforos, o envio,
  * o recebimento e a leitura sincronizada dos totais consumidos. As operações
  * de ACK permanecem como stubs que retornam MPMC_ERR_STATE.
+ *
+ * @anchor shm_operation_failures
+ * @par Falhas nas operações sincronizadas
+ * Em shm_backend_send(), shm_backend_receive() e shm_backend_consumed_count(),
+ * rejeições locais de argumentos (system_errno zero), ausência de itens e
+ * interrupção da aquisição não alteram o buffer nem deixam reservas parciais.
+ * Esses retornos não invalidam o contexto por si mesmos.
+ *
+ * As demais falhas de semop() são fatais ao contexto, inclusive argumentos
+ * rejeitados pelo kernel, perda de permissão e remoção do conjunto. O resultado
+ * não identifica a etapa da falha: após adquirir o mutex, a memória pode já ter
+ * sido alterada e o mutex pode continuar adquirido. O chamador deve suspender
+ * todas as operações de dados e estatísticas desse contexto, propagar a falha
+ * para o supervisor e encaminhar o encerramento coordenado dos workers. Cada
+ * filho fecha apenas seu estado local; o supervisor recolhe todos os filhos
+ * antes de destruir os recursos globais. Não se deve repetir a operação inteira
+ * nem tentar reparar os contadores com outros workers ativos.
+ *
+ * A inutilização é uma obrigação do chamador: o backend não registra uma marca
+ * de falha, não rejeita automaticamente chamadas posteriores e não notifica
+ * outros processos. A integração desse encerramento pertence à issue #20.
+ * Recuperar um contexto após término de processo entre aquisição e publicação
+ * não faz parte da garantia destas operações; nesse caso, o contexto também
+ * deve ser descartado por encerramento coordenado.
  */
 #ifndef MPMC_IPC_SHM_BACKEND_H
 #define MPMC_IPC_SHM_BACKEND_H
@@ -147,8 +171,9 @@ mpmc_result_t shm_backend_create(
  * a espera. O envio não aguarda consumo e ainda não consulta um contexto de ACK.
  * @post Em sucesso, a mensagem ocupa a posição FIFO seguinte; o total consumido não muda.
  * @warning Se a aquisição falhar, o buffer não é alterado. Se a publicação posterior
- * falhar, a inserção já ocorreu e não é desfeita. O retorno de erro não permite
- * concluir que a mensagem deixou de ser inserida nem repetir o envio sem avaliação.
+ * falhar, a inserção já ocorreu e não é desfeita; o contexto deve ser considerado
+ * inutilizável e o envio não deve ser repetido. Aplicar a política de
+ * @ref shm_operation_failures, inclusive para falhas de recursos na aquisição.
  */
 mpmc_result_t shm_backend_send(
     shm_backend_t *backend,
@@ -183,7 +208,10 @@ mpmc_result_t shm_backend_send(
  * @note A retirada ainda não publica confirmação de consumo; o protocolo de ACK é pendente.
  * @warning Falhas anteriores à retirada preservam out e o buffer. Se a publicação
  * da vaga falhar depois da retirada, out já contém a mensagem e a contagem já foi
- * incrementada. A função não reinsere o item nem desfaz essa contagem.
+ * incrementada. A função não reinsere o item nem desfaz essa contagem; o contexto
+ * deve ser considerado inutilizável e o recebimento não deve ser repetido.
+ * Aplicar a política de @ref shm_operation_failures, inclusive para falhas de
+ * recursos na aquisição.
  */
 mpmc_result_t shm_backend_receive(
     shm_backend_t *backend,
@@ -252,6 +280,9 @@ mpmc_result_t shm_backend_ack_end(shm_backend_t *backend, uint64_t operation_id)
  * retiradas concorrentes posteriores podem aumentar o total antes do retorno.
  * @note O contador inclui cada retirada executada, mesmo se a liberação posterior
  * da vaga retornar erro. Não é calculado a partir dos ACKs.
+ * @warning Uma falha na liberação do mutex torna o contexto inutilizável mesmo
+ * preservando out_count. Aplicar a política de @ref shm_operation_failures;
+ * não tentar novas leituras após uma falha fatal nesse contexto.
  */
 mpmc_result_t shm_backend_consumed_count(
     shm_backend_t *backend,

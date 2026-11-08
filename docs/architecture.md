@@ -162,9 +162,26 @@ inserção/retirada. A recepção com `blocking=false` não espera itens futuros
 ainda pode aguardar MUTEX. A leitura de `consumed_total` usa o mesmo mutex e só
 preenche a saída após liberá-lo com sucesso.
 
-O protocolo de ACK e a recuperação de término de processo entre aquisição e
-publicação continuam pendentes. A implementação atual não mascara sinais nesse
-intervalo. `worker_close` e `destroy` tratam backend nulo como operação vazia,
+Falhas locais de argumentos, ausência de itens e interrupção da aquisição não
+invalidam o contexto por si mesmas. As demais falhas de `semop()` são fatais ao
+contexto inteiro: a operação pode já ter modificado o buffer e mantido MUTEX
+adquirido. Como o resultado não identifica a etapa da falha, essa política também
+se aplica aos erros de recursos na aquisição. O chamador deve suspender operações
+de dados e estatísticas, propagar o erro ao supervisor e encaminhar o encerramento
+coordenado. A leitura de totais segue a mesma política se a liberação de MUTEX
+falhar, embora preserve a saída. O contrato completo está em
+@ref shm_operation_failures.
+
+O backend propaga a falha, mas não registra uma marca de inutilização, não impede
+novas chamadas e não avisa os outros processos. A integração da reação do supervisor
+e do encerramento permanece na #20. Cada worker fecha seu estado local; somente após
+recolher todos os filhos o supervisor destrói os objetos globais. Não há tentativa
+de reparar contadores ou continuar usando o contexto após uma falha fatal.
+
+O protocolo de ACK continua pendente (#11). A implementação atual não mascara sinais
+entre aquisição e publicação. Término de processo nesse intervalo também exige
+descartar o contexto; recuperá-lo para continuar outras operações está fora do
+contrato da #10. `worker_close` e `destroy` tratam backend nulo como operação vazia,
 retornando sucesso antes de consultar o contexto. A auxiliar privada exige backend
 não nulo; os chamadores garantem essa pré-condição, inclusive no rollback de `create`.
 
@@ -177,9 +194,12 @@ O fluxo, os papéis dos tipos e um exemplo completo estão em
 2. Índice lógico inválido: não criar processo nem acessar IPC.
 3. Falha no `fork`: registrar erro e manter o REPL operacional.
 4. Falha no IPC durante o filho: reportar diagnóstico, liberar recursos locais e sair.
+   No modo 1, uma falha fatal exige também suspender o uso do contexto e encaminhar
+   o encerramento coordenado pelo supervisor, conforme @ref shm_operation_failures.
 5. Falha durante `ipc_init`: remover somente os recursos já criados.
 6. `shutdown`: impedir novos jobs, encerrar filhos pendentes, coletar eventos e
-   remover todos os objetos IPC por responsabilidade do pai.
+   remover todos os objetos IPC por responsabilidade do pai. Se o contexto SHM
+   sofreu uma falha fatal, não tentar ler seus totais sob um mutex comprometido.
 7. `EINTR`: decidir explicitamente entre repetir operação (normal) e abortar por
    encerramento solicitado (shutdown), sem loops infinitos.
 
@@ -205,6 +225,9 @@ Consulte @ref ipc_protocol e @ref testing_plan.
 - #17: o núcleo de producer_run() e o roteamento já existem e possuem testes com
   transporte substituto. Falta ligar a chamada ao ponto de entrada do filho no supervisor
   e comprovar a execução integrada, incluindo os ACKs reais dos dois backends.
-- #10 e #20: definir conjuntamente a espera cancelável e a recuperação de reservas.
-  Encerramento global, que descarta o contexto, não equivale ao cancelamento de
-  um trabalho com preservação do contexto para as operações restantes.
+- #20: integrar o encerramento coordenado após falhas fatais de IPC, incluindo a
+  comunicação do erro do worker ao supervisor, a suspensão de novas operações e
+  leituras de totais no contexto comprometido e a coleta de todos os filhos antes
+  da remoção dos recursos. A #10 garante aquisição atômica sem reservas parciais;
+  recuperação após término de um worker com reutilização do contexto está fora
+  desse contrato.
