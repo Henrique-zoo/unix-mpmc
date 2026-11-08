@@ -59,8 +59,7 @@ ipc_receive(ipc_context_t *context, size_t producer_id, message_t *out, bool blo
         : shm_backend_receive(context->shared_backend, producer_id, out, blocking);
 }
 
-mpmc_result_t
-ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsigned expected) {
+mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsigned expected) {
     if (context == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     return context->mode == IPC_MESSAGE_QUEUE
         ? msg_backend_ack_begin(context->message_backend, operation_id, expected)
@@ -91,8 +90,7 @@ mpmc_result_t ipc_poll_events(ipc_context_t *context) {
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
-mpmc_result_t
-ipc_consumed_count(ipc_context_t *context, size_t producer_id, uint64_t *out_count) {
+mpmc_result_t ipc_consumed_count(ipc_context_t *context, size_t producer_id, uint64_t *out_count) {
     if (context == NULL) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }

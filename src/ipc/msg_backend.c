@@ -64,8 +64,7 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
         return (mpmc_result_t){.status = out == NULL ? MPMC_ERR_INVALID_ARG : MPMC_ERR_INVALID_ARG};
     }
     *out = NULL;
-    if (producer_count > SIZE_MAX / sizeof(int)
-        || producer_count > SIZE_MAX / sizeof(uint64_t)) {
+    if (producer_count > SIZE_MAX / sizeof(int) || producer_count > SIZE_MAX / sizeof(uint64_t)) {
         return (mpmc_result_t){.status = MPMC_ERR_SYS};
     }
 
@@ -131,11 +130,7 @@ msg_backend_send(msg_backend_t *backend, size_t producer_id, const message_t *me
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
     return sysv_msg_send(
-        backend->data_queues[producer_id - 1u],
-        (long)producer_id,
-        message,
-        sizeof(*message),
-        false
+        backend->data_queues[producer_id - 1u], (long)producer_id, message, sizeof(*message), false
     );
 }
 
@@ -148,12 +143,7 @@ msg_backend_receive(msg_backend_t *backend, size_t producer_id, message_t *out, 
 
     ssize_t received = 0;
     mpmc_result_t result = sysv_msg_receive(
-        backend->data_queues[producer_id - 1u],
-        0,
-        out,
-        sizeof(*out),
-        !blocking,
-        &received
+        backend->data_queues[producer_id - 1u], 0, out, sizeof(*out), !blocking, &received
     );
     if (result.status != MPMC_OK) {
         return result;
@@ -163,24 +153,14 @@ msg_backend_receive(msg_backend_t *backend, size_t producer_id, message_t *out, 
     }
 
     consumption_event_t event = {.producer_id = producer_id, .count = 1u};
-    result = msg_backend_send_retry(
-        backend->event_queue,
-        1,
-        &event,
-        sizeof(event),
-        false
-    );
+    result = msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), false);
     if (result.status != MPMC_OK) {
         return result;
     }
     if (out->ack_required) {
         ack_event_t ack = {.operation_id = out->operation_id};
         result = msg_backend_send_retry(
-            backend->ack_queue,
-            (long)out->operation_id,
-            &ack,
-            sizeof(ack),
-            false
+            backend->ack_queue, (long)out->operation_id, &ack, sizeof(ack), false
         );
         if (result.status != MPMC_OK) {
             return result;
@@ -200,7 +180,8 @@ msg_backend_ack_begin(msg_backend_t *backend, uint64_t operation_id, unsigned ex
         }
     }
     if (backend->registration_count == backend->registration_capacity) {
-        size_t capacity = backend->registration_capacity == 0u ? 8u : backend->registration_capacity * 2u;
+        size_t capacity =
+            backend->registration_capacity == 0u ? 8u : backend->registration_capacity * 2u;
         if (capacity < backend->registration_capacity
             || capacity > SIZE_MAX / sizeof(*backend->registrations)) {
             return (mpmc_result_t){.status = MPMC_ERR_SYS};
@@ -239,12 +220,7 @@ mpmc_result_t msg_backend_ack_wait(msg_backend_t *backend, uint64_t operation_id
         ack_event_t ack;
         ssize_t received = 0;
         mpmc_result_t result = sysv_msg_receive(
-            backend->ack_queue,
-            (long)operation_id,
-            &ack,
-            sizeof(ack),
-            false,
-            &received
+            backend->ack_queue, (long)operation_id, &ack, sizeof(ack), false, &received
         );
         if (result.status != MPMC_OK) {
             return result;
@@ -263,8 +239,7 @@ mpmc_result_t msg_backend_ack_end(msg_backend_t *backend, uint64_t operation_id)
     }
     for (size_t index = 0u; index < backend->registration_count; ++index) {
         if (backend->registrations[index].operation_id == operation_id) {
-            backend->registrations[index] =
-                backend->registrations[--backend->registration_count];
+            backend->registrations[index] = backend->registrations[--backend->registration_count];
             return (mpmc_result_t){.status = MPMC_OK};
         }
     }
@@ -278,14 +253,8 @@ mpmc_result_t msg_backend_poll_events(msg_backend_t *backend) {
     for (;;) {
         consumption_event_t event;
         ssize_t received = 0;
-        mpmc_result_t result = sysv_msg_receive(
-            backend->event_queue,
-            0,
-            &event,
-            sizeof(event),
-            true,
-            &received
-        );
+        mpmc_result_t result =
+            sysv_msg_receive(backend->event_queue, 0, &event, sizeof(event), true, &received);
         if (result.status == MPMC_ERR_INTERRUPTED) {
             continue;
         }
@@ -295,8 +264,7 @@ mpmc_result_t msg_backend_poll_events(msg_backend_t *backend) {
         if (result.status != MPMC_OK) {
             return result;
         }
-        if ((size_t)received != sizeof(event)
-            || event.producer_id == 0u
+        if ((size_t)received != sizeof(event) || event.producer_id == 0u
             || event.producer_id > backend->producer_count
             || UINT64_MAX - backend->consumed_counts[event.producer_id - 1u] < event.count) {
             return (mpmc_result_t){.status = MPMC_ERR_STATE};

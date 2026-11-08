@@ -767,12 +767,12 @@ mpmc_result_t supervisor_print_report(const supervisor_t *supervisor, FILE *out)
     }
     for (size_t producer_id = 1u; producer_id <= supervisor->producer_count; ++producer_id) {
         uint64_t consumed = 0u;
-        mpmc_result_t count_error =
-            ipc_consumed_count(supervisor->ipc, producer_id, &consumed);
+        mpmc_result_t count_error = ipc_consumed_count(supervisor->ipc, producer_id, &consumed);
         if (count_error.status != MPMC_OK) {
             return count_error;
         }
-        if (fprintf(out, "Consumidos pela estrutura %zu: %" PRIu64 "\n", producer_id, consumed) < 0) {
+        if (fprintf(out, "Consumidos pela estrutura %zu: %" PRIu64 "\n", producer_id, consumed)
+            < 0) {
             return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
         }
     }
