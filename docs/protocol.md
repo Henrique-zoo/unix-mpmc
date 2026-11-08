@@ -19,13 +19,14 @@ Os dois paradigmas devem apresentar as mesmas semânticas observáveis:
 
 ## Envelope lógico da mensagem
 
-`message_t` contém `sender_pid`, `sequence`, `sent_at`, `operation_id` e `ack_required`.
+`message_t` contém `sender_pid`, `sequence`, `sent_at` e `operation_id`.
 `sender_pid`, `sequence` e `sent_at` são campos mínimos obrigatórios do enunciado:
 devem existir e ser preservados em toda mensagem, independentemente do modo IPC.
-`operation_id` e `ack_required` são extensões internas; não substituem nem alteram
-o significado dos campos obrigatórios. `producer_id` não pertence à mensagem: é
-o índice lógico da fila/estrutura escolhida pelo comando e passado separadamente
-a `ipc_send()`/`ipc_receive()`.
+`operation_id` é uma extensão interna; não substitui nem altera o significado dos
+campos obrigatórios. A solicitação de ACK pertence à operação e é preparada por
+`ipc_ack_begin()`, sem um campo adicional em cada mensagem. `producer_id` não
+pertence à mensagem: é o índice lógico da fila/estrutura escolhida pelo comando e
+passado separadamente a `ipc_send()`/`ipc_receive()`.
 
 O supervisor atribui um `operation_id` não nulo e único por trabalho **antes de
 `fork()`**. Para trabalho produtor, esse ID identifica a operação de produção e é
@@ -61,10 +62,14 @@ O `operation_id` impede colisões entre trabalhos, inclusive quando o sistema
 reutiliza um PID; `sender_pid` e `sequence` preservam a procedência exigida e a
 ordem dentro do emissor. `sent_at` não integra essa chave.
 
-Quando `ack_required=false`, o consumo não gera ACK ao produtor. Quando é `true`,
-cada retirada efetiva gera exatamente uma confirmação associada à chave da
-mensagem; uma mensagem não retirada não pode ser confirmada. O backend pode
-agregar confirmações para transporte, mas deve manter a contagem por
+Uma operação `produz ... 1` prepara seu contexto de ACK antes do primeiro envio;
+`produz ... 2` não cria esse contexto. Na memória compartilhada, o consumidor
+consulta o registro de operações com ACK pendente pelo `operation_id`. Nas filas,
+o produtor codifica a solicitação no `mtype` obrigatório do envelope de dados e o
+consumidor interpreta esse tipo, pois o estado local do produtor não é compartilhado.
+Cada retirada efetiva com solicitação de ACK gera exatamente uma confirmação
+associada à chave da mensagem; uma mensagem não retirada não pode ser confirmada.
+O backend pode agregar confirmações para transporte, mas deve manter a contagem por
 `operation_id` e não contar duas vezes a mesma chave. O produtor aguarda o número
 esperado para o seu próprio `operation_id`; ACKs de outro trabalho ou do comando
 consumidor não satisfazem essa espera. ACK confirma consumo, não apenas inserção.
@@ -91,7 +96,7 @@ não o limite de capacidade do recurso IPC.
 ### `produz i n 1`
 
 1. Criar contexto de confirmação com `ipc_ack_begin(operation_id, n)`.
-2. Enviar as `n` mensagens marcadas com `ack_required=true`.
+2. Enviar as `n` mensagens com o mesmo `operation_id`, mantendo o contexto de ACK ativo.
 3. Esperar em `ipc_ack_wait(operation_id)` até receber `n` confirmações de consumo.
 4. Executar `ipc_ack_end(operation_id)` em sucesso, falha ou cancelamento.
 
@@ -111,7 +116,8 @@ independentemente da quantidade de estruturas destinatárias.
 
 O filho remove mensagens sucessivas vezes de `i` usando `ipc_receive(..., blocking=true)`.
 Entre uma mensagem e outra, poderá ficar bloqueado. Cada retirada válida aumenta a
-contagem de `i` e gera confirmação **se a mensagem tiver `ack_required=true`**.
+contagem de `i` e gera confirmação **se o protocolo do backend indicar ACK para a
+operação produtora**, independentemente do modo de espera do comando consumidor.
 
 ### `consome i n 2`
 
@@ -140,8 +146,7 @@ máquina e, portanto, compartilham o mesmo ABI.
 | `sequence` | 4 | 4 | Começa em 1 por processo emissor |
 | `sent_at` | 8 | 16 | `struct timespec`, `CLOCK_REALTIME` |
 | `operation_id` | 24 | 8 | ID do trabalho **produtor**, atribuído pelo supervisor |
-| `ack_required` | 32 | 1 | Seguido de 7 bytes de preenchimento |
-| **Total** | | **40** | Alinhamento 8 |
+| **Total** | | **32** | Alinhamento 8 |
 
 Regras comuns aos dois backends:
 
@@ -149,8 +154,8 @@ Regras comuns aos dois backends:
   mensagem e nunca é reescrito por backend ou consumidor. É o instante em que o produtor
   inicia o envio, e não o instante em que o comando foi criado nem o da inserção: se o
   envio esperar vaga, a inserção ocorre depois do `sent_at`.
-- O backend não altera `sender_pid`, `sequence`, `sent_at`, `operation_id` nem
-  `ack_required`. O consumidor recebe a mensagem exatamente como o produtor a enviou.
+- O backend não altera `sender_pid`, `sequence`, `sent_at` nem `operation_id`.
+  O consumidor recebe a mensagem exatamente como o produtor a enviou.
 - O índice lógico `producer_id` nunca é gravado na mensagem; ele é o endereço (segmento
   ou fila) onde a mensagem fica.
 
@@ -169,19 +174,55 @@ Regras comuns aos dois backends:
 
 | Faixa | Conteúdo |
 |---|---|
-| 0–3 | `head` (`uint32_t`): próxima posição de retirada |
-| 4–7 | `tail` (`uint32_t`): próxima posição de inserção |
-| 8–11 | `count` (`uint32_t`): entradas ocupadas |
-| 12–15 | `capacity` (`uint32_t`): gravado em `ipc_init()`, vale 50 |
-| 16–23 | `consumed_total` (`uint64_t`): mensagens retiradas desta estrutura |
-| 24–2023 | 50 entradas de 40 bytes (`message_t`); a entrada `j` começa em `24 + 40·j` |
-| 2024–2047 | Reservado, zerado |
+| 0 | `head` (`uint8_t`): índice da próxima mensagem a retirar, de 0 a 62 |
+| 1 | `tail` (`uint8_t`): índice da próxima posição de inserção, de 0 a 62 |
+| 2 | `count` (`uint8_t`): entradas ocupadas, de 0 a 63 |
+| 3 | `capacity` (`uint8_t`): gravado em `ipc_init()`, vale 63 |
+| 4–7 | Preenchimento para alinhamento de 8 bytes; não integra os metadados |
+| 8–15 | `consumed_total` (`uint64_t`): mensagens retiradas desta estrutura |
+| 16–2031 | 63 entradas de 32 bytes (`message_t`); a entrada `j` começa em `16 + 32·j` |
+| 2032–2047 | Reservado, zerado |
 
-A capacidade segue a fórmula da seção anterior: `(2048 − 24) / 40 = 50`. Uma estrutura
-comporta no máximo 50 mensagens pendentes; um `produz i 1024 2` sem consumidores bloqueia
-na 51ª, e isso é o comportamento previsto (backpressure), não um erro.
+Os metadados de endereçamento e ocupação usam o menor tipo inteiro sem sinal de
+largura fixa que comporte seu domínio. `head` e `tail` são índices de mensagens,
+não ponteiros nem deslocamentos em bytes; assim como `count` e `capacity`, cabem
+em `uint8_t`. A capacidade deve ser menor ou igual a `UINT8_MAX`, considerando que
+`count` precisa representar também o buffer cheio.
 
-**Semáforos de `M_i`:** índice 0 = `mutex` (inicial 1); índice 1 = `empty` (inicial 50);
+Se for necessário armazenar um deslocamento relativo em bytes no segmento, o tipo
+é `uint16_t`, suficiente para as posições de 0 a 2047. O layout acima não armazena
+esse campo: o deslocamento de cada mensagem é calculado a partir de seu índice,
+com aritmética em `size_t`, e convertido em endereço somente no mapeamento local.
+Ponteiros de processo não são gravados no segmento.
+
+`consumed_total` permanece `uint64_t`: é acumulado entre comandos e não está
+limitado às 63 posições nem às 1024 mensagens de um único comando. A escolha dos
+tipos menores não elimina a exclusão mútua exigida pelo protocolo.
+
+O cabeçalho alinhado ocupa 16 bytes. O preenchimento preserva o alinhamento natural
+de `consumed_total` e `message_t`, sem estruturas compactadas. Na implementação,
+`static_assert` deve verificar os tamanhos dos campos, os deslocamentos acima, o
+alinhamento das mensagens, os 2048 bytes do segmento e a capacidade calculada dentro
+do limite de `uint8_t`. Se um deslocamento em bytes passar a ser armazenado, seu
+limite também deve ser verificado contra `UINT16_MAX`.
+
+Essas verificações estão em `src/ipc/shm_backend/shm_ring.h`. O cálculo da
+capacidade é compartilhado pela constante interna `SHM_RING_CAPACITY` e pela
+inicialização, sem substituir a validação dos limites do layout.
+
+O endereço base também deve respeitar `alignof(shm_ring_t)`. Na associação real,
+`shmat(shmid, NULL, 0)` escolhe um endereço alinhado à página, suficiente para o
+alinhamento de 8 bytes deste layout; veja
+[shmat(2)](https://man7.org/linux/man-pages/man2/shmat.2.html). Para áreas locais,
+`malloc()` fornece o alinhamento necessário. Um vetor de bytes embutido em outra
+estrutura deve declarar `alignas(shm_ring_t)` no próprio membro, como fazem os
+segmentos simulados dos testes. Converter um ponteiro não ajusta seu alinhamento.
+
+A capacidade segue a fórmula da seção anterior: `(2048 − 16) / 32 = 63`. Uma estrutura
+comporta no máximo 63 mensagens pendentes; um `produz i 1024 2` sem consumidores bloqueia
+na 64ª, e isso é o comportamento previsto (backpressure), não um erro.
+
+**Semáforos de `M_i`:** índice 0 = `mutex` (inicial 1); índice 1 = `empty` (inicial 63);
 índice 2 = `full` (inicial 0). Os índices valem 0, 1 e 2 em todas as estruturas.
 
 **Envio (`shm_backend_send`):**
@@ -202,7 +243,8 @@ adquirido, e `SEM_UNDO` não é usado.
 3. `P(mutex)`; copia a entrada de `head`; `head = (head + 1) % capacity`; `count--`;
    `consumed_total++`; `V(mutex)`. Remoção e contagem são uma única seção crítica,
    então não existe mensagem retirada e não contada.
-4. `V(empty)`; se `ack_required`, executa o protocolo de ACK abaixo; restaura a máscara.
+4. `V(empty)`; consulta a tabela de operações e confirma o consumo se encontrar o
+   `operation_id`, conforme o protocolo de ACK abaixo; restaura a máscara.
 
 **Limite da proteção contra sinais.** O mascaramento acima protege somente o
 intervalo posterior a sigprocmask(): ele não torna atômicos o retorno de P e o
@@ -223,7 +265,7 @@ encontro que ambos já herdaram por `fork()`.
 | Passo | Quem | Ação |
 |---|---|---|
 | `ack_begin(op, n)` | Produtor | `P(ack_mutex)`; recusa `op` já presente (`MPMC_ERR_STATE`); toma a primeira posição livre (sem posição livre: `MPMC_ERR_NO_SPACE`); grava `op`; zera o contador da posição; `V(ack_mutex)` |
-| ACK | Consumidor | `P(ack_mutex)`; procura `op = message.operation_id`; se achar, `V(contador)` na posição; `V(ack_mutex)`. Se não achar, o ACK é descartado (o produtor já terminou ou foi cancelado) |
+| ACK | Consumidor | `P(ack_mutex)`; procura `op = message.operation_id`; se achar, `V(contador)` na posição; `V(ack_mutex)`. Se não achar, não emite ACK (a operação não pediu confirmação, já terminou ou foi cancelada) |
 | `ack_wait(op)` | Produtor | `semop(contador, −n)`: bloqueia até o contador valer pelo menos `n` e subtrai `n` de uma vez |
 | `ack_end(op)` | Produtor | `P(ack_mutex)`; grava 0 na posição; `V(ack_mutex)`. Chamado em sucesso, falha ou cancelamento |
 
@@ -251,29 +293,39 @@ Propriedades que esse desenho garante:
 
 | Fila | Quantidade | Tipo (`mtype`) | Corpo (`msgsz`, sem `mtype`) |
 |---|---:|---|---|
-| Dados `D_i` | `p` | 1 | `message_t`, 40 bytes |
+| Dados `D_i` | `p` | 1 sem ACK; 2 com ACK | `message_t`, 32 bytes |
 | ACK `Q_ack` | 1 | `operation_id` do produtor | `{ pid_t sender_pid; uint32_t sequence; }`, 8 bytes |
 | Eventos `Q_evt` | 1 | 1 | `{ uint32_t producer_id; }`, 4 bytes |
 
 Os dados do paradigma 2 trafegam só por filas, nunca por `shm`. As filas `Q_ack` e `Q_evt`
 são recursos de controle: não substituem as `p` filas de dados exigidas.
 
-**Capacidade.** O limite de cada fila é `msg_qbytes`. Neste ambiente de teste ele vale
-16384 bytes e a fila de dados encheu com 409 mensagens de 40 bytes; a de ACK, com 2048
-mensagens de 8 bytes. O valor varia entre sistemas e deve ser tratado como dado, não como
-constante. Como no modo 1, `msgsnd` bloqueante em fila cheia é backpressure esperado.
+**Capacidade.** O limite de cada fila é `msg_qbytes`. Por exemplo, 16384 bytes
+comportam 512 corpos de dados de 32 bytes ou 2048 corpos de ACK de 8 bytes. O limite
+varia entre sistemas e deve ser consultado, não tratado como constante. Como no
+modo 1, `msgsnd` bloqueante em fila cheia é backpressure esperado.
 
-**Envio.** `msgsnd(D_i, {1, message_t})` com `msgsz = sizeof(message_t)`. Se
-`ack_required=false`, usa a forma bloqueante, porque nenhum ACK depende desse produtor.
-Se `ack_required=true`, usa o laço descrito em "ACK por operação" abaixo.
+**Envio.** O backend consulta o contexto local criado por `ack_begin` para o
+`operation_id` da mensagem. Sem contexto ativo, usa `msgsnd(D_i, {1, message_t})`
+bloqueante. Com contexto ativo, usa `mtype=2` e o laço descrito em "ACK por operação"
+abaixo. Em ambos os casos, `msgsz = sizeof(message_t)`: o `mtype` obrigatório não
+integra o corpo e não acrescenta bytes a `message_t`.
 
-**Recebimento.** `msgrcv(D_i, tipo 1, msgsz = sizeof(message_t))`, sem `MSG_NOERROR`;
-com `blocking=false` acrescenta `IPC_NOWAIT` e `ENOMSG` vira `MPMC_ERR_WOULD_BLOCK`. Um
-corpo de tamanho diferente de `sizeof(message_t)` é violação de contrato
-(`MPMC_ERR_STATE`). Depois de retirar a mensagem, o consumidor, nesta ordem:
+**Recebimento.** `msgrcv(D_i, tipo 0, msgsz = sizeof(message_t))`, sem `MSG_NOERROR`;
+com `blocking=false` acrescenta `IPC_NOWAIT` e `ENOMSG` vira `MPMC_ERR_WOULD_BLOCK`.
+Um tipo recebido diferente de 1/2 ou corpo de tamanho diferente de `sizeof(message_t)`
+é violação de contrato (`MPMC_ERR_STATE`). Depois de retirar a mensagem, o consumidor,
+nesta ordem:
 
 1. envia `{producer_id}` a `Q_evt` (um evento por mensagem retirada, com ou sem ACK);
-2. se `ack_required`, envia `{sender_pid, sequence}` a `Q_ack` com `mtype = operation_id`.
+2. se o tipo recebido era 2, envia `{sender_pid, sequence}` a `Q_ack` com `mtype = operation_id`.
+
+O tipo zero seleciona a primeira mensagem da fila, preservando FIFO entre dados com
+e sem ACK; filtrar apenas pelo tipo 1 ou 2 alteraria essa ordem. Os valores 1 e 2
+classificam a solicitação de confirmação, não a prioridade das mensagens. Essa é a
+semântica de [msgrcv(2)](https://man7.org/linux/man-pages/man2/msgop.2.html).
+O wrapper `sysv_msg_receive_typed()` devolve também o tipo ao backend.
+`sysv_msg_receive()` mantém sua interface anterior e descarta essa informação.
 
 **ACK por operação (`ack=1`).** O `mtype` do ACK é o `operation_id` do produtor, de modo
 que `msgrcv(Q_ack, tipo = operation_id)` entrega a cada produtor somente as próprias
@@ -286,7 +338,7 @@ na prática os IDs crescem a partir de 1.
 | `ack_begin(op, n)` | Só estado local: guarda `op`, `n` e um contador em zero. A fila `Q_ack` já existe |
 | Envio de cada mensagem | Laço: `msgsnd(D_i, IPC_NOWAIT)`; em sucesso, segue. Em `EAGAIN`, drena as confirmações próprias (`msgrcv(Q_ack, tipo = op, IPC_NOWAIT)` até `ENOMSG`), somando ao contador, espera no máximo 1 ms com `nanosleep()` e repete. `EINTR` no laço retorna `MPMC_ERR_INTERRUPTED` |
 | `ack_wait(op)` | `msgrcv(Q_ack, tipo = op)` bloqueante até o contador chegar a `n` |
-| `ack_end(op)` | Drena sem bloquear as confirmações restantes de `op`; não há recurso do kernel a liberar |
+| `ack_end(op)` | Drena sem bloquear as confirmações restantes de `op` e libera o estado local da operação; não há recurso do kernel a liberar |
 
 Por que isso não trava: um `msgsnd` bloqueante por ACK, sozinho, permitiria o ciclo em que
 produtores esperam vaga em `D_i` enquanto consumidores esperam vaga em `Q_ack`. Aqui, um
@@ -317,9 +369,9 @@ consumo por estrutura pode então ficar uma unidade abaixo do real nesse caso.
 
 | Aspecto | Memória compartilhada | Filas de mensagens |
 |---|---|---|
-| Unidade de dados | Entrada de 40 bytes em `S_i` | Mensagem System V com corpo de 40 bytes em `D_i` |
-| Capacidade por estrutura | 50 (fixa pela fórmula de 2048 bytes) | Definida por `msg_qbytes` (409 neste ambiente) |
-| Ordem | FIFO por `head`/`tail` | FIFO da fila para o tipo 1 |
+| Unidade de dados | Entrada de 32 bytes em `S_i` | Mensagem System V com corpo de 32 bytes em `D_i` |
+| Capacidade por estrutura | 63 (fixa pela fórmula de 2048 bytes) | Definida por `msg_qbytes` (512 se o limite for 16384 bytes) |
+| Ordem | FIFO por `head`/`tail` | FIFO da fila com recebimento por tipo 0 |
 | Exclusão mútua | `mutex` do conjunto `M_i` | Fornecida pelo kernel |
 | Contagem de consumo | `consumed_total` sob `mutex`, junto da retirada | Evento em `Q_evt`, consolidado pelo supervisor |
 | Canal de ACK | Tabela em `C` e contadores no conjunto `K` | `Q_ack`, com `mtype = operation_id` |
@@ -421,6 +473,6 @@ A obrigatoriedade de `shm + sem`, `msg`, tamanho de 2048 bytes, comandos, flags 
 informações da mensagem vem do enunciado. Buffer circular, identificador de operação,
 formato do ACK, organização em backends e filas auxiliares de controle são **decisões
 arquiteturais do projeto**, fixadas em @ref ipc_wire_formats e a revisar durante os testes
-de concorrência. Os limites que elas introduzem (50 entradas por segmento, 64 operações
+de concorrência. Os limites que elas introduzem (63 entradas por segmento, 64 operações
 com ACK simultâneas no modo 1, ACKs órfãos e a janela de contagem no modo 2) estão
 declarados ali e não vêm do enunciado.

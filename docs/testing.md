@@ -23,6 +23,8 @@ não é suficiente para provar correção concorrente.
 | U09 | `status` | Conversão de códigos de retorno a mensagens legíveis |
 | U10 | `message`/ACK | Identidade `(operation_id, sender_pid, sequence)` preservada até o ACK; `sent_at` não é usado como chave |
 | U11	| `sem` | Criação, inicialização, operações P/V, IPC_NOWAIT, índice inválido, interrupção por EINTR e remoção de semáforos |
+| U12 | `shm_ring` | Inicialização, capacidade de 63 mensagens, vazio/cheio, FIFO com voltas e mensagens pendentes, contagem acumulada e limites do segmento |
+| U13 | `shm_backend` | Inicialização de todos os cabeçalhos em áreas simuladas alinhadas, previamente preenchidas com bytes não nulos |
 
 ## Testes de integração (repetir para modos 1 e 2)
 
@@ -54,11 +56,23 @@ não é suficiente para provar correção concorrente.
 
 ## Propriedades a verificar
 
+- O segmento de memória compartilhada tem 2048 bytes, cabeçalho alinhado de 16 bytes
+  e 63 mensagens de 32 bytes a partir do deslocamento 16. Os tipos e deslocamentos
+  do layout devem ser conferidos com `sizeof`, `offsetof` e `static_assert`.
+- Os campos `head`, `tail`, `count` e `capacity` usam `uint8_t`, com capacidade
+  representável até o estado cheio. Após inserções e retiradas que deem várias
+  voltas no buffer, os índices permanecem em `0..capacity-1` e a ocupação em
+  `0..capacity`, preservando a ordem FIFO. `consumed_total` continua acumulando
+  além da capacidade do buffer e do limite de mensagens por comando.
 - `consumidas(i) <= produzidas(i)` sempre, para cada estrutura `i`.
 - O número de mensagens retiradas globalmente equivale à soma dos relatórios dos consumidores.
 - Para cada mensagem produzida, há no máximo um consumidor correspondente.
 - `sender_pid`, `sequence` e `sent_at` sobrevivem sem alteração ao transporte; a fila lógica é identificada separadamente pelo índice `producer_id`.
-- Cada ACK corresponde a uma chave de mensagem distinta `(operation_id, sender_pid, sequence)` com `ack_required=true`; o ID do trabalho consumidor não é usado como ID de produção.
+- Cada ACK corresponde a uma chave de mensagem distinta `(operation_id, sender_pid, sequence)`
+  cuja operação solicitou confirmação; o ID do trabalho consumidor não é usado como
+  ID de produção. Alternar mensagens com e sem ACK na mesma estrutura preserva FIFO
+  e gera confirmações somente para as operações que as solicitaram. No modo 2,
+  verificar o mtype recebido e a leitura por tipo zero, sem filtragem por política de ACK.
 - O relatório do supervisor usa PID e `operation_id` do processo para identificar o trabalho; estatísticas de consumo continuam agrupadas pela fila lógica.
 - Se um produtor conclui normalmente com `ack=1`, todas as mensagens daquele trabalho
   aparecem entre as efetivamente consumidas.
@@ -84,7 +98,7 @@ recursos IPC de outros usuários/processos por `ipcrm`.
 
 ```bash
 make debug
-make unit   # testes de command, supervisor, msg, sem, error, wrappers e backend de shm
+make unit   # testes de command, supervisor, msg, sem, error, wrappers, backend e buffer shm
 make test   # unitários + smoke + integração do REPL
 make docs
 ```
@@ -121,13 +135,43 @@ cada posição. Verificam rollback completo, tratamento do identificador zero,
 falhas de cleanup. Uma callback copia os diagnósticos e altera `errno` para verificar
 que cada falha e o erro original da criação continuam preservados. Os testes também
 conferem que a limpeza libera o estado local uma única vez e não aloca diagnósticos.
+As áreas de dados simuladas usam `alignas(shm_ring_t)` no membro do vetor de bytes,
+garantindo o alinhamento também para cada elemento do vetor de segmentos. A criação
+é exercitada após preencher essas áreas com bytes não nulos e deve inicializar
+todos os cabeçalhos com índices, ocupação e total consumido zerados e capacidade 63.
+
+Os testes de `shm_ring` usam alocações locais com 2048 bytes úteis, sentinelas antes
+e depois do segmento e verificação dos 16 bytes reservados após a última mensagem.
+Conferem a inicialização, ocupação máxima, transição para vazio, reutilização, FIFO
+com retorno dos índices ao início ainda com mensagens pendentes, buffers independentes
+e várias voltas com mais de 1024 consumos. Todos os campos das mensagens são
+conferidos sem comparar bytes de padding. As operações respeitam suas pré-condições;
+sincronização entre processos e compensação de reservas permanecem no escopo da #10.
+
+Os testes de filas verificam a recepção do mtype junto ao corpo, FIFO entre tipos
+intercalados e preservação das saídas em ENOMSG/E2BIG. O teste do backend de filas
+cria dois consumidores antes do registro de ACK no produtor e confere a contagem
+consolidada no pai e a confirmação somente da operação registrada. A ausência de
+ACK para a outra operação é verificada por espera interrompida com alarm(), sem polling.
+
+Para conferir acessos à memória e alinhamento com AddressSanitizer e
+[UndefinedBehaviorSanitizer](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html),
+sem misturar objetos com o build normal:
+
+```bash
+make MODE=debug BUILD_DIR=build/sanitize \
+  CFLAGS='-std=c23 -Wall -Wextra -Wpedantic -Wshadow -O1 -g -DDEBUG -fsanitize=address,undefined -fno-sanitize-recover=all' \
+  build/sanitize/unit/test_shm_ring build/sanitize/unit/test_shm_backend
+build/sanitize/unit/test_shm_ring
+build/sanitize/unit/test_shm_backend
+```
 
 O alvo `test` também executa `tests/integration/test_repl.c`, que abre um pseudo-terminal
 para verificar o prompt inicial, seu redesenho após o aviso de término de um filho e o
 relatório final. A entrada em terminal complementa os cenários por pipes e FIFOs do
 script `test_repl.sh`, incluindo a validação do limite de estruturas na inicialização.
 
-Os testes de integração de FIFO, ACKs e concorrência dos backends da matriz acima ainda
+Os testes completos de integração de FIFO, ACKs e concorrência dos backends da matriz acima ainda
 dependem das respectivas implementações. Os *smoke tests* validam somente inicialização
 e shutdown; os cenários do REPL não substituem a verificação do transporte IPC completo.
 Scripts automatizados devem capturar a saída e impor limites de tempo para detectar travamentos.
