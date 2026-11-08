@@ -37,6 +37,23 @@ producer_message_next(message_t *out, producer_sequence_t *sequence, const produ
     return MPMC_OK;
 }
 
+/**
+ * @brief Seleciona a fila lógica de destino de uma mensagem.
+ * @param job Trabalho validado; producer_id 0 indica distribuição striped.
+ * @param sequence Sequência da mensagem no processo emissor, a partir de 1.
+ * @param producer_count Quantidade de filas lógicas, positiva.
+ * @return Índice 1..p: `job->producer_id` se positivo; senão `1 + ((sequence - 1) % p)`.
+ * @note Ponto único do roteamento striped neste arquivo. A subtarefa #18/#49 o
+ * substitui por uma função própria, em arquivo separado, sem alterar producer_run().
+ */
+static size_t
+producer_destination(const producer_job_t *job, uint32_t sequence, size_t producer_count) {
+    if (job->producer_id != 0u) {
+        return job->producer_id;
+    }
+    return 1u + (size_t)((sequence - 1u) % producer_count);
+}
+
 mpmc_result_t producer_run(ipc_context_t *transport, const producer_job_t *job) {
     if (transport == NULL || job == NULL || job->operation_id == 0u
         || job->message_count < MPMC_MIN_MESSAGES || job->message_count > MPMC_MAX_MESSAGES
@@ -74,10 +91,7 @@ mpmc_result_t producer_run(ipc_context_t *transport, const producer_job_t *job) 
             break;
         }
 
-        size_t destination = job->producer_id;
-        if (destination == 0u) {
-            destination = 1u + (size_t)((message.sequence - 1u) % producer_count);
-        }
+        size_t destination = producer_destination(job, message.sequence, producer_count);
         result = ipc_send(transport, destination, &message);
         if (result.status != MPMC_OK) {
             break;

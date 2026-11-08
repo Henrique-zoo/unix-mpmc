@@ -64,12 +64,18 @@ producer_message_next(message_t *out, producer_sequence_t *sequence, const produ
  * @brief Produz as mensagens de um trabalho a partir do processo filho.
  * @param transport Contexto IPC herdado via fork(), pronto para envio.
  * @param job Descrição validada e imutável da operação.
- * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
- * os valores possíveis de status e system_errno não podem ser verificados.
+ * @return Estrutura mpmc_result_t.
+ * @retval MPMC_OK Todas as mensagens foram enviadas e, se solicitado, consumidas.
+ * @retval MPMC_ERR_INVALID_ARG transporte/job nulo, quantidade fora de 1..1024,
+ * operation_id zero ou ack_mode inválido.
+ * @retval MPMC_ERR_INVALID_INDEX producer_id acima da quantidade de estruturas.
+ * @retval MPMC_ERR_* Qualquer erro retornado pelas operações ipc_* ou pela
+ * construção dos metadados; o status e system_errno do transporte são propagados.
  * @details Gera sender_pid=getpid(), sequência iniciando em 1 e sent_at
  * do CLOCK_REALTIME. Usa ipc_send() para o destino selecionado; para
  * producer_id=0, alterna destinos `1 + ((seq-1) % p)`. Na opção ack=1,
- * executa begin/wait/end; na opção ack=2, não solicita confirmação.
+ * executa begin antes dos envios, wait após todos os envios e end em qualquer
+ * saída posterior a begin; na opção ack=2, não solicita confirmação.
  * @pre Deve ser chamada em um filho do supervisor, não no processo principal.
  * @post O worker deve liberar recursos locais usando ipc_worker_close() antes
  * de finalizar o processo; o supervisor mantém posse dos recursos globais.
