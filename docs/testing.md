@@ -28,6 +28,8 @@ não é suficiente para provar correção concorrente.
 | U14 | `transport` | Fachada com backends substitutos (`test_transport`): despacho de cada operação ao backend do modo, com os argumentos exatos; propagação de `status`/`system_errno` e dos dados de saída; contexto nulo, modo inválido, `p` zero e saída nula; falha de alocação e de criação do backend em `ipc_init()` sem vazar nem destruir o backend; `ipc_worker_close()` sem remover recursos globais e `ipc_destroy()` sem chamar o fechamento do filho |
 | U15 | `protocol` | Propriedades determinísticas (`test_protocol_properties`): textos de status distintos e formatação com `errno`/truncamento; composição de metadados, chave `(operation_id, sender_pid, sequence)` sem colisões (e, em `test_supervisor`, `operation_id` único e consecutivo para 20 trabalhos despachados) entre operações intercaladas; sequência por processo com filhos reais sincronizados por pipes (sem zumbis); distribuição *striped* `1 + ((k-1) % p)` exaustiva para `p` 1..40, `n` 1..130 e limites até 1024; capacidade de 63 mensagens, alinhamento e área de guarda do segmento de 2048 bytes |
 | U16 | `supervisor`/relatório | Fixture controlada (`test_supervisor_report`): três filhos simulados com saída normal, término por sinal e falha; associação por PID, `operation_id` e tipo sem assumir ordem de coleta; durações monotônicas com virada de segundo, regressão e falha do relógio; duração total do processo principal com e sem relógio; contagens controladas para estruturas 1..p; substituição de `fork()`, `waitpid()`, relógio e fachada IPC, sem criar filhos reais ou recursos System V |
+| U17 | `shm_backend` | Criação/SETVAL de cada conjunto, rollback por etapa, IDs independentes e falhas de remoção de semáforos |
+| U18 | `shm_operations` | FIFO, metadados, isolamento, totais, interrupção de esperas reais, concorrência e falhas de aquisição/publicação |
 
 ## Testes de integração (repetir para modos 1 e 2)
 
@@ -126,13 +128,14 @@ limpeza ou mudança do `errno` corrente. São exercitados `EAGAIN`, `ENOMSG`, `E
 consulta de capacidade, truncamento e diagnósticos com causa de sistema.
 
 Os testes de `sem` verificam valores e índices, espera por zero, P/V, IPC_NOWAIT,
-limites representáveis, preservação de errno e permissão de alteração sem leitura
-(0200). A interrupção real usa alarm() e sigaction() sem SA_RESTART. Um objeto de
-sem.c compilado com -Dsemop=mpmc_test_semop permite injetar EIDRM, EINVAL e EACCES
-sem alterar o objeto da aplicação. A remoção de um conjunto com filhos realmente
+vetores atômicos, limites representáveis, preservação de errno e permissão de alteração
+sem leitura (0200). A interrupção real usa alarm() e sigaction() sem SA_RESTART. Um objeto de
+sem.c compilado com -Dsemop=mpmc_test_semop permite injetar erros, inclusive EIDRM,
+E2BIG e EACCES, e comprovar que os argumentos chegam à chamada sem alterar o objeto
+da aplicação. A remoção de um conjunto com filhos realmente
 bloqueados ainda deve ser exercitada pelos testes de integração.
 
-Os testes de `shm` exercitam os quatro wrappers, verificam segmentos independentes de
+Os testes de `shm` exercitam os cinco wrappers, verificam segmentos independentes de
 2048 bytes com permissões 0600 via `IPC_STAT` e conferem a preservação dos parâmetros
 de saída em falhas. Um cenário com `fork()` verifica que o filho desassocia apenas
 seu vínculo, que o mapeamento do pai continua válido após `IPC_RMID` e que a última
@@ -140,17 +143,54 @@ desassociação destrói o segmento. O cleanup de segurança remove somente segm
 criados pelo teste; a coleta do filho usa `alarm(3)` e espera bloqueante por sinais
 para detectar travamentos, sem consultas periódicas.
 
+Nos wrappers, IDs negativos, tamanho zero de segmento, vetor de semáforos vazio/nulo
+e buffer nulo de `IPC_STAT` são rejeitados pelo kernel. Os testes conferem a categoria
+traduzida e o `errno` original, distinguindo essas falhas das rejeições locais de
+ponteiros usados em C, overflow do envelope ou estreitamento de tipos. Filas também
+exercitam tipos inválidos e o limite MSGMAX diretamente no kernel; uma recepção
+rejeitada localmente não remove a mensagem pendente.
+
 Os testes de `shm_backend` usam alocações e wrappers substituídos apenas no objeto
 de teste para injetar falhas de `malloc()`, `calloc()`, criação e associação em
-cada posição. Verificam rollback completo, tratamento do identificador zero,
-`destroy(NULL)`, liberação somente local pelo worker e continuidade após múltiplas
+cada posição. Os cenários existentes cobrem tratamento do identificador zero,
+liberação somente local pelo worker e continuidade após múltiplas
 falhas de cleanup. Uma callback copia os diagnósticos e altera `errno` para verificar
 que cada falha e o erro original da criação continuam preservados. Os testes também
-conferem que a limpeza libera o estado local uma única vez e não aloca diagnósticos.
+conferem as categorias traduzidas de argumento inválido e recurso removido, que a
+limpeza libera o estado local uma única vez e que não aloca diagnósticos.
 As áreas de dados simuladas usam `alignas(shm_ring_t)` no membro do vetor de bytes,
 garantindo o alinhamento também para cada elemento do vetor de segmentos. A criação
 é exercitada após preencher essas áreas com bytes não nulos e deve inicializar
 todos os cabeçalhos com índices, ocupação e total consumido zerados e capacidade 63.
+
+Os conjuntos simulados têm identificadores independentes dos segmentos, incluindo
+ID zero. A suíte verifica os valores iniciais MUTEX=1, EMPTY=capacity e FULL=0,
+injeta falha na criação e em cada SETVAL de cada entrada e confere o rollback dos
+recursos efetivamente criados. Os diagnósticos usam `resource_id`, distinguem
+segmento/conjunto e preservam o primeiro erro mesmo quando o cleanup também falha.
+Fechamento com NULL não aloca, não libera recursos e não chama o reporter.
+
+`test_shm_operations` usa segmentos e semáforos reais para FIFO após volta dos índices,
+metadados, isolamento entre estruturas e totais independentes. Interrompe com
+`alarm(1)` as esperas por itens, vagas e mutex; verifica ausência de reservas parciais
+e preservação das saídas. Dois produtores e dois consumidores exercitam a mesma
+estrutura, com 128 identidades conferidas sem perda ou duplicação. Um pipe leva as
+observações ao pai; sua ordem não é usada como evidência da ordem de retirada.
+
+Somente o objeto de operações do teste substitui `sysv_sem_apply`/`sysv_sem_change`:
+normalmente delega às primitivas reais, mas permite falhar uma aquisição ou publicação.
+Os cenários distinguem buffer/saída inalterados de uma alteração já executada antes
+de a publicação falhar, inclusive na leitura do contador. O cleanup de segurança
+encerra/recolhe apenas os filhos próprios e remove apenas os recursos do contexto.
+Esses testes não comprovam o protocolo de ACK, que continua pendente.
+
+Para Linux e macOS, SIGALRM é instalado com `sigaction()` sem SA_RESTART e fica
+desbloqueado durante os cenários. A coleta usa `alarm()` e `sigwait()` com
+SIGCHLD/SIGALRM bloqueados, instalando antes do fork uma ação capturável de SIGCHLD.
+Isso evita depender de sinais ignorados, que o macOS descarta antes de `sigwait()`;
+veja a [documentação da Apple](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/sigwait.2.html).
+A suíte cancela alarmes, drena um SIGALRM eventualmente pendente e restaura ações e
+máscara originais. Não exige `sigtimedwait()`, indisponível no macOS.
 
 Os testes de `shm_ring` usam alocações locais com 2048 bytes úteis, sentinelas antes
 e depois do segmento e verificação dos 16 bytes reservados após a última mensagem.
@@ -158,7 +198,7 @@ Conferem a inicialização, ocupação máxima, transição para vazio, reutiliz
 com retorno dos índices ao início ainda com mensagens pendentes, buffers independentes
 e várias voltas com mais de 1024 consumos. Todos os campos das mensagens são
 conferidos sem comparar bytes de padding. As operações respeitam suas pré-condições;
-sincronização entre processos e compensação de reservas permanecem no escopo da #10.
+esses testes locais são complementados pela cobertura sincronizada de `shm_operations`.
 
 Os testes de filas verificam a recepção do mtype junto ao corpo, FIFO entre tipos
 intercalados e preservação das saídas em ENOMSG/E2BIG. O teste do backend de filas
