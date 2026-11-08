@@ -3,8 +3,8 @@
  * @brief Verifica os retornos de transport.h que as implementações atuais honram.
  * @ingroup tests
  * @details Cobre a validação de argumentos, o modo 2 de ponta a ponta (dados, ACK e
- * eventos entre processos) e o ciclo de vida do modo 1. Não verifica o que o modo 1
- * ainda não implementa (envio, recebimento, ACK e contagem; pendentes em #10 e #11).
+ * eventos entre processos), além do ciclo de vida, dados e contagens do modo 1.
+ * O protocolo de ACK do modo 1 continua pendente em #11.
  * Um alarm() limita a duração; ao expirar, o teste remove as filas e termina com falha.
  */
 #include <errno.h>
@@ -105,8 +105,10 @@ static void test_lifecycle(ipc_mode_t mode) {
     CHECK_RESULT(ipc_poll_events(context), MPMC_OK, 0);
 
     uint64_t count = 77u;
-    CHECK_RESULT(ipc_consumed_count(context, 0u, &count), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(ipc_consumed_count(context, 3u, &count), MPMC_ERR_INVALID_ARG, 0);
+    mpmc_status_t invalid_index =
+        mode == IPC_SHARED_MEMORY ? MPMC_ERR_INVALID_INDEX : MPMC_ERR_INVALID_ARG;
+    CHECK_RESULT(ipc_consumed_count(context, 0u, &count), invalid_index, 0);
+    CHECK_RESULT(ipc_consumed_count(context, 3u, &count), invalid_index, 0);
     CHECK_RESULT(ipc_consumed_count(context, 1u, NULL), MPMC_ERR_INVALID_ARG, 0);
     CHECK(count == 77u);
 
@@ -213,6 +215,26 @@ static void test_queue_flow(ipc_context_t *context) {
     CHECK_RESULT(ipc_receive(context, 1u, &received, false), MPMC_OK, 0);
 }
 
+/** @brief Exercita dados e totais reais de SHM pela fachada, sem depender dos ACKs pendentes. */
+static void test_shared_memory_flow(ipc_context_t *context) {
+    message_t sent = {.sender_pid = getpid(), .sequence = 7u, .operation_id = 41u};
+    message_t received = {0};
+    uint64_t count = 99;
+    CHECK_RESULT(ipc_send(context, 0, &sent), MPMC_ERR_INVALID_INDEX, 0);
+    CHECK_RESULT(ipc_receive(context, 3, &received, false), MPMC_ERR_INVALID_INDEX, 0);
+    CHECK_RESULT(ipc_receive(context, 1, &received, false), MPMC_ERR_WOULD_BLOCK, EAGAIN);
+    CHECK_RESULT(ipc_send(context, 2, &sent), MPMC_OK, 0);
+    CHECK_RESULT(ipc_receive(context, 1, &received, false), MPMC_ERR_WOULD_BLOCK, EAGAIN);
+    CHECK_RESULT(ipc_receive(context, 2, &received, true), MPMC_OK, 0);
+    CHECK(received.sender_pid == sent.sender_pid && received.sequence == sent.sequence);
+    CHECK(received.operation_id == sent.operation_id);
+    CHECK_RESULT(ipc_consumed_count(context, 1, &count), MPMC_OK, 0);
+    CHECK(count == 0);
+    CHECK_RESULT(ipc_consumed_count(context, 2, &count), MPMC_OK, 0);
+    CHECK(count == 1);
+    CHECK_RESULT(ipc_ack_begin(context, sent.operation_id, 1), MPMC_ERR_STATE, 0);
+}
+
 /**
  * @brief Executa a suíte.
  * @return Zero se nenhuma verificação falhar; um se houver falha; dois se expirar o alarme.
@@ -236,6 +258,12 @@ int main(void) {
     if (guarded_context != NULL) {
         test_queue_statuses(guarded_context);
         test_queue_flow(guarded_context);
+        ipc_destroy(guarded_context);
+        guarded_context = NULL;
+    }
+    CHECK_RESULT(ipc_init(&guarded_context, 2, IPC_SHARED_MEMORY), MPMC_OK, 0);
+    if (guarded_context != NULL) {
+        test_shared_memory_flow(guarded_context);
         ipc_destroy(guarded_context);
         guarded_context = NULL;
     }
