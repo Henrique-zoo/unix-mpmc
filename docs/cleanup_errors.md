@@ -11,7 +11,7 @@ como um buffer onde os diagnósticos serão copiados.
 
 | Elemento | Papel |
 |---|---|
-| `shm_cleanup_error_t` | Valores de uma falha: operação, índice lógico 1..p, `shmid` e resultado com `errno` capturado. |
+| `shm_cleanup_error_t` | Valores de uma falha: operação, índice lógico 1..p, `resource_id` e resultado com `errno` capturado. |
 | `shm_cleanup_error_fn` | Assinatura da função que recebe uma falha individual. |
 | `shm_cleanup_reporter_t` | Reúne o endereço dessa função (`on_error`) e o estado do chamador (`user_data`). |
 
@@ -27,14 +27,31 @@ detalhes de cada falha de liberação. São informações complementares:
 
 | Função | Resultado de retorno | Diagnósticos enviados à callback |
 |---|---|---|
-| `shm_backend_create()` | Sucesso ou erro que impediu a inicialização. | Falhas secundárias de `detach` e `remove` durante o rollback. |
-| `shm_backend_worker_close()` | Sucesso ou primeira falha de desassociação. | Todas as falhas de `detach`; os segmentos globais são preservados. |
-| `shm_backend_destroy()` | Sucesso ou primeira falha de liberação. | Todas as falhas de `detach` e `remove`. |
+| `shm_backend_create()` | Sucesso ou erro que impediu a inicialização. | Falhas de desassociação e remoção de conjuntos/segmentos durante o rollback. |
+| `shm_backend_worker_close()` | Sucesso ou primeira falha de desassociação. | Todas as falhas de `detach`; segmentos e conjuntos globais são preservados. |
+| `shm_backend_destroy()` | Sucesso ou primeira falha de liberação. | Todas as falhas de desassociação e remoção de conjuntos/segmentos. |
+
+`operation` determina a classe de `resource_id`:
+
+| Operação | Chamada | Identificador |
+|---|---|---|
+| `SHM_CLEANUP_DETACH` | `shmdt()` | `shmid` do segmento associado ao endereço |
+| `SHM_CLEANUP_REMOVE` | `shmctl(IPC_RMID)` | `shmid` do segmento |
+| `SHM_CLEANUP_SEM_REMOVE` | `semctl(IPC_RMID)` | `semid` do conjunto |
+
+IDs de segmentos e conjuntos são independentes. Zero é válido em ambas as classes.
 
 Por exemplo, se a associação do terceiro segmento falhar e a remoção do primeiro
 segmento também falhar no rollback, `create()` retorna o erro da associação. A
-callback recebe o erro da remoção com `producer_id == 1` e o `shmid` correspondente.
+callback recebe o erro da remoção com `producer_id == 1` e o `shmid` correspondente
+em `resource_id`.
 O erro original de criação não é repetido como um diagnóstico de cleanup.
+
+As categorias traduzidas pelos wrappers são preservadas: por exemplo, um `EINVAL`
+de `shmdt()` aparece como `MPMC_ERR_INVALID_ARG`, com `system_errno=EINVAL`.
+Um `EIDRM` de `shmctl(IPC_RMID)` ou `semctl(IPC_RMID)` aparece como
+`MPMC_ERR_SHUTDOWN`, com a causa original.
+O cleanup não converte essas categorias novamente para `MPMC_ERR_SYS`.
 
 Operações bem-sucedidas não geram chamadas da callback. Um `reporter == NULL` ou
 `reporter->on_error == NULL` desabilita os diagnósticos individuais, mantendo o
@@ -53,6 +70,10 @@ resultado de retorno. Nesse caso, erros secundários do rollback não são guard
   até o fim da chamada. Ela não deve tentar destruir novamente o backend em limpeza.
 
 `destroy()` e `worker_close()` liberam o estado local mesmo quando retornam erro.
+Ambas aceitam backend nulo como operação vazia: retornam `MPMC_OK`, com
+`system_errno=0`, sem liberar recursos nem chamar a callback. Essa verificação
+ocorre nos pontos públicos, antes de consultar o contexto; a auxiliar privada
+de cleanup exige backend não nulo.
 O chamador deve deixar de usar o backend e zerar sua variável. Se alguma operação
 de liberação falhar, os diagnósticos identificam os recursos envolvidos; retornar
 erro não preserva o backend para uma segunda tentativa de destruição.
@@ -112,15 +133,29 @@ int main(void) {
     /* As cópias continuam disponíveis depois da liberação do backend. */
     for (size_t i = 0; i < log.count; ++i) {
         const shm_cleanup_error_t *error = &log.items[i];
-        const char *operation = error->operation == SHM_CLEANUP_DETACH ? "detach" : "remove";
+        const char *operation;
+        switch (error->operation) {
+            case SHM_CLEANUP_DETACH:
+                operation = "detach";
+                break;
+            case SHM_CLEANUP_REMOVE:
+                operation = "remove segmento";
+                break;
+            case SHM_CLEANUP_SEM_REMOVE:
+                operation = "remove conjunto";
+                break;
+            default:
+                operation = "operação desconhecida";
+                break;
+        }
         char text[256];
         (void)mpmc_error_format(error->result, text, sizeof text);
         fprintf(
             stderr,
-            "%s, estrutura %zu, shmid %d: %s\n",
+            "%s, estrutura %zu, recurso %d: %s\n",
             operation,
             error->producer_id,
-            error->shmid,
+            error->resource_id,
             text
         );
     }
