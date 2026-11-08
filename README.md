@@ -8,7 +8,9 @@
 
 > [!IMPORTANT]
 > **Estado deste material:** parser, REPL e gerenciamento básico do ciclo de vida do supervisor
-> estão implementados. Os módulos de workers e IPC ainda estão pendentes; por isso, comandos
+> estão implementados. O backend SHM já contém ciclo de vida, semáforos, envio, recebimento
+> e contagens sincronizadas. O núcleo produtor e o roteamento striped também existem;
+> consumidor, ACKs SHM e integração com o supervisor continuam pendentes. Os comandos
 > `produz` e `consome` são despachados para filhos, mas esses filhos informam que a execução do
 > trabalho ainda não está disponível. Os exemplos de produção/consumo abaixo descrevem a interface
 > prevista, não uma funcionalidade já completa.
@@ -227,6 +229,7 @@ unix-mpmc/
 │       ├── msg.c
 │       └── shm_backend/      # Implementação e detalhes privados deste backend
 │           ├── lifecycle.c  # Criação, inicialização e liberação dos recursos
+│           ├── operations.c # Envio, recebimento e contagens sob semáforos
 │           ├── shm_backend_internal.h # Tipos privados do contexto e dos segmentos
 │           ├── shm_ring.h   # Layout e contratos privados do buffer circular
 │           └── shm_ring.c   # Operações locais do buffer; sincronização no backend
@@ -318,9 +321,12 @@ Semáforos típicos por estrutura:
 - `empty = capacity`: quantidade de vagas disponíveis;
 - `full = 0`: quantidade de entradas disponíveis.
 
-Fluxo simplificado de produção: `P(empty) → P(mutex) → inserir → V(mutex) → V(full)`.
-Fluxo simplificado de consumo: `P(full) → P(mutex) → retirar → atualizar contagem
-→ V(mutex) → V(empty)`; a confirmação ao produtor é emitida conforme o protocolo do backend.
+Em `operations.c`, produção usa `[P(empty), P(mutex)] → inserir → [V(mutex), V(full)]`.
+Consumo usa `[P(full), P(mutex)] → retirar e contar → [V(mutex), V(empty)]`.
+Cada par entre colchetes é um vetor atômico de `semop()`; a alteração do buffer
+fica entre duas chamadas e não é desfeita se a publicação final falhar.
+A recepção com `blocking=false` não espera itens futuros, mas ainda pode aguardar
+o mutex. A confirmação ao produtor permanece pendente no backend SHM.
 **Nenhuma operação bloqueante deve manter `mutex` adquirido.** Tratamento de erros deve
 preservar os invariantes ao cancelar operações parcialmente iniciadas.
 
@@ -415,8 +421,11 @@ make test
 
 O alvo `test` executa os testes unitários, os *smoke tests* de inicialização e shutdown,
 a integração do REPL por pipes/FIFOs e o teste de redesenho do prompt com pseudo-terminal.
-Esses cenários ainda não comprovam a correção concorrente dos backends IPC: as operações
-de produção, consumo e confirmação por transporte permanecem pendentes de implementação.
+A suíte de dados SHM também cobre FIFO, metadados, contagens, esperas interrompidas
+e dois produtores/consumidores concorrentes com IPC real. Os testes do ciclo de vida
+injetam falhas na criação/inicialização dos conjuntos e na liberação dos recursos.
+A execução dos workers pela aplicação e as confirmações SHM permanecem pendentes
+de integração/implementação; esses cenários ainda não comprovam toda a aplicação.
 
 <a id="documentação-doxygen"></a>
 

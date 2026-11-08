@@ -51,8 +51,12 @@ mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message
         : shm_backend_send(context->shared_backend, producer_id, message);
 }
 
-mpmc_result_t
-ipc_receive(ipc_context_t *context, size_t producer_id, message_t *out, bool blocking) {
+mpmc_result_t ipc_receive(
+    ipc_context_t *context,
+    size_t producer_id,
+    message_t *out,
+    bool blocking
+) {
     if (context == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     return context->mode == IPC_MESSAGE_QUEUE
         ? msg_backend_receive(context->message_backend, producer_id, out, blocking)

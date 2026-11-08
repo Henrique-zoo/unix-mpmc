@@ -2,6 +2,8 @@
  * @file msg.h
  * @brief Wrappers mínimos sobre filas de mensagens System V.
  * @ingroup sysv_primitives
+ * @details Identificadores, tipos e limites de fila são validados pelo kernel.
+ * O wrapper verifica apenas os argumentos usados por suas cópias/alocações em C.
  */
 #ifndef MPMC_IPC_MSG_H
 #define MPMC_IPC_MSG_H
@@ -35,9 +37,13 @@ mpmc_result_t sysv_msg_create(int *out_msqid);
  * @param nowait Se true, passa IPC_NOWAIT a msgsnd().
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: corpo inserido na fila com o tipo solicitado; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: payload nulo com size positivo ou tamanho do envelope
+ *   não representável em size_t, com system_errno zero; ou msgsnd() retornou
+ *   EINVAL/EFAULT, preservado em system_errno, por argumento rejeitado pelo kernel.
  * - MPMC_ERR_WOULD_BLOCK: fila sem capacidade e nowait=true; system_errno contém EAGAIN
  *   retornado por msgsnd().
  * - MPMC_ERR_INTERRUPTED: msgsnd() interrompida por sinal; system_errno contém EINTR.
+ * - MPMC_ERR_SHUTDOWN: fila removida durante msgsnd(); system_errno contém EIDRM.
  * - MPMC_ERR_SYS: falha em malloc() ao alocar o envelope ou em msgsnd() por outra causa;
  *   system_errno contém o errno capturado na operação que falhou.
  * @details Wrapper monta internamente o envelope `{long mtype; unsigned char[]}`
@@ -59,9 +65,13 @@ mpmc_result_t sysv_msg_send(int msqid, long type, const void *payload, size_t si
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: mensagem retirada e corpo copiado; out_size recebe os bytes do corpo e system_errno
  *   é zero.
+ * - MPMC_ERR_INVALID_ARG: out_size nulo, out_payload nulo com capacity positiva ou
+ *   tamanho do envelope não representável em size_t, com system_errno zero;
+ *   ou msgrcv() retornou EINVAL/EFAULT, preservado em system_errno.
  * - MPMC_ERR_WOULD_BLOCK: nenhuma mensagem compatível com desired_type e nowait=true;
  *   system_errno contém ENOMSG retornado por msgrcv().
  * - MPMC_ERR_INTERRUPTED: msgrcv() interrompida por sinal; system_errno contém EINTR.
+ * - MPMC_ERR_SHUTDOWN: fila removida durante msgrcv(); system_errno contém EIDRM.
  * - MPMC_ERR_SYS: falha em malloc() ao alocar o envelope ou em msgrcv() por outra causa,
  *   inclusive E2BIG quando o corpo excede capacity; system_errno contém o errno capturado na
  *   operação que falhou.
@@ -73,7 +83,12 @@ mpmc_result_t sysv_msg_send(int msqid, long type, const void *payload, size_t si
  * @post Em falha, out_size e o buffer de saída permanecem inalterados.
  */
 mpmc_result_t sysv_msg_receive(
-    int msqid, long desired_type, void *out_payload, size_t capacity, bool nowait, ssize_t *out_size
+    int msqid,
+    long desired_type,
+    void *out_payload,
+    size_t capacity,
+    bool nowait,
+    ssize_t *out_size
 );
 
 /**
@@ -87,9 +102,13 @@ mpmc_result_t sysv_msg_receive(
  * @param[out] out_type Recebe o mtype positivo em sucesso; NULL descarta essa informação.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: mensagem retirada e saídas preenchidas; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: out_size nulo, out_payload nulo com capacity positiva ou
+ *   tamanho do envelope não representável em size_t, com system_errno zero;
+ *   ou msgrcv() retornou EINVAL/EFAULT, preservado em system_errno.
  * - MPMC_ERR_WOULD_BLOCK: msgrcv() retornou ENOMSG com nowait=true;
  *   system_errno preserva ENOMSG.
  * - MPMC_ERR_INTERRUPTED: msgrcv() interrompida por sinal; system_errno preserva EINTR.
+ * - MPMC_ERR_SHUTDOWN: fila removida durante msgrcv(); system_errno preserva EIDRM.
  * - MPMC_ERR_SYS: falha em malloc() ou outra falha em msgrcv(), inclusive E2BIG
  *   se o corpo exceder capacity; system_errno contém o errno capturado na falha.
  * @pre out_size aponta para um ssize_t válido e out_type, se não nulo, para um long válido.
@@ -113,7 +132,11 @@ mpmc_result_t sysv_msg_receive_typed(
  * @param msqid ID da fila System V.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: fila removida com IPC_RMID; system_errno é zero.
- * - MPMC_ERR_SYS: falha em msgctl(IPC_RMID); system_errno contém o errno capturado nessa falha.
+ * - MPMC_ERR_INVALID_ARG: msgctl(IPC_RMID) retornou EINVAL por identificador inválido;
+ *   system_errno preserva EINVAL.
+ * - MPMC_ERR_SHUTDOWN: msgctl(IPC_RMID) retornou EIDRM por fila removida;
+ *   system_errno preserva EIDRM.
+ * - MPMC_ERR_SYS: outra falha em msgctl(IPC_RMID); system_errno contém o errno capturado.
  * @warning Não remover em um worker: outros processos podem depender da fila.
  */
 mpmc_result_t sysv_msg_remove(int msqid);

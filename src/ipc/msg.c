@@ -14,6 +14,7 @@
 
 #include <errno.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ipc.h>
@@ -27,17 +28,8 @@ typedef struct {
 
 static_assert(offsetof(msg_envelope_t, mtext) == sizeof(long), "mtext deve seguir mtype");
 
-/**
- * @brief Aloca espaço contíguo para o tipo System V e o corpo binário.
- * @param body_size Quantidade de bytes reservados para o corpo.
- * @return Envelope alocado por malloc(), ou NULL se a alocação falhar.
- * @pre body_size deve permitir a soma com offsetof(msg_envelope_t, mtext) sem overflow.
- * @note O conteúdo não é inicializado; o chamador preenche o tipo e o corpo e libera
- * o envelope com free(). Em falha, errno é o informado por malloc().
- */
-static msg_envelope_t *envelope_alloc(size_t body_size) {
-    return malloc(offsetof(msg_envelope_t, mtext) + body_size);
-}
+static msg_envelope_t *envelope_alloc(size_t body_size);
+static mpmc_result_t msg_error_result(int error);
 
 mpmc_result_t sysv_msg_create(int *out_msqid) {
     if (out_msqid == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
@@ -55,6 +47,10 @@ mpmc_result_t sysv_msg_create(int *out_msqid) {
 }
 
 mpmc_result_t sysv_msg_send(int msqid, long type, const void *payload, size_t size, bool nowait) {
+    if ((size > 0 && payload == NULL) || size > SIZE_MAX - offsetof(msg_envelope_t, mtext)) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    }
+
     msg_envelope_t *envelope = envelope_alloc(size);
     if (envelope == NULL) {
         return (mpmc_result_t){
@@ -75,26 +71,16 @@ mpmc_result_t sysv_msg_send(int msqid, long type, const void *payload, size_t si
 
     if (rc == 0) return (mpmc_result_t){.status = MPMC_OK};
 
-    if (err == EINTR) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_INTERRUPTED,
-            .system_errno = err,
-        };
-    }
-    if (nowait && err == EAGAIN) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_WOULD_BLOCK,
-            .system_errno = err,
-        };
-    }
-    return (mpmc_result_t){
-        .status = MPMC_ERR_SYS,
-        .system_errno = err,
-    };
+    return msg_error_result(err);
 }
 
 mpmc_result_t sysv_msg_receive(
-    int msqid, long desired_type, void *out_payload, size_t capacity, bool nowait, ssize_t *out_size
+    int msqid,
+    long desired_type,
+    void *out_payload,
+    size_t capacity,
+    bool nowait,
+    ssize_t *out_size
 ) {
     return sysv_msg_receive_typed(
         msqid, desired_type, out_payload, capacity, nowait, out_size, NULL
@@ -110,6 +96,11 @@ mpmc_result_t sysv_msg_receive_typed(
     ssize_t *out_size,
     long *out_type
 ) {
+    if (out_size == NULL || (capacity > 0 && out_payload == NULL)
+        || capacity > SIZE_MAX - offsetof(msg_envelope_t, mtext)) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    }
+
     msg_envelope_t *envelope = envelope_alloc(capacity);
     if (envelope == NULL) {
         return (mpmc_result_t){
@@ -136,31 +127,63 @@ mpmc_result_t sysv_msg_receive_typed(
     }
 
     free(envelope);
-    if (err == EINTR) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_INTERRUPTED,
-            .system_errno = err,
-        };
-    }
-    if (nowait && err == ENOMSG) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_WOULD_BLOCK,
-            .system_errno = err,
-        };
-    }
-    return (mpmc_result_t){
-        .status = MPMC_ERR_SYS,
-        .system_errno = err,
-    };
+    return msg_error_result(err);
 }
 
 mpmc_result_t sysv_msg_remove(int msqid) {
-    if (msgctl(msqid, IPC_RMID, NULL) == -1) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
-    }
+    if (msgctl(msqid, IPC_RMID, NULL) == -1) return msg_error_result(errno);
 
     return (mpmc_result_t){.status = MPMC_OK};
+}
+
+/**
+ * @brief Aloca espaço contíguo para o tipo System V e o corpo binário.
+ * @param body_size Quantidade de bytes reservados para o corpo.
+ * @return Envelope alocado por malloc(), ou NULL se a alocação falhar.
+ * @pre body_size deve permitir a soma com offsetof(msg_envelope_t, mtext) sem overflow.
+ * @note O conteúdo não é inicializado; o chamador preenche o tipo e o corpo e libera
+ * o envelope com free(). Em falha, errno é o informado por malloc().
+ */
+static msg_envelope_t *envelope_alloc(size_t body_size) {
+    return malloc(offsetof(msg_envelope_t, mtext) + body_size);
+}
+
+/**
+ * @brief Traduz uma falha de operação de fila depois da liberação do envelope.
+ * @param error errno capturado antes de qualquer chamada de limpeza.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_ERR_INVALID_ARG: error igual a EINVAL ou EFAULT.
+ * - MPMC_ERR_WOULD_BLOCK: error igual a EAGAIN ou ENOMSG.
+ * - MPMC_ERR_INTERRUPTED: error igual a EINTR.
+ * - MPMC_ERR_SHUTDOWN: error igual a EIDRM.
+ * - MPMC_ERR_SYS: outra causa de sistema, inclusive E2BIG.
+ * Em todos os resultados, system_errno recebe error.
+ */
+static mpmc_result_t msg_error_result(int error) {
+    mpmc_status_t status;
+
+    switch (error) {
+        case EINVAL:
+        case EFAULT:
+            status = MPMC_ERR_INVALID_ARG;
+            break;
+        case EAGAIN:
+        case ENOMSG:
+            status = MPMC_ERR_WOULD_BLOCK;
+            break;
+        case EINTR:
+            status = MPMC_ERR_INTERRUPTED;
+            break;
+        case EIDRM:
+            status = MPMC_ERR_SHUTDOWN;
+            break;
+        default:
+            status = MPMC_ERR_SYS;
+            break;
+    }
+
+    return (mpmc_result_t){
+        .status = status,
+        .system_errno = error,
+    };
 }

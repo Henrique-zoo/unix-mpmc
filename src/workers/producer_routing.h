@@ -37,7 +37,10 @@
  * @note Função pura e reentrante: sem estado, sem efeitos colaterais e sem
  * chamadas de sistema. Não altera nem reinicia a sequência do produtor.
  */
-mpmc_status_t
-producer_route_destination(size_t ordinal, size_t producer_count, size_t *out_destination);
+mpmc_status_t producer_route_destination(
+    size_t ordinal,
+    size_t producer_count,
+    size_t *out_destination
+);
 
 #endif

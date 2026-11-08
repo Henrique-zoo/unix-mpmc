@@ -165,7 +165,7 @@ Regras comuns aos dois backends:
 
 ### Backend 1: memória compartilhada e semáforos
 
-**Recursos criados pelo supervisor em `ipc_init()`:**
+**Recursos do backend, solicitado pelo supervisor em `ipc_init()`:**
 
 | Recurso | Quantidade | Conteúdo |
 |---|---:|---|
@@ -173,6 +173,10 @@ Regras comuns aos dois backends:
 | Conjunto de semáforos `M_i` | `p` | 3 semáforos da estrutura `i` |
 | Segmento de controle `C` | 1 | Tabela de operações com ACK pendente |
 | Conjunto de semáforos `K` | 1 | `1 + 64` semáforos de ACK |
+
+`lifecycle.c` já cria e inicializa `S_i` e `M_i`. O segmento `C` e o conjunto `K`
+pertencem ao desenho de ACK ainda pendente; `ack_begin`, `ack_wait` e `ack_end`
+continuam retornando `MPMC_ERR_STATE`.
 
 **Layout de `S_i` (2048 bytes):**
 
@@ -231,36 +235,58 @@ na 64ª, e isso é o comportamento previsto (backpressure), não um erro.
 
 **Envio (`shm_backend_send`):**
 
-1. `P(empty)` bloqueante. Se interrompido, nada foi reservado e retorna `MPMC_ERR_INTERRUPTED`.
-2. Bloqueia `SIGTERM` e `SIGINT` com `sigprocmask()`.
-3. `P(mutex)`; grava a entrada em `tail`; `tail = (tail + 1) % capacity`; `count++`; `V(mutex)`.
-4. `V(full)`; restaura a máscara de sinais (um término pendente é entregue agora).
+1. Executa `[P(empty), P(mutex)]` em uma única `semop()` bloqueante.
+2. Sob exclusão mútua, insere a cópia integral da mensagem em `tail`, avança o índice
+   circularmente e incrementa `count`, usando `shm_ring_push()`.
+3. Executa `[V(mutex), V(full)]` em outra `semop()` para publicar a mensagem.
 
-Se a obtenção de `mutex` falhar depois de `P(empty)`, o backend executa `V(empty)` para
-devolver a vaga antes de retornar o erro. Nenhuma espera bloqueante ocorre com `mutex`
-adquirido, e `SEM_UNDO` não é usado.
+A aquisição é atômica: o kernel não mantém uma reserva de `empty` quando não consegue
+concluir o vetor, inclusive enquanto aguarda `mutex`. Não é necessária uma compensação
+separada de `empty` nesse caminho. A publicação também é atômica individualmente.
+`SEM_UNDO` não é usado; o envio não aguarda consumo nem registra ACK nesta etapa.
 
 **Recebimento (`shm_backend_receive`):**
 
-1. `P(full)` (com `IPC_NOWAIT` se `blocking=false`; `EAGAIN` vira `MPMC_ERR_WOULD_BLOCK`).
-2. Bloqueia `SIGTERM` e `SIGINT`.
-3. `P(mutex)`; copia a entrada de `head`; `head = (head + 1) % capacity`; `count--`;
-   `consumed_total++`; `V(mutex)`. Remoção e contagem são uma única seção crítica,
-   então não existe mensagem retirada e não contada.
-4. `V(empty)`; consulta a tabela de operações e confirma o consumo se encontrar o
-   `operation_id`, conforme o protocolo de ACK abaixo; restaura a máscara.
+1. Executa `[P(full), P(mutex)]` em uma única `semop()`. Apenas a operação em `full`
+   recebe `IPC_NOWAIT` se `blocking=false`; falta de item retorna
+   `MPMC_ERR_WOULD_BLOCK` com `system_errno=EAGAIN`. O mutex continua podendo exigir espera.
+2. Sob exclusão mútua, copia a entrada de `head` para a saída, avança o índice,
+   decrementa `count` e incrementa `consumed_total`, usando `shm_ring_pop()`.
+3. Executa `[V(mutex), V(empty)]` em outra `semop()` para publicar a vaga.
+   A implementação atual ainda não consulta o registro de ACK nem confirma o consumo.
 
-**Limite da proteção contra sinais.** O mascaramento acima protege somente o
-intervalo posterior a sigprocmask(): ele não torna atômicos o retorno de P e o
-bloqueio dos sinais. Um término nessa janela pode deixar uma reserva pendente.
+**Falhas e sinais.** Se o vetor de aquisição falhar, nenhuma reserva parcial
+permanece e a operação não altera o buffer. Rejeições locais de argumentos
+(`system_errno == 0`), `MPMC_ERR_WOULD_BLOCK` na recepção vazia e
+`MPMC_ERR_INTERRUPTED` na aquisição não invalidam o contexto por si mesmas.
 
-No shutdown global, todos os filhos são encerrados e recolhidos antes da remoção
-dos recursos, e essas reservas são descartadas junto com o contexto. Cancelar
-somente um trabalho e continuar usando o contexto exige outro protocolo de
-cancelamento, a definir nas issues #10 e #20. Simplesmente bloquear os sinais
-antes de um semop() bloqueante pode impedir que SIGTERM cancele a espera.
+As demais falhas de `semop()` são **fatais ao contexto inteiro**, inclusive
+argumentos rejeitados pelo kernel, perda de permissão e remoção do conjunto. Se o
+vetor final falhar, a inserção ou retirada já ocorreu e não é desfeita; no
+recebimento, a saída e a contagem também já foram alteradas. O vetor final falha
+atomicamente, portanto pode deixar o mutex adquirido e o item ou a vaga sem
+publicação. Não se deve repetir o envio/recebimento inteiro nem reparar os
+contadores com outros workers ativos. `mpmc_result_t` não identifica a etapa da
+falha; por isso a política de falha fatal também abrange os erros de recursos
+anteriores à alteração do buffer. Ver @ref shm_operation_failures.
 
-**ACK por operação (`ack=1`).** O segmento de controle `C` guarda 64 posições de 8 bytes,
+Cabe ao chamador suspender todas as operações de dados e estatísticas do contexto,
+propagar a falha ao supervisor e encaminhar o encerramento coordenado. Não há
+marca de inutilização, bloqueio automático de novas chamadas ou notificação de
+outros processos pelo backend. A integração dessa reação pertence à #20: cada
+filho fecha somente seu estado local, e o supervisor encerra e recolhe todos os
+filhos antes da remoção dos recursos globais.
+
+A implementação não mascara `SIGTERM`/`SIGINT` entre aquisição e publicação. A
+atomicidade de cada vetor não protege todo esse intervalo contra término de
+processo. No shutdown global, as reservas restantes são descartadas junto com o
+contexto; não é necessário restaurá-las para reutilização. Término de um worker
+nesse intervalo também exige descartar o contexto. Cancelamento isolado com
+preservação do contexto exigiria outro protocolo e está fora do contrato da #10.
+Simplesmente bloquear os sinais antes de um `semop()` bloqueante pode impedir que
+SIGTERM cancele a espera.
+
+**ACK por operação (`ack=1`, contrato previsto).** O segmento `C` deverá guardar 64 posições de 8 bytes,
 cada uma com um `operation_id` (0 = livre). O conjunto `K` tem o semáforo 0 como
 `ack_mutex` (inicial 1) e, nos índices 1 a 64, um contador de ACKs por posição (inicial 0).
 Como os consumidores são criados antes de o produtor existir, este é o único ponto de
@@ -273,7 +299,7 @@ encontro que ambos já herdaram por `fork()`.
 | `ack_wait(op)` | Produtor | `semop(contador, −n)`: bloqueia até o contador valer pelo menos `n` e subtrai `n` de uma vez |
 | `ack_end(op)` | Produtor | `P(ack_mutex)`; grava 0 na posição; `V(ack_mutex)`. Chamado em sucesso, falha ou cancelamento |
 
-Propriedades que esse desenho garante:
+Propriedades exigidas para a implementação desse desenho:
 
 - ACKs que chegam antes de `ack_wait` não se perdem, porque ficam acumulados no contador.
 - Um ACK nunca é creditado a outra operação: a busca é pelo `operation_id` da mensagem e
@@ -289,7 +315,10 @@ Propriedades que esse desenho garante:
   (32767 no Linux) comporta os 1024 ACKs do maior trabalho.
 
 **Estatísticas.** `shm_backend_consumed_count()` lê `consumed_total` sob `mutex`.
-`ipc_poll_events()` não faz nada neste modo.
+Só preenche a saída após liberar o mutex com sucesso. O total contabiliza retiradas
+executadas, inclusive se a publicação posterior da vaga falhar. Falha na liberação
+do mutex é fatal ao contexto mesmo preservando a saída. Após uma falha fatal, não
+se deve tentar ler os totais desse contexto. `ipc_poll_events()` não faz nada neste modo.
 
 ### Backend 2: filas de mensagens System V
 
@@ -397,9 +426,13 @@ do trabalho. Os retornos por função estão em `transport.h`.
 
 - Esperas bloqueantes (`semop`, `msgsnd`, `msgrcv`, `nanosleep`) não repetem `EINTR`
   por conta própria; devolvem `MPMC_ERR_INTERRUPTED`, e o worker decide encerrar.
-- No modo 1, as seções críticas que contêm retirada e contagem rodam com `SIGTERM` e
-  `SIGINT` bloqueados; um término recebido nesse intervalo é entregue ao final, sem
-  deixar a estrutura em estado parcial.
+- No modo 1, os vetores de aquisição/publicação são atômicos individualmente, mas
+  SIGTERM/SIGINT não são mascarados no intervalo entre eles. Término de processo
+  nesse intervalo exige descartar o contexto por encerramento coordenado; não há
+  garantia de cancelamento isolado com preservação do contexto na #10.
+- Falhas fatais de IPC exigem interromper o uso de dados e estatísticas do contexto.
+  Sua comunicação ao supervisor e o encaminhamento do shutdown são integração da #20;
+  a propagação do erro pelo backend não executa esse encerramento automaticamente.
 - O supervisor remove os recursos (`IPC_RMID`) somente depois de recolher todos os filhos.
 
 ## Semáforos e invariantes da memória compartilhada
@@ -420,10 +453,13 @@ Semáforos de cada estrutura (índices e valores iniciais em @ref ipc_wire_forma
 não finalizadas durante transições; não é correto comparar ingenuamente `semval(empty)`
 com `capacity - count` a qualquer instante sem considerar operações em voo.
 
-Sequências normais: produtor `P(empty)`, `P(mutex)`, grava/avança, `V(mutex)`, `V(full)`;
-consumidor `P(full)`, `P(mutex)`, lê/avança, `V(mutex)`, `V(empty)`.
+Sequências normais: produtor `[P(empty), P(mutex)]`, grava/avança,
+`[V(mutex), V(full)]`; consumidor `[P(full), P(mutex)]`, lê/avança,
+`[V(mutex), V(empty)]`. Cada par entre colchetes é um único vetor atômico de `semop()`.
 Operações com possibilidade de bloqueio devem ocorrer **fora da seção crítica**.
-Ao tratar interrupções e falhas, não deixar vagas/itens reservados sem compensação.
+A aquisição interrompida ou rejeitada não deixa vagas/itens parcialmente reservados.
+Uma falha fatal após aquisição ou término de processo nesse intervalo exige
+descartar o contexto; não há garantia de compensação para reutilizá-lo.
 
 A contagem total de mensagens consumidas deve ser persistida em memória visível aos
 processos, atualizada atomicamente/sob exclusão mútua.

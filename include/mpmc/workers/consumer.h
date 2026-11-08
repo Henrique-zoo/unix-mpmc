@@ -75,8 +75,11 @@ typedef struct {
  * nem ipc_destroy(); o ponto de entrada do filho chama ipc_worker_close() uma única vez,
  * qualquer que seja o resultado, e então encerra o processo.
  */
-mpmc_result_t
-consumer_run(ipc_context_t *transport, const consumer_job_t *job, consumer_result_t *out);
+mpmc_result_t consumer_run(
+    ipc_context_t *transport,
+    const consumer_job_t *job,
+    consumer_result_t *out
+);
 
 /** @} */
 #endif

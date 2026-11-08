@@ -503,7 +503,10 @@ static uint64_t elapsed_ns(const struct timespec *start, const struct timespec *
  * falhar, vale zero.
  */
 static mpmc_result_t record_report(
-    supervisor_t *supervisor, const child_record_t *finished, child_end_t end, int value
+    supervisor_t *supervisor,
+    const child_record_t *finished,
+    child_end_t end,
+    int value
 ) {
     if (supervisor->report_count >= supervisor->report_capacity) {
         return (mpmc_result_t){.status = MPMC_ERR_SYS};
@@ -802,8 +805,11 @@ size_t supervisor_report_count(const supervisor_t *supervisor) {
 }
 
 /** @details Copia o relatório; a ordem é a de recolhimento. */
-mpmc_result_t
-supervisor_report_get(const supervisor_t *supervisor, size_t index, child_report_t *out) {
+mpmc_result_t supervisor_report_get(
+    const supervisor_t *supervisor,
+    size_t index,
+    child_report_t *out
+) {
     if (supervisor == NULL || out == NULL || index >= supervisor->report_count) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }

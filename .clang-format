@@ -75,3 +75,6 @@ AlignOperands: DontAlign
 
 # Operadores binários
 BreakBeforeBinaryOperators: NonAssignment
+
+AllowAllParametersOfDeclarationOnNextLine: false
+PenaltyReturnTypeOnItsOwnLine: 1000000

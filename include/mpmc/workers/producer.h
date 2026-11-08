@@ -57,8 +57,11 @@ typedef struct {
  * @note Retorna diretamente mpmc_status_t. No resultado MPMC_ERR_SYS,
  * clock_gettime() deixou a causa em errno; este retorno não transporta system_errno.
  */
-mpmc_status_t
-producer_message_next(message_t *out, producer_sequence_t *sequence, const producer_job_t *job);
+mpmc_status_t producer_message_next(
+    message_t *out,
+    producer_sequence_t *sequence,
+    const producer_job_t *job
+);
 
 /**
  * @brief Produz as mensagens de um trabalho a partir do processo filho.

@@ -34,8 +34,13 @@ typedef struct {
     uint64_t operation_id;
 } ack_event_t;
 
-static mpmc_result_t
-msg_backend_send_retry(int msqid, long type, const void *payload, size_t size, bool nowait) {
+static mpmc_result_t msg_backend_send_retry(
+    int msqid,
+    long type,
+    const void *payload,
+    size_t size,
+    bool nowait
+) {
     for (;;) {
         mpmc_result_t result = sysv_msg_send(msqid, type, payload, size, nowait);
         if (result.status != MPMC_ERR_INTERRUPTED) {
@@ -119,8 +124,11 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
-mpmc_result_t
-msg_backend_send(msg_backend_t *backend, size_t producer_id, const message_t *message) {
+mpmc_result_t msg_backend_send(
+    msg_backend_t *backend,
+    size_t producer_id,
+    const message_t *message
+) {
     if (backend == NULL || message == NULL || producer_id == 0u
         || producer_id > backend->producer_count) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
@@ -137,8 +145,12 @@ msg_backend_send(msg_backend_t *backend, size_t producer_id, const message_t *me
     );
 }
 
-mpmc_result_t
-msg_backend_receive(msg_backend_t *backend, size_t producer_id, message_t *out, bool blocking) {
+mpmc_result_t msg_backend_receive(
+    msg_backend_t *backend,
+    size_t producer_id,
+    message_t *out,
+    bool blocking
+) {
     if (backend == NULL || out == NULL || producer_id == 0u
         || producer_id > backend->producer_count) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
@@ -176,8 +188,11 @@ msg_backend_receive(msg_backend_t *backend, size_t producer_id, message_t *out, 
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
-mpmc_result_t
-msg_backend_ack_begin(msg_backend_t *backend, uint64_t operation_id, unsigned expected) {
+mpmc_result_t msg_backend_ack_begin(
+    msg_backend_t *backend,
+    uint64_t operation_id,
+    unsigned expected
+) {
     if (backend == NULL || operation_id == 0u || expected == 0u || expected > 1024u) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
@@ -280,8 +295,11 @@ mpmc_result_t msg_backend_poll_events(msg_backend_t *backend) {
     }
 }
 
-mpmc_result_t
-msg_backend_consumed_count(msg_backend_t *backend, size_t producer_id, uint64_t *out_count) {
+mpmc_result_t msg_backend_consumed_count(
+    msg_backend_t *backend,
+    size_t producer_id,
+    uint64_t *out_count
+) {
     if (backend == NULL || out_count == NULL || producer_id == 0u
         || producer_id > backend->producer_count) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
