@@ -96,6 +96,20 @@ mpmc_result_t sysv_msg_send(int msqid, long type, const void *payload, size_t si
 mpmc_result_t sysv_msg_receive(
     int msqid, long desired_type, void *out_payload, size_t capacity, bool nowait, ssize_t *out_size
 ) {
+    return sysv_msg_receive_typed(
+        msqid, desired_type, out_payload, capacity, nowait, out_size, NULL
+    );
+}
+
+mpmc_result_t sysv_msg_receive_typed(
+    int msqid,
+    long desired_type,
+    void *out_payload,
+    size_t capacity,
+    bool nowait,
+    ssize_t *out_size,
+    long *out_type
+) {
     msg_envelope_t *envelope = envelope_alloc(capacity);
     if (envelope == NULL) {
         return (mpmc_result_t){
@@ -109,11 +123,15 @@ mpmc_result_t sysv_msg_receive(
     int err = errno;
 
     if (received >= 0) {
+        long received_type = envelope->mtype;
         if (received > 0) {
             memcpy(out_payload, envelope->mtext, (size_t)received);
         }
         free(envelope);
         *out_size = received;
+        if (out_type != NULL) {
+            *out_type = received_type;
+        }
         return (mpmc_result_t){.status = MPMC_OK};
     }
 

@@ -77,6 +77,38 @@ mpmc_result_t sysv_msg_receive(
 );
 
 /**
+ * @brief Recebe o corpo e informa o tipo da mensagem retirada da fila.
+ * @param msqid Identificador da fila.
+ * @param desired_type Seleção de msgrcv(); zero recebe a primeira mensagem FIFO.
+ * @param out_payload Destino do corpo, com capacidade capacity.
+ * @param capacity Máximo de bytes que cabem no destino; não inclui long mtype.
+ * @param nowait Se true, usa IPC_NOWAIT para não esperar mensagem.
+ * @param[out] out_size Recebe a quantidade de bytes copiados em sucesso.
+ * @param[out] out_type Recebe o mtype positivo em sucesso; NULL descarta essa informação.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: mensagem retirada e saídas preenchidas; system_errno é zero.
+ * - MPMC_ERR_WOULD_BLOCK: msgrcv() retornou ENOMSG com nowait=true;
+ *   system_errno preserva ENOMSG.
+ * - MPMC_ERR_INTERRUPTED: msgrcv() interrompida por sinal; system_errno preserva EINTR.
+ * - MPMC_ERR_SYS: falha em malloc() ou outra falha em msgrcv(), inclusive E2BIG
+ *   se o corpo exceder capacity; system_errno contém o errno capturado na falha.
+ * @pre out_size aponta para um ssize_t válido e out_type, se não nulo, para um long válido.
+ * @pre Se capacity for positiva, out_payload possui capacity bytes disponíveis para escrita.
+ * @pre capacity permite a soma com o cabeçalho long sem overflow de size_t.
+ * @post Em falha, o corpo, out_size e out_type permanecem inalterados.
+ * @note Não usa MSG_NOERROR. sysv_msg_receive() usa esta operação descartando o tipo.
+ */
+mpmc_result_t sysv_msg_receive_typed(
+    int msqid,
+    long desired_type,
+    void *out_payload,
+    size_t capacity,
+    bool nowait,
+    ssize_t *out_size,
+    long *out_type
+);
+
+/**
  * @brief Remove uma fila de mensagens pertencente ao supervisor.
  * @param msqid ID da fila System V.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:

@@ -129,8 +129,15 @@ msg_backend_send(msg_backend_t *backend, size_t producer_id, const message_t *me
         || producer_id > backend->producer_count) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
+    long type = 1;
+    for (size_t index = 0u; index < backend->registration_count; ++index) {
+        if (backend->registrations[index].operation_id == message->operation_id) {
+            type = 2;
+            break;
+        }
+    }
     return sysv_msg_send(
-        backend->data_queues[producer_id - 1u], (long)producer_id, message, sizeof(*message), false
+        backend->data_queues[producer_id - 1u], type, message, sizeof(*message), false
     );
 }
 
@@ -142,8 +149,9 @@ msg_backend_receive(msg_backend_t *backend, size_t producer_id, message_t *out, 
     }
 
     ssize_t received = 0;
-    mpmc_result_t result = sysv_msg_receive(
-        backend->data_queues[producer_id - 1u], 0, out, sizeof(*out), !blocking, &received
+    long type = 0;
+    mpmc_result_t result = sysv_msg_receive_typed(
+        backend->data_queues[producer_id - 1u], 0, out, sizeof(*out), !blocking, &received, &type
     );
     if (result.status != MPMC_OK) {
         return result;
@@ -151,13 +159,16 @@ msg_backend_receive(msg_backend_t *backend, size_t producer_id, message_t *out, 
     if ((size_t)received != sizeof(*out)) {
         return (mpmc_result_t){.status = MPMC_ERR_SYS};
     }
+    if (type != 1 && type != 2) {
+        return (mpmc_result_t){.status = MPMC_ERR_STATE};
+    }
 
     consumption_event_t event = {.producer_id = producer_id, .count = 1u};
     result = msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), false);
     if (result.status != MPMC_OK) {
         return result;
     }
-    if (out->ack_required) {
+    if (type == 2) {
         ack_event_t ack = {.operation_id = out->operation_id};
         result = msg_backend_send_retry(
             backend->ack_queue, (long)out->operation_id, &ack, sizeof(ack), false

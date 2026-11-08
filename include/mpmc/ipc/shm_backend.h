@@ -2,8 +2,9 @@
  * @file shm_backend.h
  * @brief Backend de buffer circular em memória compartilhada com semáforos.
  * @ingroup backends
- * @note Estão implementados a criação, o fechamento local e a destruição dos
- * segmentos. Envio, recebimento, ACKs e contagens abaixo são contratos propostos.
+ * @note Estão implementados a criação e a inicialização dos buffers, o fechamento
+ * local e a destruição dos segmentos. Envio, recebimento, ACKs e contagens abaixo
+ * são contratos propostos.
  */
 #ifndef MPMC_IPC_SHM_BACKEND_H
 #define MPMC_IPC_SHM_BACKEND_H
@@ -95,19 +96,19 @@ typedef struct {
  * @param producer_count Número positivo de estruturas independentes.
  * @param reporter Destino dos diagnósticos de rollback; pode ser NULL.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
- * - MPMC_OK: backend alocado e todos os segmentos criados e associados ao processo;
- *   system_errno é zero.
+ * - MPMC_OK: backend alocado, segmentos criados e associados ao processo, com os
+ *   cabeçalhos dos buffers inicializados; system_errno é zero.
  * - MPMC_ERR_INVALID_ARG: out nulo ou producer_count zero; system_errno é zero.
  * - MPMC_ERR_SYS: falha em malloc(), calloc(), shmget() ou shmat(); system_errno contém
  *   o errno capturado na operação que falhou, preservado durante a limpeza.
- * @post Em sucesso, *out contém o backend com producer_count segmentos associados.
+ * @post Em sucesso, *out contém o backend com producer_count segmentos associados,
+ * cada um com buffer vazio, índices e total consumido zerados e capacidade calculada.
  * Em falha, *out permanece NULL quando out é válido, as alocações locais são liberadas
  * e a limpeza dos segmentos parcialmente criados é tentada.
  * @note Falhas de rollback são comunicadas por reporter e não substituem o erro
  * original de criação ou associação retornado pela função. Sem reporter habilitado,
  * essas falhas secundárias não ficam disponíveis após o retorno.
- * @note A criação de semáforos e a inicialização do layout do buffer circular ainda
- * não estão implementadas nesta função.
+ * @note A criação de semáforos ainda não está implementada nesta função.
  */
 mpmc_result_t shm_backend_create(
     shm_backend_t **out, size_t producer_count, const shm_cleanup_reporter_t *reporter
@@ -117,10 +118,10 @@ mpmc_result_t shm_backend_create(
  * @brief Insere mensagem no buffer circular do índice escolhido.
  * @param backend Instância do backend herdada no processo produtor.
  * @param producer_id Índice válido 1..p.
- * @param message Mensagem lógica, incluindo metadados de ACK.
- * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
- * os valores possíveis de status e system_errno não podem ser verificados.
- * @details Reserva `empty`, adquire `mutex`, escreve e atualiza `tail`,
+ * @param message Mensagem lógica, com o identificador da operação produtora.
+ * @return Estrutura mpmc_result_t com o seguinte estado do campo status:
+ * - MPMC_ERR_STATE: operação ainda não implementada; system_errno é zero.
+ * @details Contrato previsto: reserva `empty`, adquire `mutex`, escreve e atualiza `tail`,
  * solta `mutex` e sinaliza `full`. Não mantém mutex enquanto espera espaço.
  */
 mpmc_result_t
@@ -132,9 +133,9 @@ shm_backend_send(shm_backend_t *backend, size_t producer_id, const message_t *me
  * @param producer_id Índice de origem 1..p.
  * @param out Recebe item em sucesso.
  * @param blocking Habilita/desabilita espera por `full`.
- * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
- * os valores possíveis de status e system_errno não podem ser verificados.
- * @details Reserva `full`, adquire mutex, retira e atualiza `head`,
+ * @return Estrutura mpmc_result_t com o seguinte estado do campo status:
+ * - MPMC_ERR_STATE: operação ainda não implementada; system_errno é zero.
+ * @details Contrato previsto: reserva `full`, adquire mutex, retira e atualiza `head`,
  * contabiliza, solta mutex, sinaliza `empty`, confirma consumo se solicitado.
  * A confirmação não deve depender de mutex do buffer ainda adquirido.
  */
@@ -146,8 +147,8 @@ shm_backend_receive(shm_backend_t *backend, size_t producer_id, message_t *out, 
  * @param backend Backend do filho produtor.
  * @param operation_id ID único de trabalho, gerado pelo supervisor.
  * @param expected Quantidade total de confirmações (1..1024).
- * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
- * os valores possíveis de status e system_errno não podem ser verificados.
+ * @return Estrutura mpmc_result_t com o seguinte estado do campo status:
+ * - MPMC_ERR_STATE: operação ainda não implementada; system_errno é zero.
  * @note Consumidores podem precisar de um identificador de ACK no envelope
  * físico do buffer; a codificação é detalhe privado deste backend.
  */
@@ -158,8 +159,8 @@ shm_backend_ack_begin(shm_backend_t *backend, uint64_t operation_id, unsigned ex
  * @brief Aguarda confirmação de todos os consumos de uma operação.
  * @param backend Backend do filho produtor.
  * @param operation_id Trabalho registrado anteriormente.
- * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
- * os valores possíveis de status e system_errno não podem ser verificados.
+ * @return Estrutura mpmc_result_t com o seguinte estado do campo status:
+ * - MPMC_ERR_STATE: operação ainda não implementada; system_errno é zero.
  * @note O progresso das confirmações deve sobreviver a mudanças de processo
  * e à chegada de ACKs antes da chamada de espera.
  */
@@ -169,8 +170,8 @@ mpmc_result_t shm_backend_ack_wait(shm_backend_t *backend, uint64_t operation_id
  * @brief Remove mecanismo temporário de ACK de um trabalho.
  * @param backend Backend do filho produtor.
  * @param operation_id ID da operação previamente registrada.
- * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
- * os valores possíveis de status e system_errno não podem ser verificados.
+ * @return Estrutura mpmc_result_t com o seguinte estado do campo status:
+ * - MPMC_ERR_STATE: operação ainda não implementada; system_errno é zero.
  */
 mpmc_result_t shm_backend_ack_end(shm_backend_t *backend, uint64_t operation_id);
 
@@ -179,8 +180,11 @@ mpmc_result_t shm_backend_ack_end(shm_backend_t *backend, uint64_t operation_id)
  * @param backend Instância no supervisor.
  * @param producer_id Índice lógico 1..p.
  * @param out_count Destino do acumulador de consumo deste segmento.
- * @return Estrutura mpmc_result_t. A função ainda não possui implementação;
- * os valores possíveis de status e system_errno não podem ser verificados.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: out_count recebe zero provisoriamente; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: backend ou out_count nulo, ou producer_id fora de 1..p;
+ *   system_errno é zero.
+ * @note A consulta sincronizada do contador compartilhado ainda depende da #10.
  */
 mpmc_result_t
 shm_backend_consumed_count(shm_backend_t *backend, size_t producer_id, uint64_t *out_count);

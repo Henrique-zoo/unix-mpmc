@@ -168,12 +168,34 @@
       "-DDEBUG",
       "-c",
       "-o",
-      "build/debug/ipc/shm_backend.o",
-      "src/ipc/shm_backend.c"
+      "build/debug/ipc/shm_backend/lifecycle.o",
+      "src/ipc/shm_backend/lifecycle.c"
     ],
     "directory": "/home/henrique/Projetos/unix-mpmc",
-    "file": "/home/henrique/Projetos/unix-mpmc/src/ipc/shm_backend.c",
-    "output": "/home/henrique/Projetos/unix-mpmc/build/debug/ipc/shm_backend.o"
+    "file": "/home/henrique/Projetos/unix-mpmc/src/ipc/shm_backend/lifecycle.c",
+    "output": "/home/henrique/Projetos/unix-mpmc/build/debug/ipc/shm_backend/lifecycle.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/clang",
+      "-Iinclude",
+      "-D_POSIX_C_SOURCE=200809L",
+      "-std=c23",
+      "-Wall",
+      "-Wextra",
+      "-Wpedantic",
+      "-Wshadow",
+      "-O0",
+      "-g3",
+      "-DDEBUG",
+      "-c",
+      "-o",
+      "build/debug/ipc/shm_backend/shm_ring.o",
+      "src/ipc/shm_backend/shm_ring.c"
+    ],
+    "directory": "/home/henrique/Projetos/unix-mpmc",
+    "file": "/home/henrique/Projetos/unix-mpmc/src/ipc/shm_backend/shm_ring.c",
+    "output": "/home/henrique/Projetos/unix-mpmc/build/debug/ipc/shm_backend/shm_ring.o"
   },
   {
     "arguments": [

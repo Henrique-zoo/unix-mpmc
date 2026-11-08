@@ -1,5 +1,5 @@
 /**
- * @file shm_backend.c
+ * @file lifecycle.c
  * @brief Implementação do ciclo de vida dos segmentos de memória compartilhada.
  * @ingroup backends
  *
@@ -9,33 +9,16 @@
  * @see shm_backend.h para os contratos públicos das funções.
  */
 
-#include "mpmc/ipc/shm_backend.h"
-
 #include <errno.h>
 #include <stddef.h>
 #include <stdlib.h>
 
 #include "mpmc/ipc/shm.h"
+#include "shm_backend_internal.h"
 
 static mpmc_result_t shm_backend_cleanup(
     shm_backend_t *backend, bool remove_global, const shm_cleanup_reporter_t *reporter
 );
-
-/** @brief Identificador global e associação local de um segmento System V. */
-typedef struct {
-    int shmid;     /**< Identificador do segmento; -1 antes da criação. Zero é válido. */
-    void *address; /**< Endereço associado neste processo; NULL antes da associação. */
-} shm_segment_t;
-
-/**
- * @brief Representação privada dos segmentos pertencentes ao backend.
- * @details A estrutura e seu vetor são alocados no heap local do processo;
- * o conteúdo compartilhado está nas regiões System V apontadas por address.
- */
-struct shm_backend {
-    size_t producer_count;   /**< Quantidade de estruturas lógicas e registros em segments. */
-    shm_segment_t *segments; /**< Vetor local com um registro por estrutura lógica. */
-};
 
 /**
  * @details Aloca o estado com malloc() e o vetor de segmentos com calloc().
@@ -43,8 +26,9 @@ struct shm_backend {
  * distinguir entradas ainda não criadas do identificador válido zero.
  *
  * Cada entrada recebe um segmento de 2048 bytes por sysv_shm_create() e uma
- * associação por sysv_shm_attach(). O backend só é publicado em out depois que
- * todas as entradas forem criadas e associadas.
+ * associação por sysv_shm_attach(). Após cada associação, shm_ring_init() inicializa
+ * o cabeçalho no mapeamento. O backend só é publicado em out depois que todas as
+ * entradas forem criadas, associadas e inicializadas.
  *
  * Em falha, delega o rollback a shm_backend_destroy(), que aceita o vetor ainda
  * nulo quando calloc() falha. O resultado original, incluindo system_errno, é
@@ -82,7 +66,7 @@ mpmc_result_t shm_backend_create(
     for (size_t i = 0; i < producer_count; i++) {
         backend->segments[i] = (shm_segment_t){
             .shmid = -1,
-            .address = NULL,
+            .ring = NULL,
         };
     }
 
@@ -93,9 +77,13 @@ mpmc_result_t shm_backend_create(
 
         if (result.status != MPMC_OK) goto cleanup;
 
-        result = sysv_shm_attach(segment->shmid, &segment->address);
+        void *address;
+        result = sysv_shm_attach(segment->shmid, &address);
 
         if (result.status != MPMC_OK) goto cleanup;
+
+        segment->ring = address;
+        shm_ring_init(segment->ring);
     }
 
     *out = backend;
@@ -238,8 +226,8 @@ static mpmc_result_t shm_backend_cleanup(
         for (size_t i = 0; i < backend->producer_count; i++) {
             shm_segment_t *segment = &backend->segments[i];
 
-            if (segment->address != NULL) {
-                mpmc_result_t current = sysv_shm_detach(segment->address);
+            if (segment->ring != NULL) {
+                mpmc_result_t current = sysv_shm_detach(segment->ring);
                 record_cleanup_error(
                     &result, current, reporter, SHM_CLEANUP_DETACH, i + 1, segment->shmid
                 );

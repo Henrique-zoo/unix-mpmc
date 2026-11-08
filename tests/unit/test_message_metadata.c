@@ -11,11 +11,12 @@
 #include "mpmc/workers/producer.h"
 
 /**
- * @brief Verifica PID, sequência, política de ACK e timestamp dos metadados.
+ * @brief Verifica PID, sequência, operação e timestamp dos metadados.
  * @return Zero se todos os cenários passarem; um na primeira inconsistência,
  * após escrever o diagnóstico em stderr.
- * @details Exercita a sequência de um único emissor, rejeição de operation_id
- * nulo sem alterar a saída e captura do timestamp no momento de construir cada mensagem.
+ * @details Exercita a sequência de um único emissor nos dois modos de ACK,
+ * preservando o operation_id também sem espera por confirmação. Verifica rejeição
+ * de operation_id nulo sem alterar a saída e captura do timestamp por mensagem.
  * Não executa envio por transporte nem verifica o fluxo completo de um worker.
  */
 int main(void) {
@@ -31,7 +32,7 @@ int main(void) {
     for (uint32_t index = 0u; index < 3u; ++index) {
         if (producer_message_next(&messages[index], &sequence, &job) != MPMC_OK
             || messages[index].sender_pid != getpid() || messages[index].sequence != index + 1u
-            || messages[index].operation_id != job.operation_id || !messages[index].ack_required
+            || messages[index].operation_id != job.operation_id
             || messages[index].sent_at.tv_sec <= 0 || messages[index].sent_at.tv_nsec < 0
             || messages[index].sent_at.tv_nsec >= 1000000000L) {
             fputs("message metadata test failed\n", stderr);
@@ -41,10 +42,11 @@ int main(void) {
 
     producer_job_t no_ack = job;
     no_ack.ack_mode = PRODUCER_ACK_NONE;
+    no_ack.operation_id = 43u;
     message_t message;
     if (producer_message_next(&message, &sequence, &no_ack) != MPMC_OK || message.sequence != 4u
-        || message.ack_required) {
-        fputs("ack metadata test failed\n", stderr);
+        || message.sender_pid != getpid() || message.operation_id != no_ack.operation_id) {
+        fputs("metadata test failed without ACK wait\n", stderr);
         return 1;
     }
 
