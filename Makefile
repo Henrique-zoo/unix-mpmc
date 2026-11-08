@@ -105,6 +105,10 @@ $(UNIT_DIR)/test_message_metadata: tests/unit/test_message_metadata.c src/worker
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+$(UNIT_DIR)/test_producer: tests/unit/test_producer.c src/workers/producer.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c src/ipc/msg_backend.c src/ipc/msg.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
@@ -116,7 +120,7 @@ $(UNIT_DIR)/test_isolation: tests/unit/test_isolation.c src/app/command.c src/er
 unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
 		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
 		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
-		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation
+		$(UNIT_DIR)/test_producer $(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
 	@$(UNIT_DIR)/test_msg
@@ -126,6 +130,7 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 	@$(UNIT_DIR)/test_shm_backend
 	@$(UNIT_DIR)/test_shm_ring
 	@$(UNIT_DIR)/test_message_metadata
+	@$(UNIT_DIR)/test_producer
 	@$(UNIT_DIR)/test_msg_backend
 	@$(UNIT_DIR)/test_isolation
 
