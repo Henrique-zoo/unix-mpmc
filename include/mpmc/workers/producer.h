@@ -2,6 +2,8 @@
  * @file producer.h
  * @brief Lógica de execução de processos produtores.
  * @ingroup workers
+ * @note producer_message_next() está implementado. producer_run() ainda não possui
+ * implementação: sua documentação é o contrato previsto (pendente: #17).
  */
 #ifndef MPMC_WORKERS_PRODUCER_H
 #define MPMC_WORKERS_PRODUCER_H
@@ -77,8 +79,10 @@ producer_message_next(message_t *out, producer_sequence_t *sequence, const produ
  * executa begin antes dos envios, wait após todos os envios e end em qualquer
  * saída posterior a begin; na opção ack=2, não solicita confirmação.
  * @pre Deve ser chamada em um filho do supervisor, não no processo principal.
- * @post O worker deve liberar recursos locais usando ipc_worker_close() antes
- * de finalizar o processo; o supervisor mantém posse dos recursos globais.
+ * @post O resultado não é entregue por heap: o supervisor o conhece pelo estado de
+ * término do filho (ver transport.h). producer_run() não chama ipc_worker_close() nem
+ * ipc_destroy(); o ponto de entrada do filho chama ipc_worker_close() uma única vez,
+ * qualquer que seja o resultado, e então encerra o processo.
  * @warning Envio pode bloquear por esgotamento de capacidade mesmo com ack=2.
  */
 mpmc_result_t producer_run(ipc_context_t *transport, const producer_job_t *job);

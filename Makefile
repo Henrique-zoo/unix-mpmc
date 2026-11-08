@@ -45,6 +45,7 @@ release:
 # injete falhas de fork() sem depender de LD_PRELOAD (portável entre Linux e macOS).
 UNIT_DIR := $(BUILD_DIR)/unit
 SHM_BACKEND_DIR := src/ipc/shm_backend
+WORKERS_DIR := src/workers
 SHM_RING_OBJECT := $(BUILD_DIR)/ipc/shm_backend/shm_ring.o
 
 $(UNIT_DIR)/supervisor_for_test.o: src/app/supervisor.c
@@ -105,11 +106,18 @@ $(UNIT_DIR)/test_message_metadata: tests/unit/test_message_metadata.c src/worker
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
-$(UNIT_DIR)/test_producer: tests/unit/test_producer.c src/workers/producer.c
+$(UNIT_DIR)/test_producer_routing: tests/unit/test_producer_routing.c \
+		$(WORKERS_DIR)/producer_routing.c $(WORKERS_DIR)/producer.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Dclock_gettime=mpmc_test_clock_gettime $^ $(LDLIBS) -o $@
+	$(CC) $(CPPFLAGS) -I$(WORKERS_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
 
 $(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c src/ipc/msg_backend.c src/ipc/msg.c src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/test_transport_contract: tests/unit/test_transport_contract.c \
+		src/ipc/transport.c src/ipc/msg_backend.c $(SHM_BACKEND_DIR)/lifecycle.c \
+		$(SHM_RING_OBJECT) src/ipc/msg.c src/ipc/shm.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -120,7 +128,8 @@ $(UNIT_DIR)/test_isolation: tests/unit/test_isolation.c src/app/command.c src/er
 unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
 		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
 		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
-		$(UNIT_DIR)/test_producer $(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation
+		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation \
+		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_transport_contract
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
 	@$(UNIT_DIR)/test_msg
@@ -133,6 +142,8 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 	@$(UNIT_DIR)/test_producer
 	@$(UNIT_DIR)/test_msg_backend
 	@$(UNIT_DIR)/test_isolation
+	@$(UNIT_DIR)/test_producer_routing
+	@$(UNIT_DIR)/test_transport_contract
 
 # Teste do REPL com pseudo-terminal (POSIX; não exige -lutil nem ferramentas externas).
 INTEGRATION_DIR := $(BUILD_DIR)/integration

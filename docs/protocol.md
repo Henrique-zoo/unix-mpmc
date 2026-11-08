@@ -119,10 +119,14 @@ Entre uma mensagem e outra, poderá ficar bloqueado. Cada retirada válida aumen
 contagem de `i` e gera confirmação **se o protocolo do backend indicar ACK para a
 operação produtora**, independentemente do modo de espera do comando consumidor.
 
+Uma retirada conta como consumo do trabalho somente quando `ipc_receive` retorna `MPMC_OK`.
+O consumidor não confirma nem conta por conta própria: o backend faz as duas coisas dentro de
+`ipc_receive`, e `message_t` não carrega a solicitação de ACK.
+
 ### `consome i n 2`
 
 O filho executa até `n` tentativas de remoção sem esperar. Se `ipc_receive`
-retornar `MPMC_ERR_WOULD_BLOCK`, finaliza com erro de quantidade insuficiente e
+retornar `MPMC_ERR_WOULD_BLOCK`, finaliza com esse status (quantidade insuficiente) e
 informa quantas mensagens conseguiu remover. As mensagens já consumidas **não**
 são repostas na fila ou buffer.
 
@@ -364,6 +368,15 @@ publicar" atômico. Se um `SIGTERM` terminar o consumidor entre o retorno de `ms
 envio do evento, essa mensagem foi retirada mas não contada. A janela é de poucas
 instruções e só se abre durante o `shutdown` ou numa morte anormal; o relatório de
 consumo por estrutura pode então ficar uma unidade abaixo do real nesse caso.
+
+### Resultado de um trabalho
+
+Um worker devolve `mpmc_result_t`; o primeiro erro do trabalho prevalece sobre falhas de
+liberação, e `ipc_ack_end` roda sempre que `ipc_ack_begin` retornou `MPMC_OK`. O supervisor
+conhece o desfecho pelo estado de término do filho (código zero só em sucesso completo) e
+os totais por estrutura por `ipc_poll_events`/`ipc_consumed_count`. Um erro de
+`ipc_receive` depois da retirada (`MPMC_ERR_STATE`, `MPMC_ERR_SYS`) não conta como consumo
+do trabalho. Os retornos por função estão em `transport.h`.
 
 ### Comparação dos dois backends
 
