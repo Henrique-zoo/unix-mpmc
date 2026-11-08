@@ -121,6 +121,18 @@ $(UNIT_DIR)/test_transport_contract: tests/unit/test_transport_contract.c \
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+# transport.c é compilado com calloc()/free() redirecionados para que test_transport injete
+# falhas de alocação e detecte vazamentos. O teste fornece os backends substitutos; nenhum
+# backend real é ligado a ele.
+$(UNIT_DIR)/transport_for_test.o: src/ipc/transport.c include/mpmc/ipc/transport.h \
+		include/mpmc/ipc/msg_backend.h include/mpmc/ipc/shm_backend.h include/mpmc/message.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Dcalloc=mpmc_test_calloc -Dfree=mpmc_test_free -c $< -o $@
+
+$(UNIT_DIR)/test_transport: tests/unit/test_transport.c $(UNIT_DIR)/transport_for_test.o
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_isolation: tests/unit/test_isolation.c src/app/command.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
@@ -129,7 +141,8 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
 		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
 		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation \
-		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_transport_contract
+		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_transport_contract \
+		$(UNIT_DIR)/test_transport
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
 	@$(UNIT_DIR)/test_msg
@@ -143,6 +156,7 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 	@$(UNIT_DIR)/test_isolation
 	@$(UNIT_DIR)/test_producer_routing
 	@$(UNIT_DIR)/test_transport_contract
+	@$(UNIT_DIR)/test_transport
 
 # Teste do REPL com pseudo-terminal (POSIX; não exige -lutil nem ferramentas externas).
 INTEGRATION_DIR := $(BUILD_DIR)/integration

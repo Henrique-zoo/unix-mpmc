@@ -25,6 +25,7 @@ não é suficiente para provar correção concorrente.
 | U11	| `sem` | Criação, inicialização, operações P/V, IPC_NOWAIT, índice inválido, interrupção por EINTR e remoção de semáforos |
 | U12 | `shm_ring` | Inicialização, capacidade de 63 mensagens, vazio/cheio, FIFO com voltas e mensagens pendentes, contagem acumulada e limites do segmento |
 | U13 | `shm_backend` | Inicialização de todos os cabeçalhos em áreas simuladas alinhadas, previamente preenchidas com bytes não nulos |
+| U14 | `transport` | Fachada com backends substitutos (`test_transport`): despacho de cada operação ao backend do modo, com os argumentos exatos; propagação de `status`/`system_errno` e dos dados de saída; contexto nulo, modo inválido, `p` zero e saída nula; falha de alocação e de criação do backend em `ipc_init()` sem vazar nem destruir o backend; `ipc_worker_close()` sem remover recursos globais e `ipc_destroy()` sem chamar o fechamento do filho |
 
 ## Testes de integração (repetir para modos 1 e 2)
 
@@ -165,6 +166,12 @@ make MODE=debug BUILD_DIR=build/sanitize \
 build/sanitize/unit/test_shm_ring
 build/sanitize/unit/test_shm_backend
 ```
+
+`tests/unit/test_transport.c` (U14) liga `transport.c`, compilado com `calloc()`/`free()`
+redirecionados, a backends substitutos definidos no próprio teste, e a espiões de `msgget()`,
+`msgsnd()`, `msgrcv()`, `shmget()`, `semget()` e `semop()`. Ele prova o despacho e os contratos
+da fachada sem depender de nenhuma primitiva System V funcional; FIFO, ACK e limpeza reais dos
+dois paradigmas continuam nos testes dos backends (`test_transport_contract` e integração).
 
 O alvo `test` também executa `tests/integration/test_repl.c`, que abre um pseudo-terminal
 para verificar o prompt inicial, seu redesenho após o aviso de término de um filho e o
