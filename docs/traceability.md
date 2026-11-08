@@ -17,11 +17,11 @@ a arquitetura proposta e os nomes de teste são escolhas do projeto.
 | Paradigma 1: `shm` + `sem` | `shm_backend`, `shm`, `sem` | I01, I02, I08, I11 |
 | 2048 bytes por segmento compartilhado | `shm_backend`, `shm`, `message` | I01, I11, I17 |
 | Paradigma 2: `msg` | `msg_backend`, `msg` | I01, I02, I08, I11 |
-| Mensagem com PID, sequência e tempo de envio | `message`, `producer` | U08, I02 |
+| Mensagem com PID, sequência e tempo de envio | `message`, `producer` | U08, U15, I02 |
 | Prompt e leitura interativa `>>` | `repl`, `command` | U01, I01 |
 | `produz i n ack` | `command`, `supervisor`, `producer` | U01, I02, I06, I07 |
 | `n_msgs` de 1 a 1024 | `command` | U03, I17 |
-| `produz 0`: distribuição *striped* | `producer`, `transport` | U07, I10 |
+| `produz 0`: distribuição *striped* | `producer`, `transport` | U07, U15, I10 |
 | Produtor `ack=1`: espera consumo total | `producer`, `transport`, `shm_backend`, `msg_backend` | I06, I13, I20 |
 | Produtor `ack=2`: não espera consumo | `producer`, `transport` | I07 |
 | `consome i n ack` | `command`, `supervisor`, `consumer` | U01, I03, I04 |
