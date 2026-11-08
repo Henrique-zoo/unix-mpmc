@@ -105,7 +105,18 @@ $(UNIT_DIR)/test_message_metadata: tests/unit/test_message_metadata.c src/worker
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
-$(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c src/ipc/msg_backend.c src/ipc/msg.c src/error.c
+$(UNIT_DIR)/msg_backend_for_test.o: src/ipc/msg_backend.c \
+		include/mpmc/ipc/msg_backend.h include/mpmc/ipc/msg.h \
+		include/mpmc/message.h include/mpmc/error.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		-Dsysv_msg_create=mpmc_test_msg_create \
+		-Dsysv_msg_remove=mpmc_test_msg_remove \
+		-Dsysv_msg_send=mpmc_test_msg_send \
+		-c $< -o $@
+
+$(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c \
+		$(UNIT_DIR)/msg_backend_for_test.o src/ipc/msg.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
