@@ -60,23 +60,20 @@ static mpmc_result_t msg_backend_remove_created(msg_backend_t *backend) {
 }
 
 mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
-    if (out == NULL || producer_count == 0u) {
-        return (mpmc_result_t){.status = out == NULL ? MPMC_ERR_INVALID_ARG : MPMC_ERR_INVALID_ARG};
+    if (out == NULL) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
     *out = NULL;
-    if (producer_count > SIZE_MAX / sizeof(int) || producer_count > SIZE_MAX / sizeof(uint64_t)) {
-        return (mpmc_result_t){.status = MPMC_ERR_SYS};
+    if (producer_count == 0u || producer_count > SIZE_MAX / sizeof(int)
+        || producer_count > SIZE_MAX / sizeof(uint64_t)) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
     msg_backend_t *backend = calloc(1u, sizeof(*backend));
     if (backend == NULL) {
         return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
     }
-    backend->data_queues = NULL;
-    backend->producer_count = 0u;
-    backend->event_queue = -1;
-    backend->ack_queue = -1;
-    backend->consumed_counts = NULL;
+    *backend = (msg_backend_t){.event_queue = -1, .ack_queue = -1};
 
     backend->data_queues = malloc(producer_count * sizeof(*backend->data_queues));
     backend->consumed_counts = calloc(producer_count, sizeof(*backend->consumed_counts));
@@ -92,9 +89,8 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
     }
     backend->producer_count = producer_count;
 
-    mpmc_result_t result;
     for (size_t index = 0u; index < producer_count; ++index) {
-        result = sysv_msg_create(&backend->data_queues[index]);
+        mpmc_result_t result = sysv_msg_create(&backend->data_queues[index]);
         if (result.status != MPMC_OK) {
             msg_backend_remove_created(backend);
             free(backend->consumed_counts);
@@ -103,7 +99,7 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
             return result;
         }
     }
-    result = sysv_msg_create(&backend->event_queue);
+    mpmc_result_t result = sysv_msg_create(&backend->event_queue);
     if (result.status != MPMC_OK) {
         msg_backend_remove_created(backend);
         free(backend->consumed_counts);
@@ -157,7 +153,7 @@ msg_backend_receive(msg_backend_t *backend, size_t producer_id, message_t *out, 
         return result;
     }
     if ((size_t)received != sizeof(*out)) {
-        return (mpmc_result_t){.status = MPMC_ERR_SYS};
+        return (mpmc_result_t){.status = MPMC_ERR_STATE};
     }
     if (type != 1 && type != 2) {
         return (mpmc_result_t){.status = MPMC_ERR_STATE};
