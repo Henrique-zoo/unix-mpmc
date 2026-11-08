@@ -14,6 +14,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "mpmc/ipc/msg.h"
@@ -28,6 +29,7 @@ static void test_nonblocking_receive(void);
 static void check_message(const message_t *received, const message_t *expected);
 static void test_send_uses_blocking_mode(void);
 static void test_queue_cleanup(void);
+static void test_send_backpressure(void);
 mpmc_result_t mpmc_test_msg_create(int *out_msqid);
 mpmc_result_t mpmc_test_msg_remove(int msqid);
 mpmc_result_t
@@ -99,6 +101,11 @@ static unsigned send_calls;
 static bool last_send_nowait;
 
 /**
+ * @brief Identificador da última fila utilizada pelo substituto de envio.
+ */
+static int last_send_msqid = -1;
+
+/**
  * @brief Substitui a criação de filas durante os testes.
  * @param out_msqid Identificador da fila criada.
  * @return Resultado da criação real ou erro simulado.
@@ -153,6 +160,7 @@ mpmc_result_t
 mpmc_test_msg_send(int msqid, long type, const void *payload, size_t size, bool nowait) {
     ++send_calls;
     last_send_nowait = nowait;
+    last_send_msqid = msqid;
 
     return sysv_msg_send(msqid, type, payload, size, nowait);
 }
@@ -481,62 +489,234 @@ static void test_send_uses_blocking_mode(void) {
 }
 
 /**
- * @brief Verifica a remoção das filas após uma falha parcial na criação.
- * @details Simula uma falha na terceira chamada de criação e verifica
- * se as duas filas criadas anteriormente foram removidas.
+ * @brief Verifica a remoção das filas após falhas parciais na criação.
+ * @details Simula falhas em cada uma das cinco chamadas de criação
+ * e verifica se todos os recursos criados anteriormente foram removidos.
  */
 static void test_queue_cleanup(void) {
-    msg_backend_t *backend = NULL;
+    for (unsigned fail_call = 1u; fail_call <= 5u; ++fail_call) {
+        msg_backend_t *backend = NULL;
 
-    create_calls = 0u;
-    fail_create_call = 3u;
-    created_queue_count = 0u;
-    removed_queue_count = 0u;
-    track_queue_cleanup = true;
+        create_calls = 0u;
+        fail_create_call = fail_call;
+        created_queue_count = 0u;
+        removed_queue_count = 0u;
+        track_queue_cleanup = true;
 
-    mpmc_result_t result = msg_backend_create(&backend, 3u);
+        mpmc_result_t result = msg_backend_create(&backend, 3u);
 
-    track_queue_cleanup = false;
-    fail_create_call = 0u;
+        track_queue_cleanup = false;
+        fail_create_call = 0u;
 
-    CHECK(result.status == MPMC_ERR_SYS);
-    CHECK(result.system_errno == ENOSPC);
-    CHECK(backend == NULL);
+        size_t expected_created = fail_call - 1u;
 
-    CHECK(create_calls == 3u);
-    CHECK(created_queue_count == 2u);
-    CHECK(removed_queue_count == 2u);
+        CHECK(result.status == MPMC_ERR_SYS);
+        CHECK(result.system_errno == ENOSPC);
+        CHECK(backend == NULL);
 
-    if (created_queue_count == 2u && removed_queue_count == 2u) {
-        for (size_t index = 0u; index < 2u; ++index) {
-            CHECK(removed_queue_ids[index] == created_queue_ids[index]);
-            CHECK(removed_queue_results[index].status == MPMC_OK);
-            CHECK(removed_queue_results[index].system_errno == 0);
-        }
-    }
+        CHECK(create_calls == fail_call);
+        CHECK(created_queue_count == expected_created);
+        CHECK(removed_queue_count == expected_created);
 
-    /* Evita deixar recursos caso a falha simulada não tenha ocorrido. */
-    if (backend != NULL) {
-        msg_backend_destroy(backend);
-    }
-
-    /* Remove eventuais filas que tenham permanecido após uma falha de cleanup. */
-    for (size_t index = 0u; index < created_queue_count; ++index) {
-        bool removed = false;
-
-        for (size_t removed_index = 0u; removed_index < removed_queue_count; ++removed_index) {
-            if (removed_queue_ids[removed_index] == created_queue_ids[index]
-                && removed_queue_results[removed_index].status == MPMC_OK) {
-                removed = true;
-                break;
+        if (created_queue_count == expected_created && removed_queue_count == expected_created) {
+            for (size_t index = 0u; index < expected_created; ++index) {
+                CHECK(removed_queue_ids[index] == created_queue_ids[index]);
+                CHECK(removed_queue_results[index].status == MPMC_OK);
+                CHECK(removed_queue_results[index].system_errno == 0);
             }
         }
 
-        if (!removed) {
-            (void)sysv_msg_remove(created_queue_ids[index]);
+        /*
+         * Proteção adicional para não deixar filas no kernel
+         * caso alguma verificação de remoção falhe.
+         */
+        for (size_t index = 0u; index < created_queue_count; ++index) {
+            bool removed = false;
+
+            for (size_t removed_index = 0u; removed_index < removed_queue_count; ++removed_index) {
+                if (removed_queue_ids[removed_index] == created_queue_ids[index]
+                    && removed_queue_results[removed_index].status == MPMC_OK) {
+                    removed = true;
+                    break;
+                }
+            }
+
+            if (!removed) {
+                (void)sysv_msg_remove(created_queue_ids[index]);
+            }
         }
     }
 }
+
+/**
+ * @brief Verifica que o envio bloqueia quando a fila está cheia.
+ * @details Preenche a fila até atingir sua capacidade, inicia um produtor
+ * filho e verifica que ele só consegue concluir o envio após um consumo.
+ */
+static void test_send_backpressure(void) {
+    msg_backend_t *backend = NULL;
+    mpmc_result_t result = msg_backend_create(&backend, 1u);
+
+    CHECK(result.status == MPMC_OK);
+    CHECK(backend != NULL);
+
+    if (result.status != MPMC_OK || backend == NULL) return;
+
+    message_t message = {
+        .sender_pid = getpid(),
+        .sequence = 1u,
+        .operation_id = 60u,
+    };
+
+    result = msg_backend_send(backend, 1u, &message);
+
+    CHECK(result.status == MPMC_OK);
+    CHECK(last_send_msqid >= 0);
+
+    if (result.status != MPMC_OK || last_send_msqid < 0) {
+        msg_backend_destroy(backend);
+        return;
+    }
+
+    int queue_id = last_send_msqid;
+    bool queue_full = false;
+
+    /*
+     * Preenche a fila diretamente até que o kernel informe
+     * que não há mais espaço disponível.
+     */
+    for (size_t index = 0u; index < 100000u; ++index) {
+        message_t filler = {
+            .sender_pid = getpid(),
+            .sequence = index + 2u,
+            .operation_id = 60u,
+        };
+
+        result = sysv_msg_send(queue_id, 1, &filler, sizeof(filler), true);
+
+        if (result.status == MPMC_ERR_WOULD_BLOCK) {
+            queue_full = true;
+            break;
+        }
+
+        if (result.status != MPMC_OK) {
+            break;
+        }
+    }
+
+    CHECK(queue_full);
+
+    if (!queue_full) {
+        msg_backend_destroy(backend);
+        return;
+    }
+
+    int ready_pipe[2];
+
+    if (pipe(ready_pipe) == -1) {
+        CHECK(false);
+        msg_backend_destroy(backend);
+        return;
+    }
+
+    pid_t child = fork();
+
+    if (child == -1) {
+        CHECK(false);
+        close(ready_pipe[0]);
+        close(ready_pipe[1]);
+        msg_backend_destroy(backend);
+        return;
+    }
+
+    if (child == 0) {
+        close(ready_pipe[0]);
+
+        char ready = 1;
+
+        if (write(ready_pipe[1], &ready, sizeof(ready)) != sizeof(ready)) {
+            _exit(2);
+        }
+
+        close(ready_pipe[1]);
+
+        message_t pending = {
+            .sender_pid = getpid(),
+            .sequence = 100001u,
+            .operation_id = 60u,
+        };
+
+        result = msg_backend_send(backend, 1u, &pending);
+        msg_backend_worker_close(backend);
+
+        _exit(result.status == MPMC_OK ? 0 : 1);
+    }
+
+    close(ready_pipe[1]);
+
+    char ready = 0;
+    ssize_t bytes_read = read(ready_pipe[0], &ready, sizeof(ready));
+
+    close(ready_pipe[0]);
+
+    CHECK(bytes_read == sizeof(ready));
+
+    if (bytes_read != sizeof(ready)) {
+        (void)kill(child, SIGTERM);
+        (void)waitpid(child, NULL, 0);
+        msg_backend_destroy(backend);
+        return;
+    }
+
+    /*
+     * Dá oportunidade para o filho executar o envio.
+     * Enquanto a fila estiver cheia, o envio bloqueante não deve concluir.
+     */
+    struct timespec delay = {
+        .tv_sec = 0,
+        .tv_nsec = 50000000,
+    };
+
+    while (nanosleep(&delay, &delay) == -1 && errno == EINTR) {
+    }
+
+    int status = 0;
+    pid_t waited = waitpid(child, &status, WNOHANG);
+
+    CHECK(waited == 0);
+
+    bool child_already_finished = waited == child;
+
+    if (waited == -1) {
+        CHECK(false);
+        (void)kill(child, SIGTERM);
+        (void)waitpid(child, NULL, 0);
+        msg_backend_destroy(backend);
+        return;
+    }
+
+    /*
+     * Consome uma mensagem para liberar espaço na fila.
+     */
+    message_t received = {0};
+
+    result = msg_backend_receive(backend, 1u, &received, false);
+
+    CHECK(result.status == MPMC_OK);
+
+    if (!child_already_finished) {
+        waited = waitpid(child, &status, 0);
+        CHECK(waited == child);
+    }
+
+    if (waited == child) {
+        CHECK(WIFEXITED(status));
+        CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    }
+
+    msg_backend_destroy(backend);
+}
+
 /**
  * @brief Executa os testes das filas de dados, cenário de dois consumidores e confirmações
  * seletivas.
@@ -549,6 +729,7 @@ int main(void) {
     test_nonblocking_receive();
     test_send_uses_blocking_mode();
     test_queue_cleanup();
+    test_send_backpressure();
 
     msg_backend_t *parent = NULL;
     mpmc_result_t result = msg_backend_create(&parent, 2u);
