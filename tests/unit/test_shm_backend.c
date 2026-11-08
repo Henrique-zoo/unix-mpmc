@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "mpmc/ipc/shm_backend.h"
+#include "shm_backend_internal.h"
 #include "shm_ring.h"
 
 /**
@@ -61,6 +62,13 @@ typedef struct {
     alignas(shm_ring_t) unsigned char data[MPMC_SHM_SEGMENT_BYTES];
 } fake_segment_t;
 
+/** @brief Conjunto simulado, com ID independente do segmento e valores iniciais observáveis. */
+typedef struct {
+    bool created;                   /**< Conjunto ainda não removido. */
+    int id;                         /**< ID atribuído pela criação simulada. */
+    unsigned values[SHM_SEM_COUNT]; /**< Valores configurados por SETVAL. */
+} fake_semaphore_set_t;
+
 static_assert(
     offsetof(fake_segment_t, data) % alignof(shm_ring_t) == 0,
     "os dados de cada segmento simulado devem estar alinhados para shm_ring_t"
@@ -69,7 +77,7 @@ static_assert(
 /** @brief Armazena cópias dos diagnósticos recebidos pela callback de cleanup. */
 typedef struct {
     shm_cleanup_error_t
-        errors[2 * MAX_SEGMENTS]; /**< Espaço para um detach e um remove por segmento. */
+        errors[3 * MAX_SEGMENTS]; /**< Detach e remoções de conjunto/segmento por entrada. */
     size_t count;                 /**< Quantidade de registros efetivamente copiados para errors. */
 } error_log_t;
 
@@ -77,6 +85,14 @@ typedef struct {
  * @brief Segmentos simulados, indexados pelo identificador devolvido ao backend.
  */
 static fake_segment_t segments[MAX_SEGMENTS];
+/** @brief Conjuntos de semáforos simulados, na ordem de criação. */
+static fake_semaphore_set_t semaphore_sets[MAX_SEGMENTS];
+/** @brief Chamadas às primitivas simuladas de criação, SETVAL e remoção de conjuntos. */
+static unsigned sem_create_calls, sem_set_calls, sem_remove_calls;
+/** @brief Chamadas escolhidas para falhar; zero desabilita a injeção. */
+static unsigned fail_sem_create, fail_sem_set;
+/** @brief Falha de remoção injetada por conjunto, preservada por valor. */
+static mpmc_result_t sem_remove_errors[MAX_SEGMENTS];
 /**
  * @brief Ponteiros de alocações reais ainda pertencentes ao backend sob teste.
  */
@@ -122,22 +138,88 @@ static unsigned fail_create;
  */
 static unsigned fail_attach;
 /**
- * @brief Errno simulado por segmento no detach; zero representa sucesso.
+ * @brief Resultado simulado por segmento no detach; MPMC_OK representa sucesso.
  */
-static int detach_errors[MAX_SEGMENTS];
+static mpmc_result_t detach_errors[MAX_SEGMENTS];
 /**
- * @brief Errno simulado por segmento na remoção; zero representa sucesso.
+ * @brief Resultado simulado por segmento na remoção; MPMC_OK representa sucesso.
  */
-static int remove_errors[MAX_SEGMENTS];
+static mpmc_result_t remove_errors[MAX_SEGMENTS];
 
 /* Pontos de injeção usados somente por shm_backend_for_test.o. */
-void *mpmc_test_malloc(size_t size);
-void *mpmc_test_calloc(size_t count, size_t size);
-void mpmc_test_free(void *pointer);
+void *mpmc_test_shm_malloc(size_t size);
+void *mpmc_test_shm_calloc(size_t count, size_t size);
+void mpmc_test_shm_free(void *pointer);
 mpmc_result_t mpmc_test_shm_create(size_t size, int *out_shmid);
 mpmc_result_t mpmc_test_shm_attach(int shmid, void **out_address);
 mpmc_result_t mpmc_test_shm_detach(const void *address);
 mpmc_result_t mpmc_test_shm_remove(int shmid);
+mpmc_result_t mpmc_test_sem_create(unsigned count, int *out_semid);
+mpmc_result_t mpmc_test_sem_set(int semid, unsigned index, unsigned value);
+mpmc_result_t mpmc_test_sem_remove(int semid);
+
+/**
+ * @brief Cria um conjunto simulado com três semáforos e ID zero ou distinto do shmid.
+ * @param count Quantidade esperada de semáforos.
+ * @param[out] out_semid Recebe o identificador somente em sucesso.
+ * @return Estrutura mpmc_result_t com status MPMC_OK, ou MPMC_ERR_SYS/ENOSPC
+ * na chamada escolhida por fail_sem_create. system_errno é zero em sucesso.
+ */
+mpmc_result_t mpmc_test_sem_create(unsigned count, int *out_semid) {
+    CHECK(count == SHM_SEM_COUNT && out_semid != NULL);
+    unsigned position = sem_create_calls++;
+    if (sem_create_calls == fail_sem_create) {
+        return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = ENOSPC};
+    }
+    CHECK(position < MAX_SEGMENTS);
+    semaphore_sets[position].created = true;
+    semaphore_sets[position].id = position == 0 ? 0 : 100 + (int)position;
+    *out_semid = semaphore_sets[position].id;
+    return (mpmc_result_t){.status = MPMC_OK};
+}
+
+/**
+ * @brief Registra SETVAL em um conjunto simulado.
+ * @param semid ID de conjunto criado pelo substituto.
+ * @param index Índice do semáforo, menor que SHM_SEM_COUNT.
+ * @param value Valor inicial a registrar.
+ * @return Estrutura mpmc_result_t com status MPMC_OK e system_errno zero, ou
+ * MPMC_ERR_INVALID_ARG/ERANGE na chamada escolhida por fail_sem_set.
+ */
+mpmc_result_t mpmc_test_sem_set(int semid, unsigned index, unsigned value) {
+    if (++sem_set_calls == fail_sem_set) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG, .system_errno = ERANGE};
+    }
+    for (size_t i = 0; i < MAX_SEGMENTS; ++i) {
+        if (semaphore_sets[i].created && semaphore_sets[i].id == semid) {
+            CHECK(index < SHM_SEM_COUNT);
+            if (index < SHM_SEM_COUNT) semaphore_sets[i].values[index] = value;
+            return (mpmc_result_t){.status = MPMC_OK};
+        }
+    }
+    CHECK(false);
+    return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG, .system_errno = EINVAL};
+}
+
+/**
+ * @brief Remove um conjunto simulado e detecta IDs inexistentes ou remoções duplicadas.
+ * @param semid ID que identifica exclusivamente o conjunto.
+ * @return Estrutura mpmc_result_t com status MPMC_OK em sucesso; uma falha configurada
+ * em sem_remove_errors é propagada integralmente. ID desconhecido retorna
+ * MPMC_ERR_INVALID_ARG/EINVAL e registra falha da suíte.
+ */
+mpmc_result_t mpmc_test_sem_remove(int semid) {
+    ++sem_remove_calls;
+    for (size_t i = 0; i < MAX_SEGMENTS; ++i) {
+        if (semaphore_sets[i].created && semaphore_sets[i].id == semid) {
+            if (sem_remove_errors[i].status != MPMC_OK) return sem_remove_errors[i];
+            semaphore_sets[i].created = false;
+            return (mpmc_result_t){.status = MPMC_OK};
+        }
+    }
+    CHECK(false);
+    return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG, .system_errno = EINVAL};
+}
 
 /**
  * @brief Registra um ponteiro alocado para detectar vazamentos e liberações duplicadas.
@@ -164,7 +246,7 @@ static void track_allocation(void *pointer) {
  * @details Incrementa allocation_calls. Na posição fail_allocation, define errno=ENOMEM
  * e não aloca; fora dela, registra o ponteiro para verificar sua liberação posterior.
  */
-void *mpmc_test_malloc(size_t size) {
+void *mpmc_test_shm_malloc(size_t size) {
     if (++allocation_calls == fail_allocation) {
         errno = ENOMEM;
         return NULL;
@@ -182,7 +264,7 @@ void *mpmc_test_malloc(size_t size) {
  * @details Compartilha allocation_calls e fail_allocation com mpmc_test_malloc().
  * Na falha programada, define errno=ENOMEM; fora dela, rastreia o bloco zerado.
  */
-void *mpmc_test_calloc(size_t count, size_t size) {
+void *mpmc_test_shm_calloc(size_t count, size_t size) {
     if (++allocation_calls == fail_allocation) {
         errno = ENOMEM;
         return NULL;
@@ -199,7 +281,7 @@ void *mpmc_test_calloc(size_t count, size_t size) {
  * decrementa live_allocations, executa free() e define errno=EIO para testar a
  * preservação de erros anteriores. Ponteiro desconhecido registra falha e não é liberado.
  */
-void mpmc_test_free(void *pointer) {
+void mpmc_test_shm_free(void *pointer) {
     if (pointer == NULL) return;
     ++free_calls;
     for (size_t i = 0; i < MAX_SEGMENTS; ++i) {
@@ -275,8 +357,10 @@ mpmc_result_t mpmc_test_shm_attach(int shmid, void **out_address) {
  * @param address Endereço a procurar nas áreas de dados dos segmentos simulados.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: associação simulada desfeita; system_errno é zero.
- * - MPMC_ERR_SYS: falha configurada em detach_errors; system_errno recebe o código simulado.
+ * - MPMC_ERR_INVALID_ARG: EINVAL configurado em detach_errors.
+ * - MPMC_ERR_SYS: outra falha configurada em detach_errors.
  * - MPMC_ERR_STATE: endereço não pertence aos segmentos simulados; system_errno é zero.
+ * Nas falhas configuradas, system_errno preserva o código fornecido pelo cenário.
  * @details Incrementa detach_calls e confere as flags de criação/associação com CHECK().
  * Uma falha injetada preserva a flag attached; não executa shmdt().
  */
@@ -285,12 +369,7 @@ mpmc_result_t mpmc_test_shm_detach(const void *address) {
     for (size_t i = 0; i < MAX_SEGMENTS; ++i) {
         if (address == segments[i].data) {
             CHECK(segments[i].created && segments[i].attached);
-            if (detach_errors[i] != 0) {
-                return (mpmc_result_t){
-                    .status = MPMC_ERR_SYS,
-                    .system_errno = detach_errors[i],
-                };
-            }
+            if (detach_errors[i].status != MPMC_OK) return detach_errors[i];
             segments[i].attached = false;
             return (mpmc_result_t){.status = MPMC_OK};
         }
@@ -304,8 +383,10 @@ mpmc_result_t mpmc_test_shm_detach(const void *address) {
  * @param shmid Índice do segmento simulado a remover.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: flag de criação removida; system_errno é zero.
- * - MPMC_ERR_SYS: falha configurada em remove_errors; system_errno recebe o código simulado.
+ * - MPMC_ERR_SHUTDOWN: EIDRM configurado em remove_errors.
+ * - MPMC_ERR_SYS: outra falha configurada em remove_errors.
  * - MPMC_ERR_STATE: identificador fora do vetor simulado; system_errno é zero.
+ * Nas falhas configuradas, system_errno preserva o código fornecido pelo cenário.
  * @details Incrementa remove_calls e confere a flag de criação com CHECK(). Em falha
  * injetada preserva essa flag; não executa shmctl(IPC_RMID).
  */
@@ -314,12 +395,7 @@ mpmc_result_t mpmc_test_shm_remove(int shmid) {
     CHECK(shmid >= 0 && shmid < MAX_SEGMENTS);
     if (shmid < 0 || shmid >= MAX_SEGMENTS) return (mpmc_result_t){.status = MPMC_ERR_STATE};
     CHECK(segments[shmid].created);
-    if (remove_errors[shmid] != 0) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = remove_errors[shmid],
-        };
-    }
+    if (remove_errors[shmid].status != MPMC_OK) return remove_errors[shmid];
     segments[shmid].created = false;
     return (mpmc_result_t){.status = MPMC_OK};
 }
@@ -353,11 +429,15 @@ static void reset_case(void) {
     }
     memset(allocations, 0, sizeof allocations);
     memset(segments, 0, sizeof segments);
+    memset(semaphore_sets, 0, sizeof semaphore_sets);
+    memset(sem_remove_errors, 0, sizeof sem_remove_errors);
     memset(detach_errors, 0, sizeof detach_errors);
     memset(remove_errors, 0, sizeof remove_errors);
     live_allocations = allocation_calls = free_calls = 0;
     create_calls = attach_calls = detach_calls = remove_calls = 0;
     fail_allocation = fail_create = fail_attach = 0;
+    sem_create_calls = sem_set_calls = sem_remove_calls = 0;
+    fail_sem_create = fail_sem_set = 0;
 }
 
 /**
@@ -379,24 +459,26 @@ static void check_result(mpmc_result_t result, mpmc_status_t status, int system_
  * @param index Posição baseada em zero do diagnóstico esperado.
  * @param operation Operação de liberação que deve ter falhado.
  * @param producer_id Índice lógico esperado, baseado em um.
- * @param system_errno Código de sistema esperado para a falha simulada.
- * @details Espera MPMC_ERR_SYS e shmid=producer_id-1, conforme a atribuição de IDs
- * desta simulação. Se index não existir, registra falha e não acessa o vetor.
+ * @param expected Categoria e causa de sistema esperadas para a falha simulada.
+ * @details Confere o ID da classe indicada por operation; segmentos e conjuntos
+ * têm numerações independentes. Se index não existir, não acessa o vetor.
  */
 static void check_error(
     const error_log_t *log,
     size_t index,
     shm_cleanup_operation_t operation,
     size_t producer_id,
-    int system_errno
+    mpmc_result_t expected
 ) {
     CHECK(index < log->count);
     if (index >= log->count) return;
     const shm_cleanup_error_t *error = &log->errors[index];
     CHECK(error->operation == operation);
     CHECK(error->producer_id == producer_id);
-    CHECK(error->shmid == (int)producer_id - 1);
-    check_result(error->result, MPMC_ERR_SYS, system_errno);
+    int expected_id = operation == SHM_CLEANUP_SEM_REMOVE ? semaphore_sets[producer_id - 1].id
+                                                          : (int)producer_id - 1;
+    CHECK(error->resource_id == expected_id);
+    check_result(error->result, expected.status, expected.system_errno);
 }
 
 /**
@@ -429,6 +511,7 @@ static void test_null_and_invalid_arguments(void) {
     check_result(shm_backend_create(&backend, 0, &reporter), MPMC_ERR_INVALID_ARG, 0);
     CHECK(backend == NULL);
     CHECK(allocation_calls == 0 && log.count == 0);
+    CHECK(sem_create_calls == 0 && sem_remove_calls == 0 && detach_calls == 0);
 }
 
 /**
@@ -446,19 +529,26 @@ static void test_success(void) {
     check_result(shm_backend_create(&backend, PRODUCER_COUNT, &reporter), MPMC_OK, 0);
     CHECK(backend != NULL);
     CHECK(create_calls == PRODUCER_COUNT && attach_calls == PRODUCER_COUNT);
+    CHECK(sem_create_calls == PRODUCER_COUNT && sem_set_calls == 3 * PRODUCER_COUNT);
     for (size_t i = 0; i < PRODUCER_COUNT; ++i) {
         CHECK(segments[i].created && segments[i].attached);
         const shm_ring_t *ring = (const void *)segments[i].data;
         CHECK(ring->head == 0 && ring->tail == 0 && ring->count == 0);
         CHECK(ring->capacity == 63);
         CHECK(ring->consumed_total == 0);
+        CHECK(semaphore_sets[i].created);
+        CHECK(semaphore_sets[i].values[SHM_SEM_MUTEX] == 1);
+        CHECK(semaphore_sets[i].values[SHM_SEM_EMPTY] == ring->capacity);
+        CHECK(semaphore_sets[i].values[SHM_SEM_FULL] == 0);
     }
     check_result(shm_backend_destroy(backend, &reporter), MPMC_OK, 0);
     CHECK(detach_calls == PRODUCER_COUNT && remove_calls == PRODUCER_COUNT);
+    CHECK(sem_remove_calls == PRODUCER_COUNT);
     CHECK(allocation_calls == 2 && free_calls == 2 && live_allocations == 0);
     CHECK(log.count == 0);
     for (size_t i = 0; i < PRODUCER_COUNT; ++i) {
         CHECK(!segments[i].created && !segments[i].attached);
+        CHECK(!semaphore_sets[i].created);
     }
 }
 
@@ -506,12 +596,74 @@ static void test_rollback_at_each_position(void) {
             CHECK(attach_calls == position - (operation == 0 ? 1 : 0));
             CHECK(detach_calls == position - 1);
             CHECK(remove_calls == position - (operation == 0 ? 1 : 0));
+            CHECK(sem_create_calls == position - 1 && sem_remove_calls == position - 1);
             CHECK(allocation_calls == 2 && free_calls == 2 && log.count == 0);
             for (size_t i = 0; i < PRODUCER_COUNT; ++i) {
                 CHECK(!segments[i].created && !segments[i].attached);
+                CHECK(!semaphore_sets[i].created);
             }
         }
     }
+}
+
+/** @brief Injeta falha de criação ou de cada SETVAL em todas as entradas do backend. */
+static void test_semaphore_initialization_failures(void) {
+    for (unsigned stage = 0; stage <= SHM_SEM_COUNT; ++stage) {
+        for (unsigned position = 1; position <= PRODUCER_COUNT; ++position) {
+            reset_case();
+            if (stage == 0)
+                fail_sem_create = position;
+            else
+                fail_sem_set = (position - 1) * SHM_SEM_COUNT + stage;
+            error_log_t log = {0};
+            const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
+            shm_backend_t *backend = NULL;
+            check_result(
+                shm_backend_create(&backend, PRODUCER_COUNT, &reporter),
+                stage == 0 ? MPMC_ERR_SYS : MPMC_ERR_INVALID_ARG,
+                stage == 0 ? ENOSPC : ERANGE
+            );
+            CHECK(backend == NULL && live_allocations == 0);
+            CHECK(create_calls == position && attach_calls == position);
+            CHECK(detach_calls == position && remove_calls == position);
+            CHECK(sem_remove_calls == position - (stage == 0 ? 1 : 0));
+            CHECK(log.count == 0);
+            for (size_t i = 0; i < PRODUCER_COUNT; ++i) {
+                CHECK(!segments[i].created && !segments[i].attached);
+                CHECK(!semaphore_sets[i].created);
+            }
+        }
+    }
+}
+
+/** @brief Mistura erros de segmento/conjunto e mantém ordem, identidade e erro original. */
+static void test_semaphore_cleanup_errors(void) {
+    reset_case();
+    shm_backend_t *backend = new_backend();
+    error_log_t log = {0};
+    const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
+    sem_remove_errors[0] = (mpmc_result_t){.status = MPMC_ERR_SHUTDOWN, .system_errno = EIDRM};
+    remove_errors[0] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EPERM};
+    sem_remove_errors[2] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EACCES};
+    check_result(shm_backend_destroy(backend, &reporter), MPMC_ERR_SHUTDOWN, EIDRM);
+    CHECK(sem_remove_calls == PRODUCER_COUNT && remove_calls == PRODUCER_COUNT);
+    CHECK(detach_calls == PRODUCER_COUNT && live_allocations == 0 && log.count == 3);
+    check_error(&log, 0, SHM_CLEANUP_SEM_REMOVE, 1, sem_remove_errors[0]);
+    check_error(&log, 1, SHM_CLEANUP_REMOVE, 1, remove_errors[0]);
+    check_error(&log, 2, SHM_CLEANUP_SEM_REMOVE, 3, sem_remove_errors[2]);
+    CHECK(!semaphore_sets[1].created && !segments[2].created);
+
+    reset_case();
+    fail_sem_set = 4;
+    sem_remove_errors[0] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EACCES};
+    log = (error_log_t){0};
+    backend = NULL;
+    check_result(
+        shm_backend_create(&backend, PRODUCER_COUNT, &reporter), MPMC_ERR_INVALID_ARG, ERANGE
+    );
+    CHECK(backend == NULL && live_allocations == 0 && log.count == 1);
+    CHECK(sem_remove_calls == 2 && remove_calls == 2);
+    check_error(&log, 0, SHM_CLEANUP_SEM_REMOVE, 1, sem_remove_errors[0]);
 }
 
 /**
@@ -522,18 +674,32 @@ static void test_multiple_destroy_errors(void) {
     shm_backend_t *backend = new_backend();
     error_log_t log = {0};
     const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
-    detach_errors[0] = EINVAL;
-    remove_errors[1] = EPERM;
-    detach_errors[2] = EACCES;
-    remove_errors[2] = EIDRM;
-    check_result(shm_backend_destroy(backend, &reporter), MPMC_ERR_SYS, EINVAL);
+    detach_errors[0] = (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG, .system_errno = EINVAL};
+    remove_errors[1] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EPERM};
+    detach_errors[2] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EACCES};
+    remove_errors[2] = (mpmc_result_t){.status = MPMC_ERR_SHUTDOWN, .system_errno = EIDRM};
+    check_result(shm_backend_destroy(backend, &reporter), MPMC_ERR_INVALID_ARG, EINVAL);
     CHECK(detach_calls == PRODUCER_COUNT && remove_calls == PRODUCER_COUNT);
     CHECK(allocation_calls == 2 && free_calls == 2 && live_allocations == 0);
     CHECK(log.count == 4);
-    check_error(&log, 0, SHM_CLEANUP_DETACH, 1, EINVAL);
-    check_error(&log, 1, SHM_CLEANUP_REMOVE, 2, EPERM);
-    check_error(&log, 2, SHM_CLEANUP_DETACH, 3, EACCES);
-    check_error(&log, 3, SHM_CLEANUP_REMOVE, 3, EIDRM);
+    check_error(&log, 0, SHM_CLEANUP_DETACH, 1, detach_errors[0]);
+    check_error(&log, 1, SHM_CLEANUP_REMOVE, 2, remove_errors[1]);
+    check_error(&log, 2, SHM_CLEANUP_DETACH, 3, detach_errors[2]);
+    check_error(&log, 3, SHM_CLEANUP_REMOVE, 3, remove_errors[2]);
+}
+
+/** @brief Preserva shutdown como primeira falha e continua a limpeza dos demais segmentos. */
+static void test_removed_resource_result(void) {
+    reset_case();
+    shm_backend_t *backend = new_backend();
+    error_log_t log = {0};
+    const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
+    remove_errors[0] = (mpmc_result_t){.status = MPMC_ERR_SHUTDOWN, .system_errno = EIDRM};
+
+    check_result(shm_backend_destroy(backend, &reporter), MPMC_ERR_SHUTDOWN, EIDRM);
+    CHECK(detach_calls == PRODUCER_COUNT && remove_calls == PRODUCER_COUNT);
+    CHECK(live_allocations == 0 && log.count == 1);
+    check_error(&log, 0, SHM_CLEANUP_REMOVE, 1, remove_errors[0]);
 }
 
 /**
@@ -546,20 +712,22 @@ static void test_worker_close(void) {
         error_log_t log = {0};
         const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
         if (inject_errors != 0) {
-            detach_errors[0] = EINVAL;
-            detach_errors[1] = EACCES;
-            detach_errors[2] = EIO;
+            detach_errors[0] =
+                (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG, .system_errno = EINVAL};
+            detach_errors[1] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EACCES};
+            detach_errors[2] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EIO};
         }
         check_result(
             shm_backend_worker_close(backend, &reporter),
-            inject_errors != 0 ? MPMC_ERR_SYS : MPMC_OK,
+            inject_errors != 0 ? MPMC_ERR_INVALID_ARG : MPMC_OK,
             inject_errors != 0 ? EINVAL : 0
         );
-        CHECK(detach_calls == PRODUCER_COUNT && remove_calls == 0);
+        CHECK(detach_calls == PRODUCER_COUNT && remove_calls == 0 && sem_remove_calls == 0);
         CHECK(allocation_calls == 2 && free_calls == 2 && live_allocations == 0);
         CHECK(log.count == (inject_errors != 0 ? PRODUCER_COUNT : 0));
         for (size_t i = 0; i < PRODUCER_COUNT; ++i) {
             CHECK(segments[i].created);
+            CHECK(semaphore_sets[i].created);
             CHECK(segments[i].attached == (inject_errors != 0));
             if (inject_errors != 0) {
                 check_error(&log, i, SHM_CLEANUP_DETACH, i + 1, detach_errors[i]);
@@ -581,9 +749,9 @@ static void test_rollback_diagnostics_preserve_original_error(void) {
         } else {
             fail_attach = PRODUCER_COUNT;
         }
-        detach_errors[0] = EINVAL;
-        remove_errors[1] = EPERM;
-        remove_errors[2] = EIDRM;
+        detach_errors[0] = (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG, .system_errno = EINVAL};
+        remove_errors[1] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EPERM};
+        remove_errors[2] = (mpmc_result_t){.status = MPMC_ERR_SHUTDOWN, .system_errno = EIDRM};
         shm_backend_t *backend = NULL;
         check_result(
             shm_backend_create(&backend, PRODUCER_COUNT, &reporter),
@@ -595,10 +763,10 @@ static void test_rollback_diagnostics_preserve_original_error(void) {
         CHECK(remove_calls == PRODUCER_COUNT - (operation == 0 ? 1 : 0));
         CHECK(log.count == (operation == 0 ? 2u : 3u));
         CHECK(allocation_calls == 2 && free_calls == 2);
-        check_error(&log, 0, SHM_CLEANUP_DETACH, 1, EINVAL);
-        check_error(&log, 1, SHM_CLEANUP_REMOVE, 2, EPERM);
+        check_error(&log, 0, SHM_CLEANUP_DETACH, 1, detach_errors[0]);
+        check_error(&log, 1, SHM_CLEANUP_REMOVE, 2, remove_errors[1]);
         if (operation != 0) {
-            check_error(&log, 2, SHM_CLEANUP_REMOVE, 3, EIDRM);
+            check_error(&log, 2, SHM_CLEANUP_REMOVE, 3, remove_errors[2]);
         }
     }
 }
@@ -612,10 +780,12 @@ static void test_optional_reporter(void) {
         shm_backend_t *backend = new_backend();
         error_log_t log = {0};
         const shm_cleanup_reporter_t reporter = {.on_error = NULL, .user_data = &log};
-        detach_errors[0] = EINVAL;
-        remove_errors[1] = EPERM;
+        detach_errors[0] = (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG, .system_errno = EINVAL};
+        remove_errors[1] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EPERM};
         check_result(
-            shm_backend_destroy(backend, use_reporter != 0 ? &reporter : NULL), MPMC_ERR_SYS, EINVAL
+            shm_backend_destroy(backend, use_reporter != 0 ? &reporter : NULL),
+            MPMC_ERR_INVALID_ARG,
+            EINVAL
         );
         CHECK(detach_calls == PRODUCER_COUNT && remove_calls == PRODUCER_COUNT);
         CHECK(log.count == 0 && live_allocations == 0);
@@ -631,7 +801,10 @@ int main(void) {
     test_success();
     test_allocation_failures();
     test_rollback_at_each_position();
+    test_semaphore_initialization_failures();
+    test_semaphore_cleanup_errors();
     test_multiple_destroy_errors();
+    test_removed_resource_result();
     test_worker_close();
     test_rollback_diagnostics_preserve_original_error();
     test_optional_reporter();

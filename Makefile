@@ -47,6 +47,7 @@ UNIT_DIR := $(BUILD_DIR)/unit
 SHM_BACKEND_DIR := src/ipc/shm_backend
 WORKERS_DIR := src/workers
 SHM_RING_OBJECT := $(BUILD_DIR)/ipc/shm_backend/shm_ring.o
+SHM_OPERATIONS_OBJECT := $(BUILD_DIR)/ipc/shm_backend/operations.o
 
 $(UNIT_DIR)/supervisor_for_test.o: src/app/supervisor.c
 	@mkdir -p $(dir $@)
@@ -75,7 +76,7 @@ $(UNIT_DIR)/test_command: tests/unit/test_command.c src/app/command.c src/error.
 $(UNIT_DIR)/test_supervisor: tests/unit/test_supervisor.c \
 		$(UNIT_DIR)/supervisor_for_test.o src/app/command.c src/error.c \
 		src/ipc/transport.c src/ipc/msg_backend.c $(SHM_BACKEND_DIR)/lifecycle.c \
-		$(SHM_RING_OBJECT) src/ipc/msg.c src/ipc/shm.c
+		$(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -101,16 +102,32 @@ $(UNIT_DIR)/test_shm: tests/unit/test_shm.c src/ipc/shm.c
 
 $(UNIT_DIR)/shm_backend_for_test.o: $(SHM_BACKEND_DIR)/lifecycle.c \
 		$(SHM_BACKEND_DIR)/shm_backend_internal.h $(SHM_BACKEND_DIR)/shm_ring.h \
-		include/mpmc/ipc/shm_backend.h include/mpmc/message.h
+		include/mpmc/ipc/shm_backend.h include/mpmc/message.h Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) \
-		-Dmalloc=mpmc_test_malloc -Dcalloc=mpmc_test_calloc -Dfree=mpmc_test_free \
+		-Dmalloc=mpmc_test_shm_malloc -Dcalloc=mpmc_test_shm_calloc -Dfree=mpmc_test_shm_free \
 		-Dsysv_shm_create=mpmc_test_shm_create -Dsysv_shm_attach=mpmc_test_shm_attach \
 		-Dsysv_shm_detach=mpmc_test_shm_detach -Dsysv_shm_remove=mpmc_test_shm_remove \
+		-Dsysv_sem_create=mpmc_test_sem_create -Dsysv_sem_set=mpmc_test_sem_set \
+		-Dsysv_sem_remove=mpmc_test_sem_remove \
 		-c $< -o $@
 
 $(UNIT_DIR)/test_shm_backend: tests/unit/test_shm_backend.c \
 		$(UNIT_DIR)/shm_backend_for_test.o $(SHM_RING_OBJECT)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/shm_operations_for_test.o: $(SHM_BACKEND_DIR)/operations.c \
+		$(SHM_BACKEND_DIR)/shm_backend_internal.h $(SHM_BACKEND_DIR)/shm_ring.h \
+		include/mpmc/ipc/shm_backend.h include/mpmc/ipc/sem.h include/mpmc/error.h Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		-Dsysv_sem_apply=mpmc_test_sem_apply -Dsysv_sem_change=mpmc_test_sem_change \
+		-c $< -o $@
+
+$(UNIT_DIR)/test_shm_operations: tests/unit/test_shm_operations.c \
+		$(UNIT_DIR)/shm_operations_for_test.o $(SHM_BACKEND_DIR)/lifecycle.c \
+		$(SHM_RING_OBJECT) src/ipc/shm.c src/ipc/sem.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -144,7 +161,7 @@ $(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c src/ipc/msg_backend.
 
 $(UNIT_DIR)/test_transport_contract: tests/unit/test_transport_contract.c \
 		src/ipc/transport.c src/ipc/msg_backend.c $(SHM_BACKEND_DIR)/lifecycle.c \
-		$(SHM_RING_OBJECT) src/ipc/msg.c src/ipc/shm.c src/error.c
+		$(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -166,7 +183,7 @@ $(UNIT_DIR)/test_isolation: tests/unit/test_isolation.c src/app/command.c src/er
 
 unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
 		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
-		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
+		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_operations $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
 		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation \
 		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_transport_contract \
 		$(UNIT_DIR)/test_transport $(UNIT_DIR)/test_protocol_properties \
@@ -179,6 +196,7 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 	@$(UNIT_DIR)/test_error
 	@$(UNIT_DIR)/test_shm
 	@$(UNIT_DIR)/test_shm_backend
+	@$(UNIT_DIR)/test_shm_operations
 	@$(UNIT_DIR)/test_shm_ring
 	@$(UNIT_DIR)/test_message_metadata
 	@$(UNIT_DIR)/test_producer

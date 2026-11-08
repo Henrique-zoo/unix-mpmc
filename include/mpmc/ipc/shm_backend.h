@@ -2,9 +2,9 @@
  * @file shm_backend.h
  * @brief Backend de buffer circular em memória compartilhada com semáforos.
  * @ingroup backends
- * @note Estão implementados a criação e a inicialização dos buffers, o fechamento
- * local e a destruição dos segmentos. Envio, recebimento, ACKs e contagens abaixo
- * são contratos propostos.
+ * @note Estão implementados o ciclo de vida dos segmentos e semáforos, o envio,
+ * o recebimento e a leitura sincronizada dos totais consumidos. As operações
+ * de ACK permanecem como stubs que retornam MPMC_ERR_STATE.
  */
 #ifndef MPMC_IPC_SHM_BACKEND_H
 #define MPMC_IPC_SHM_BACKEND_H
@@ -24,15 +24,17 @@
 
 /**
  * @brief Estado opaco do backend por memória compartilhada.
- * @details Mantém os segmentos System V de 2048 bytes e suas associações locais.
+ * @details Mantém os segmentos System V de 2048 bytes, suas associações locais
+ * e um conjunto de semáforos por estrutura lógica.
  * Apenas `ipc/transport.c` deve acessar diretamente esta interface.
  */
 typedef struct shm_backend shm_backend_t;
 
 /** @brief Operação de liberação que originou um diagnóstico de cleanup. */
 typedef enum {
-    SHM_CLEANUP_DETACH, /**< Falha ao desassociar um mapeamento com shmdt(). */
-    SHM_CLEANUP_REMOVE  /**< Falha ao remover um segmento com shmctl(IPC_RMID). */
+    SHM_CLEANUP_DETACH,     /**< Falha ao desassociar um mapeamento com shmdt(). */
+    SHM_CLEANUP_REMOVE,     /**< Falha ao remover um segmento com shmctl(IPC_RMID). */
+    SHM_CLEANUP_SEM_REMOVE, /**< Falha ao remover um conjunto com semctl(IPC_RMID). */
 } shm_cleanup_operation_t;
 
 /**
@@ -41,13 +43,15 @@ typedef enum {
  * após sua liberação. O registro recebido pela callback só é válido durante a
  * chamada; copie o conteúdo de *error, não o ponteiro error, para armazenar o
  * diagnóstico. A cópia pertence ao chamador e não exige liberação adicional.
+ * resource_id identifica o segmento em DETACH/REMOVE e o conjunto em SEM_REMOVE;
+ * esses identificadores pertencem a classes diferentes de objetos System V.
  * @see @ref shm_cleanup_diagnostics para o fluxo e um exemplo de coleta.
  */
 typedef struct {
     shm_cleanup_operation_t operation; /**< Operação de liberação que falhou. */
     size_t producer_id;                /**< Índice lógico da estrutura, no intervalo 1..p. */
-    int shmid;                         /**< Identificador do segmento envolvido, inclusive zero. */
-    mpmc_result_t result;              /**< Falha individual, com o errno original preservado. */
+    int resource_id;      /**< ID passado à liberação, inclusive zero ou -1 no rollback. */
+    mpmc_result_t result; /**< Falha individual, com o errno original preservado. */
 } shm_cleanup_error_t;
 
 /**
@@ -91,56 +95,102 @@ typedef struct {
 } shm_cleanup_reporter_t;
 
 /**
- * @brief Cria e associa um segmento de 2048 bytes por estrutura lógica.
+ * @brief Cria e inicializa um buffer e seu conjunto de semáforos por estrutura lógica.
  * @param[out] out Recebe o backend criado; recebe NULL em falha, quando o ponteiro é válido.
  * @param producer_count Número positivo de estruturas independentes.
  * @param reporter Destino dos diagnósticos de rollback; pode ser NULL.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
- * - MPMC_OK: backend alocado, segmentos criados e associados ao processo, com os
- *   cabeçalhos dos buffers inicializados; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: out nulo ou producer_count zero; system_errno é zero.
- * - MPMC_ERR_SYS: falha em malloc(), calloc(), shmget() ou shmat(); system_errno contém
- *   o errno capturado na operação que falhou, preservado durante a limpeza.
+ * - MPMC_OK: segmentos de 2048 bytes associados, buffers vazios e semáforos
+ *   inicializados; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: out nulo ou producer_count zero, com system_errno zero;
+ *   ou shmget(), shmat(), semget() ou semctl(SETVAL) rejeitou um argumento;
+ *   system_errno preserva o errno capturado nessa chamada.
+ * - MPMC_ERR_SHUTDOWN: shmat() ou semctl(SETVAL) retornou EIDRM,
+ *   preservado em system_errno.
+ * - MPMC_ERR_SYS: falha em malloc(), calloc(), shmget(), shmat(), semget() ou
+ *   semctl(SETVAL) sem categoria específica; system_errno preserva o errno
+ *   capturado na operação que falhou, inclusive durante a limpeza.
  * @post Em sucesso, *out contém o backend com producer_count segmentos associados,
  * cada um com buffer vazio, índices e total consumido zerados e capacidade calculada.
+ * O conjunto correspondente contém mutex=1, empty=capacity e full=0.
  * Em falha, *out permanece NULL quando out é válido, as alocações locais são liberadas
- * e a limpeza dos segmentos parcialmente criados é tentada.
+ * e a limpeza dos recursos das entradas visitadas, inclusive a parcial, é tentada.
  * @note Falhas de rollback são comunicadas por reporter e não substituem o erro
  * original de criação ou associação retornado pela função. Sem reporter habilitado,
  * essas falhas secundárias não ficam disponíveis após o retorno.
- * @note A criação de semáforos ainda não está implementada nesta função.
  */
 mpmc_result_t shm_backend_create(
-    shm_backend_t **out, size_t producer_count, const shm_cleanup_reporter_t *reporter
+    shm_backend_t **out,
+    size_t producer_count,
+    const shm_cleanup_reporter_t *reporter
 );
 
 /**
  * @brief Insere mensagem no buffer circular do índice escolhido.
- * @param backend Instância do backend herdada no processo produtor.
- * @param producer_id Índice válido 1..p.
- * @param message Mensagem lógica, com o identificador da operação produtora.
- * @return Estrutura mpmc_result_t com o seguinte estado do campo status:
- * - MPMC_ERR_STATE: operação ainda não implementada; system_errno é zero.
- * @details Contrato previsto: reserva `empty`, adquire `mutex`, escreve e atualiza `tail`,
- * solta `mutex` e sinaliza `full`. Não mantém mutex enquanto espera espaço.
+ * @param backend Instância criada com sucesso, herdada pelo processo produtor.
+ * @param producer_id Índice lógico de destino, no intervalo 1..p.
+ * @param[in] message Mensagem copiada integralmente, sem alteração de seus metadados.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: mensagem inserida e disponibilizada aos consumidores; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: backend ou message nulo, com system_errno zero; ou
+ *   semop() rejeitou os argumentos/limites da operação, com errno em system_errno.
+ * - MPMC_ERR_INVALID_INDEX: producer_id fora de 1..p, com system_errno zero; ou
+ *   semop() retornou EFBIG por índice de semáforo inexistente, preservado em system_errno.
+ * - MPMC_ERR_INTERRUPTED: aquisição interrompida em semop(); system_errno contém EINTR.
+ * - MPMC_ERR_SHUTDOWN: semop() retornou EIDRM por remoção do conjunto;
+ *   system_errno preserva EIDRM.
+ * - MPMC_ERR_SYS: outra falha em semop(); system_errno contém o errno capturado.
+ * @pre Para backend não nulo e producer_id válido, o segmento está associado,
+ * o buffer inicializado e o conjunto de três semáforos disponível.
+ * @pre message não nulo aponta para uma mensagem legível durante a chamada.
+ * @details Aguarda espaço e exclusão mútua sem manter uma reserva parcial durante
+ * a espera. O envio não aguarda consumo e ainda não consulta um contexto de ACK.
+ * @post Em sucesso, a mensagem ocupa a posição FIFO seguinte; o total consumido não muda.
+ * @warning Se a aquisição falhar, o buffer não é alterado. Se a publicação posterior
+ * falhar, a inserção já ocorreu e não é desfeita. O retorno de erro não permite
+ * concluir que a mensagem deixou de ser inserida nem repetir o envio sem avaliação.
  */
-mpmc_result_t
-shm_backend_send(shm_backend_t *backend, size_t producer_id, const message_t *message);
+mpmc_result_t shm_backend_send(
+    shm_backend_t *backend,
+    size_t producer_id,
+    const message_t *message
+);
 
 /**
  * @brief Retira mensagem de um buffer circular.
- * @param backend Backend inicializado.
+ * @param backend Instância criada com sucesso, herdada pelo processo consumidor.
  * @param producer_id Índice de origem 1..p.
- * @param out Recebe item em sucesso.
- * @param blocking Habilita/desabilita espera por `full`.
- * @return Estrutura mpmc_result_t com o seguinte estado do campo status:
- * - MPMC_ERR_STATE: operação ainda não implementada; system_errno é zero.
- * @details Contrato previsto: reserva `full`, adquire mutex, retira e atualiza `head`,
- * contabiliza, solta mutex, sinaliza `empty`, confirma consumo se solicitado.
- * A confirmação não deve depender de mutex do buffer ainda adquirido.
+ * @param[out] out Recebe a mensagem retirada, incluindo todos os metadados originais.
+ * @param blocking Se true, aguarda mensagens; se false, não espera itens futuros.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: mensagem retirada, consumo contado e vaga disponibilizada; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: backend ou out nulo, com system_errno zero; ou semop()
+ *   rejeitou os argumentos/limites da operação, com errno em system_errno.
+ * - MPMC_ERR_INVALID_INDEX: producer_id fora de 1..p, com system_errno zero; ou
+ *   semop() retornou EFBIG, preservado em system_errno.
+ * - MPMC_ERR_WOULD_BLOCK: nenhum item disponível com blocking=false;
+ *   system_errno contém EAGAIN capturado em semop().
+ * - MPMC_ERR_INTERRUPTED: aquisição interrompida em semop(); system_errno contém EINTR.
+ * - MPMC_ERR_SHUTDOWN: semop() retornou EIDRM por remoção do conjunto;
+ *   system_errno preserva EIDRM.
+ * - MPMC_ERR_SYS: outra falha em semop(); system_errno contém o errno capturado.
+ * @pre Para backend não nulo e producer_id válido, o segmento está associado,
+ * o buffer inicializado e o conjunto de três semáforos disponível.
+ * @pre out não nulo aponta para uma mensagem gravável durante a chamada.
+ * @post Em sucesso, out contém a mensagem mais antiga e consumed_total aumenta em um.
+ * @note blocking=false aplica IPC_NOWAIT apenas à espera por itens. A chamada ainda
+ * pode aguardar a exclusão mútua do buffer.
+ * @note A retirada ainda não publica confirmação de consumo; o protocolo de ACK é pendente.
+ * @warning Falhas anteriores à retirada preservam out e o buffer. Se a publicação
+ * da vaga falhar depois da retirada, out já contém a mensagem e a contagem já foi
+ * incrementada. A função não reinsere o item nem desfaz essa contagem.
  */
-mpmc_result_t
-shm_backend_receive(shm_backend_t *backend, size_t producer_id, message_t *out, bool blocking);
+mpmc_result_t shm_backend_receive(
+    shm_backend_t *backend,
+    size_t producer_id,
+    message_t *out,
+    bool blocking
+);
 
 /**
  * @brief Reserva mecanismo de confirmação para uma operação produtora.
@@ -149,11 +199,14 @@ shm_backend_receive(shm_backend_t *backend, size_t producer_id, message_t *out, 
  * @param expected Quantidade total de confirmações (1..1024).
  * @return Estrutura mpmc_result_t com o seguinte estado do campo status:
  * - MPMC_ERR_STATE: operação ainda não implementada; system_errno é zero.
- * @note Consumidores podem precisar de um identificador de ACK no envelope
- * físico do buffer; a codificação é detalhe privado deste backend.
+ * @note O contrato previsto associa a solicitação ao operation_id em um registro
+ * compartilhado de operações; a política de ACK não é um campo de message_t.
  */
-mpmc_result_t
-shm_backend_ack_begin(shm_backend_t *backend, uint64_t operation_id, unsigned expected);
+mpmc_result_t shm_backend_ack_begin(
+    shm_backend_t *backend,
+    uint64_t operation_id,
+    unsigned expected
+);
 
 /**
  * @brief Aguarda confirmação de todos os consumos de uma operação.
@@ -179,15 +232,32 @@ mpmc_result_t shm_backend_ack_end(shm_backend_t *backend, uint64_t operation_id)
  * @brief Obtém total de mensagens consumidas, com sincronização adequada.
  * @param backend Instância no supervisor.
  * @param producer_id Índice lógico 1..p.
- * @param out_count Destino do acumulador de consumo deste segmento.
+ * @param[out] out_count Recebe uma cópia do total acumulado de retiradas deste segmento.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
- * - MPMC_OK: out_count recebe zero provisoriamente; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: backend ou out_count nulo, ou producer_id fora de 1..p;
- *   system_errno é zero.
- * @note A consulta sincronizada do contador compartilhado ainda depende da #10.
+ * - MPMC_OK: total lido sob exclusão mútua e escrito em out_count; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: backend ou out_count nulo, com system_errno zero; ou
+ *   semop() rejeitou os argumentos/limites da operação, com errno em system_errno.
+ * - MPMC_ERR_INVALID_INDEX: producer_id fora de 1..p, com system_errno zero; ou
+ *   semop() retornou EFBIG, preservado em system_errno.
+ * - MPMC_ERR_INTERRUPTED: aquisição do mutex interrompida em semop();
+ *   system_errno contém EINTR.
+ * - MPMC_ERR_SHUTDOWN: semop() retornou EIDRM por remoção do conjunto;
+ *   system_errno preserva EIDRM.
+ * - MPMC_ERR_SYS: outra falha em semop(); system_errno contém o errno capturado.
+ * @pre Para backend não nulo e producer_id válido, o segmento está associado,
+ * o buffer inicializado e o conjunto de três semáforos disponível.
+ * @pre out_count não nulo aponta para um uint64_t gravável.
+ * @post Em erro, out_count permanece inalterado quando válido.
+ * @note A leitura pode aguardar o mutex. Seu resultado é uma fotografia do contador;
+ * retiradas concorrentes posteriores podem aumentar o total antes do retorno.
+ * @note O contador inclui cada retirada executada, mesmo se a liberação posterior
+ * da vaga retornar erro. Não é calculado a partir dos ACKs.
  */
-mpmc_result_t
-shm_backend_consumed_count(shm_backend_t *backend, size_t producer_id, uint64_t *out_count);
+mpmc_result_t shm_backend_consumed_count(
+    shm_backend_t *backend,
+    size_t producer_id,
+    uint64_t *out_count
+);
 
 /**
  * @brief Desanexa mapeamentos herdados pelo processo filho.
@@ -196,14 +266,22 @@ shm_backend_consumed_count(shm_backend_t *backend, size_t producer_id, uint64_t 
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: associações locais desfeitas e estado local liberado, ou backend nulo;
  *   system_errno é zero.
- * - MPMC_ERR_SYS: falha em shmdt(); system_errno contém o errno capturado na primeira
- *   falha. Cada falha individual é comunicada por reporter, quando habilitado.
+ * - MPMC_ERR_INVALID_ARG: primeira falha de shmdt() retornou EINVAL, preservado
+ *   em system_errno.
+ * - MPMC_ERR_SYS: primeira falha de shmdt() tem outra causa; system_errno contém
+ *   o errno capturado nessa chamada.
+ * @pre Se backend não for nulo, aponta para uma instância válida.
  * @details Tenta todas as desassociações, mesmo após uma falha, e libera o estado
  * local. Os segmentos globais permanecem sob responsabilidade do supervisor.
+ * Os conjuntos de semáforos também são preservados. Cada falha é comunicada por
+ * reporter, quando habilitado, com o identificador do segmento envolvido.
+ * @note Backend nulo não executa liberação nem chama a callback.
  * @post O backend é liberado mesmo em erro e não pode ser reutilizado após o retorno.
  */
-mpmc_result_t
-shm_backend_worker_close(shm_backend_t *backend, const shm_cleanup_reporter_t *reporter);
+mpmc_result_t shm_backend_worker_close(
+    shm_backend_t *backend,
+    const shm_cleanup_reporter_t *reporter
+);
 
 /**
  * @brief Remove objetos IPC e libera estado pertencente ao processo pai.
@@ -212,12 +290,19 @@ shm_backend_worker_close(shm_backend_t *backend, const shm_cleanup_reporter_t *r
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: desassociações e solicitações de remoção concluídas, ou backend nulo;
  *   system_errno é zero.
- * - MPMC_ERR_SYS: falha em shmdt() ou shmctl(IPC_RMID); system_errno contém o errno
- *   capturado na primeira falha. Cada falha individual é comunicada por reporter,
- *   quando habilitado.
+ * - MPMC_ERR_INVALID_ARG: primeira falha de shmdt(), semctl(IPC_RMID) ou
+ *   shmctl(IPC_RMID) retornou EINVAL, preservado em system_errno.
+ * - MPMC_ERR_SHUTDOWN: primeira falha de semctl(IPC_RMID) ou shmctl(IPC_RMID)
+ *   retornou EIDRM, preservado em system_errno.
+ * - MPMC_ERR_SYS: primeira falha de shmdt(), semctl(IPC_RMID) ou shmctl(IPC_RMID)
+ *   tem outra causa; system_errno contém o errno capturado nessa chamada.
+ * @pre Se backend não for nulo, suas entradas visitáveis estão preparadas.
  * @pre Todos os trabalhadores foram interrompidos/recolhidos.
  * @details Aceita estado parcialmente inicializado. Tenta todas as desassociações
- * e remoções de segmentos, mesmo após falhas, e libera as alocações locais.
+ * e remoções de conjuntos e segmentos, mesmo após falhas, e libera as alocações locais.
+ * Cada falha é comunicada por reporter, quando habilitado; operation identifica
+ * se resource_id pertence a um segmento ou a um conjunto de semáforos.
+ * @note Backend nulo não executa liberação nem chama a callback.
  * @post O backend é liberado mesmo em erro e não pode ser reutilizado após o retorno.
  */
 mpmc_result_t shm_backend_destroy(shm_backend_t *backend, const shm_cleanup_reporter_t *reporter);
