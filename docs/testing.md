@@ -18,13 +18,16 @@ não é suficiente para provar correção concorrente.
 | U04 | `command` | `ack` igual a 0, 1, 2, 3 |
 | U05 | `command` | `produz 0` aceito; `consome 0` rejeitado |
 | U06 | `command` | `i` maior que `p` rejeitado |
-| U07 | `producer` | Mapeamento *striped* com `n` divisível/não divisível por `p` |
+| U07 | `producer` | Mapeamento *striped* com `n` divisível/não divisível por `p` (`test_producer_routing`: função pura `producer_route_destination`, `p=1`, `n<p`, `n=1024`, pré-condições `p>0` e ordinal de base 1) |
 | U08 | `message` | Sequências crescentes por PID de produtor; timestamps preenchidos |
 | U09 | `status` | Conversão de códigos de retorno a mensagens legíveis |
 | U10 | `message`/ACK | Identidade `(operation_id, sender_pid, sequence)` preservada até o ACK; `sent_at` não é usado como chave |
 | U11	| `sem` | Criação, inicialização, operações P/V, IPC_NOWAIT, índice inválido, interrupção por EINTR e remoção de semáforos |
 | U12 | `shm_ring` | Inicialização, capacidade de 63 mensagens, vazio/cheio, FIFO com voltas e mensagens pendentes, contagem acumulada e limites do segmento |
 | U13 | `shm_backend` | Inicialização de todos os cabeçalhos em áreas simuladas alinhadas, previamente preenchidas com bytes não nulos |
+| U14 | `transport` | Fachada com backends substitutos (`test_transport`): despacho de cada operação ao backend do modo, com os argumentos exatos; propagação de `status`/`system_errno` e dos dados de saída; contexto nulo, modo inválido, `p` zero e saída nula; falha de alocação e de criação do backend em `ipc_init()` sem vazar nem destruir o backend; `ipc_worker_close()` sem remover recursos globais e `ipc_destroy()` sem chamar o fechamento do filho |
+| U15 | `protocol` | Propriedades determinísticas (`test_protocol_properties`): textos de status distintos e formatação com `errno`/truncamento; composição de metadados, chave `(operation_id, sender_pid, sequence)` sem colisões (e, em `test_supervisor`, `operation_id` único e consecutivo para 20 trabalhos despachados) entre operações intercaladas; sequência por processo com filhos reais sincronizados por pipes (sem zumbis); distribuição *striped* `1 + ((k-1) % p)` exaustiva para `p` 1..40, `n` 1..130 e limites até 1024; capacidade de 63 mensagens, alinhamento e área de guarda do segmento de 2048 bytes |
+| U16 | `supervisor`/relatório | Fixture controlada (`test_supervisor_report`): três filhos simulados com saída normal, término por sinal e falha; associação por PID, `operation_id` e tipo sem assumir ordem de coleta; durações monotônicas com virada de segundo, regressão e falha do relógio; duração total do processo principal com e sem relógio; contagens controladas para estruturas 1..p; substituição de `fork()`, `waitpid()`, relógio e fachada IPC, sem criar filhos reais ou recursos System V |
 
 ## Testes de integração (repetir para modos 1 e 2)
 
@@ -98,7 +101,7 @@ recursos IPC de outros usuários/processos por `ipcrm`.
 
 ```bash
 make debug
-make unit   # testes de command, supervisor, msg, sem, error, wrappers, backend e buffer shm
+make unit   # testes de command, supervisor, msg, sem, error, wrappers, backend, buffer shm e roteamento cíclico do produtor
 make test   # unitários + smoke + integração do REPL
 make docs
 ```
@@ -106,6 +109,15 @@ make docs
 O `shutdown` imprime em stdout o relatório final (`supervisor_print_report()`): uma linha por
 filho recolhido (PID, operação, tipo, término e duração `S.mmm s`), a contagem de filhos e o
 tempo total de operação do `mpmc`. O formato é verificado nos testes unitário e de integração.
+
+A fixture `tests/unit/test_supervisor_report.c` (U16) compila um objeto dedicado de
+`supervisor.c`, substituindo `fork()`, `waitpid()`, `clock_gettime()` e as funções da
+fachada IPC por implementações controladas. Ela verifica estados de término, associação
+dos dados por processo, durações monotônicas não negativas, duração total e contagens
+fixas para as estruturas de 1 a `p`, sem depender da ordem em que os filhos são recolhidos
+ou de visibilidade do heap privado dos filhos. As contagens são valores injetados pela
+fixture: isso não valida a consolidação real dos backends nem a drenagem de eventos, que
+permanecem fora deste teste e no escopo da issue #21.
 
 Os testes de resultados verificam `status` e `system_errno` separadamente: sucesso e
 validação sem causa de sistema usam zero; falhas preservam a causa original mesmo após
@@ -165,6 +177,12 @@ make MODE=debug BUILD_DIR=build/sanitize \
 build/sanitize/unit/test_shm_ring
 build/sanitize/unit/test_shm_backend
 ```
+
+`tests/unit/test_transport.c` (U14) liga `transport.c`, compilado com `calloc()`/`free()`
+redirecionados, a backends substitutos definidos no próprio teste, e a espiões de `msgget()`,
+`msgsnd()`, `msgrcv()`, `shmget()`, `semget()` e `semop()`. Ele prova o despacho e os contratos
+da fachada sem depender de nenhuma primitiva System V funcional; FIFO, ACK e limpeza reais dos
+dois paradigmas continuam nos testes dos backends (`test_transport_contract` e integração).
 
 O alvo `test` também executa `tests/integration/test_repl.c`, que abre um pseudo-terminal
 para verificar o prompt inicial, seu redesenho após o aviso de término de um filho e o

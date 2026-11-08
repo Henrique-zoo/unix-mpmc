@@ -11,6 +11,7 @@
  *   devolva erro (o REPL não deve encerrar) e os demais jobs continuam vivos;
  * - a duração é monotônica e coerente com o tempo real decorrido;
  * - shutdown recolhe todos os filhos e preserva os relatórios (idempotente);
+ * - operation_id é único e consecutivo para vários trabalhos, e casa com o tipo despachado;
  * - fork() malsucedido não registra filho, não consome operation_id e restaura a
  *   máscara de sinais.
  *
@@ -342,6 +343,60 @@ static void test_natural_exit_report(void) {
 }
 
 /**
+ * @brief Confere que operation_id é único, não nulo e associado ao tipo de cada trabalho.
+ * @details Despacha 20 comandos alternando produz/consome (cruzando o crescimento do
+ * vetor de filhos, que começa com 8 posições). Os ids atribuídos devem ser exatamente
+ * 1..20, sem repetição, e o tipo de cada relatório deve corresponder ao ordinal do
+ * despacho, independentemente da ordem em que os filhos terminem. Não depende de
+ * escalonamento: só se espera que todos os filhos sejam recolhidos.
+ */
+static void test_operation_ids_distinct(void) {
+    enum { JOBS = 20 };
+    supervisor_t *supervisor = new_supervisor();
+    unsetenv("MPMC_TEST_WORKER_HANG");
+
+    for (unsigned job = 1u; job <= JOBS; ++job) {
+        command_t command = make_command(job % 2u == 1u ? COMMAND_PRODUCE : COMMAND_CONSUME);
+        CHECK(supervisor_dispatch(supervisor, &command).status == MPMC_OK, "dispatch %u", job);
+    }
+    CHECK(wait_for_reports(supervisor, JOBS, 10000), "todos os filhos devem ser recolhidos");
+    CHECK(supervisor_report_count(supervisor) == JOBS, "um relatório por trabalho");
+
+    bool seen[JOBS + 1u] = {false};
+    for (size_t index = 0u; index < supervisor_report_count(supervisor); ++index) {
+        child_report_t report;
+        CHECK(supervisor_report_get(supervisor, index, &report).status == MPMC_OK, "report_get");
+        CHECK(
+            report.operation_id >= 1u && report.operation_id <= JOBS,
+            "operation_id fora de 1..%u: %llu",
+            (unsigned)JOBS,
+            (unsigned long long)report.operation_id
+        );
+        if (report.operation_id >= 1u && report.operation_id <= JOBS) {
+            CHECK(
+                !seen[report.operation_id],
+                "operation_id %llu repetido",
+                (unsigned long long)report.operation_id
+            );
+            seen[report.operation_id] = true;
+            command_kind_t expected =
+                report.operation_id % 2u == 1u ? COMMAND_PRODUCE : COMMAND_CONSUME;
+            CHECK(
+                report.kind == expected,
+                "tipo do operation_id %llu",
+                (unsigned long long)report.operation_id
+            );
+        }
+    }
+    for (unsigned id = 1u; id <= JOBS; ++id) {
+        CHECK(seen[id], "operation_id %u ausente", id);
+    }
+
+    CHECK(supervisor_shutdown(supervisor).status == MPMC_OK, "shutdown");
+    supervisor_destroy(supervisor);
+}
+
+/**
  * @brief Confere relatório vazio, argumentos nulos e preservação do erro de escrita.
  */
 static void test_print_report_empty_and_guards(void) {
@@ -581,6 +636,7 @@ static void test_fork_failure_with_active_job(void) {
  */
 int main(void) {
     test_natural_exit_report();
+    test_operation_ids_distinct();
     test_report_get_guards();
     test_print_report_empty_and_guards();
     test_fork_failure();

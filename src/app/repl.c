@@ -225,7 +225,14 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
             result = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = poll_errno};
             break;
         }
-        if (ready > 0 && ((input->revents | wake->revents) & (POLLERR | POLLNVAL)) != 0) {
+        if (ready > 0 && (wake->revents & (POLLERR | POLLNVAL)) != 0) {
+            result = (mpmc_result_t){.status = MPMC_ERR_SYS};
+            break;
+        }
+        if (ready > 0 && (input->revents & POLLNVAL) != 0 && (input->revents & POLLERR) == 0) {
+            input->revents = POLLIN;
+        }
+        if (ready > 0 && (input->revents & POLLERR) != 0) {
             result = (mpmc_result_t){.status = MPMC_ERR_SYS};
             break;
         }
