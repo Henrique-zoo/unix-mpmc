@@ -78,30 +78,21 @@ max_producers=$(sed -n 's/^#define MPMC_MAX_PRODUCERS[[:space:]]*\([0-9][0-9]*\)
 	include/mpmc/config.h)
 [ -n "$max_producers" ] || fail_early 'MPMC_MAX_PRODUCERS não encontrado em include/mpmc/config.h'
 
-## @brief Informa se o sistema comporta $1 segmentos de memória compartilhada System V.
-## @param $1 Quantidade de segmentos necessária (um por estrutura, anexados no mesmo processo).
-## @details Só restringe no macOS, cujos limites padrão (kern.sysv.shmseg=8, shmmni=32) ficam
-## muito abaixo de MPMC_MAX_PRODUCERS. Em outros sistemas, ou se o limite não puder ser lido,
-## responde que comporta, para que o caso continue sendo exigido (por exemplo, no CI Linux).
-## @retval 0 O sistema comporta, ou não foi possível determinar.
-## @retval 1 Um limite do sistema é inferior a $1.
-shm_supports() {
-	[ "$(uname -s)" = Darwin ] || return 0
-	for key in kern.sysv.shmseg kern.sysv.shmmni; do
-		limit=$(sysctl -n "$key" 2>/dev/null) || return 0
-		case $limit in '' | *[!0-9]*) return 0 ;; esac
-		[ "$limit" -ge "$1" ] || return 1
-	done
-	return 0
-}
-
+# No macOS os limites SysV padrão (memória compartilhada: kern.sysv.shmseg=8, shmmni=32; filas
+# de mensagens: dezenas de filas, sem sysctl para consultar ou elevar) ficam muito abaixo de
+# MPMC_MAX_PRODUCERS. Lá, uma falha na criação dos recursos IPC com p no limite é avisada e o caso
+# é ignorado. Em outros sistemas, ou quando o limite é aceito, o caso continua sendo exigido.
 for mode in 1 2; do
-	if [ "$mode" = 1 ] && ! shm_supports "$max_producers"; then
-		echo "aviso: limites SysV do sistema abaixo de $max_producers segmentos;" \
-			"caso de p = $max_producers no paradigma 1 ignorado (eleve kern.sysv.shmseg/shmmni)" >&2
+	limit_rc=0
+	printf 'shutdown\n' | "$binary" "$max_producers" "$mode" >"$tmp_dir/limit_out" 2>"$tmp_dir/limit_err" \
+		|| limit_rc=$?
+	if [ "$limit_rc" -ne 0 ] && [ "$(uname -s)" = Darwin ] \
+		&& grep -q 'não foi possível inicializar o supervisor' "$tmp_dir/limit_err"; then
+		echo "aviso: limites SysV do sistema não comportam p = $max_producers no paradigma $mode;" \
+			"caso ignorado" >&2
 		continue
 	fi
-	printf 'shutdown\n' | "$binary" "$max_producers" "$mode" >"$tmp_dir/limit_out" 2>"$tmp_dir/limit_err" \
+	[ "$limit_rc" -eq 0 ] \
 		|| fail_early "p = $max_producers (limite) deveria ser aceito no paradigma $mode"
 	[ ! -s "$tmp_dir/limit_err" ] || fail_early "p no limite não deveria gerar erro (paradigma $mode)"
 done
