@@ -1,10 +1,12 @@
 /**
  * @file test_msg_backend.c
- * @brief Testa a consolidação de consumo e a política de ACK entre processos.
+ * @brief Testa a consolidação de consumo, a política de ACK entre processos e as filas de dados.
  * @ingroup tests
  * @details Os consumidores são criados antes do registro de ACK no produtor,
  * verificando que a solicitação chega pelo envelope e não pelo heap herdado.
- * As esperas de confirmação usam alarm() como limite de tempo.
+ * As esperas de confirmação usam alarm() como limite de tempo. Verifica o isolamento
+ * entre filas, a ordem FIFO e o recebimento não bloqueante. Também testa a
+ * consolidação de eventos e a política de ACK entre processos.
  */
 #include <errno.h>
 #include <signal.h>
@@ -16,12 +18,320 @@
 
 static int failed(const char *text);
 static void on_alarm(int signal_number);
+static void test_arguments(void);
+static void test_queue_isolation(void);
+static void test_fifo(void);
+static void test_nonblocking_receive(void);
+static void check_message(const message_t *received, const message_t *expected);
+
+/**
+ * @brief Quantidade de verificações executadas nesta suíte.
+ */
+static unsigned checks;
+
+/**
+ * @brief Quantidade de verificações que registraram falha nesta suíte.
+ */
+static unsigned failures;
+
+/**
+ * @brief Registra uma verificação sem interromper a suíte.
+ * @param condition Expressão lógica avaliada uma única vez.
+ */
+#define CHECK(condition)                                                                           \
+    do {                                                                                           \
+        ++checks;                                                                                  \
+        if (!(condition)) {                                                                        \
+            ++failures;                                                                            \
+            fprintf(stderr, "FALHA %s:%d: %s\n", __FILE__, __LINE__, #condition);                  \
+        }                                                                                          \
+    } while (0)
+
+/**
+ * @brief Executa uma operação e confere status e system_errno.
+ * @param call Expressão que retorna mpmc_result_t.
+ * @param expected_status Categoria de resultado esperada.
+ * @param expected_errno Valor esperado para o errno armazenado no resultado.
+ */
+#define CHECK_RESULT(call, expected_status, expected_errno)                                        \
+    do {                                                                                           \
+        mpmc_result_t result_ = (call);                                                            \
+        CHECK(result_.status == (expected_status));                                                \
+        CHECK(result_.system_errno == (expected_errno));                                           \
+    } while (0)
+
+/**
+ * @brief Confere argumentos inválidos do backend.
+ */
+static void test_arguments(void) {
+    msg_backend_t *backend = NULL;
+    message_t message = {
+        .sender_pid = getpid(),
+        .sequence = 1u,
+        .operation_id = 1u,
+    };
+    message_t received = {0};
+
+    CHECK_RESULT(msg_backend_create(NULL, 2u), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_create(&backend, 0u), MPMC_ERR_INVALID_ARG, 0);
+    CHECK(backend == NULL);
+
+    CHECK_RESULT(msg_backend_send(NULL, 1u, &message), MPMC_ERR_INVALID_ARG, 0);
+
+    CHECK_RESULT(msg_backend_receive(NULL, 1u, &received, false), MPMC_ERR_INVALID_ARG, 0);
+
+    CHECK_RESULT(msg_backend_receive(NULL, 1u, NULL, false), MPMC_ERR_INVALID_ARG, 0);
+}
+
+/**
+ * @brief Verifica que cada índice lógico acessa somente sua própria fila.
+ */
+static void test_queue_isolation(void) {
+    msg_backend_t *backend = NULL;
+    mpmc_result_t result = msg_backend_create(&backend, 2u);
+
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+    CHECK(backend != NULL);
+
+    if (result.status != MPMC_OK || backend == NULL) return;
+
+    message_t first = {
+        .sender_pid = getpid(),
+        .sequence = 1u,
+        .sent_at = {.tv_sec = 10, .tv_nsec = 100},
+        .operation_id = 10u,
+    };
+
+    message_t second = {
+        .sender_pid = getpid(),
+        .sequence = 2u,
+        .sent_at = {.tv_sec = 20, .tv_nsec = 200},
+        .operation_id = 20u,
+    };
+
+    message_t received = {0};
+
+    /* Os índices válidos devem estar no intervalo 1..producer_count. */
+    CHECK_RESULT(msg_backend_send(backend, 0u, &first), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_send(backend, 3u, &first), MPMC_ERR_INVALID_ARG, 0);
+
+    CHECK_RESULT(msg_backend_receive(backend, 0u, &received, false), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_receive(backend, 3u, &received, false), MPMC_ERR_INVALID_ARG, 0);
+
+    /* Ponteiros nulos devem ser rejeitados. */
+    CHECK_RESULT(msg_backend_send(backend, 1u, NULL), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_receive(backend, 1u, NULL, false), MPMC_ERR_INVALID_ARG, 0);
+
+    /* A mensagem enviada à fila 1 não deve aparecer na fila 2. */
+    CHECK_RESULT(msg_backend_send(backend, 1u, &first), MPMC_OK, 0);
+
+    CHECK_RESULT(msg_backend_receive(backend, 2u, &received, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
+
+    /* A mensagem deve continuar disponível na fila 1. */
+    result = msg_backend_receive(backend, 1u, &received, false);
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+
+    if (result.status == MPMC_OK) {
+        check_message(&received, &first);
+    }
+
+    /* A mensagem enviada à fila 2 não deve aparecer na fila 1. */
+    CHECK_RESULT(msg_backend_send(backend, 2u, &second), MPMC_OK, 0);
+
+    CHECK_RESULT(msg_backend_receive(backend, 1u, &received, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
+
+    /* A mensagem deve estar disponível na fila 2. */
+    result = msg_backend_receive(backend, 2u, &received, false);
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+
+    if (result.status == MPMC_OK) {
+        check_message(&received, &second);
+    }
+
+    msg_backend_destroy(backend);
+}
+
+/**
+ * @brief Verifica que mensagens com diferentes tipos preservam a ordem FIFO.
+ * @details A primeira mensagem utiliza mtype 1 e a segunda utiliza mtype 2,
+ * pois somente a segunda operação possui registro de ACK.
+ */
+static void test_fifo(void) {
+    msg_backend_t *backend = NULL;
+    mpmc_result_t result = msg_backend_create(&backend, 1u);
+
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+    CHECK(backend != NULL);
+
+    if (result.status != MPMC_OK || backend == NULL) return;
+
+    message_t first = {
+        .sender_pid = getpid(),
+        .sequence = 1u,
+        .sent_at = {.tv_sec = 30, .tv_nsec = 100},
+        .operation_id = 30u,
+    };
+
+    message_t second = {
+        .sender_pid = getpid(),
+        .sequence = 2u,
+        .sent_at = {.tv_sec = 31, .tv_nsec = 200},
+        .operation_id = 31u,
+    };
+
+    message_t received = {0};
+
+    /* Somente a segunda operação deve solicitar ACK. */
+    result = msg_backend_ack_begin(backend, 31u, 1u);
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+
+    if (result.status != MPMC_OK) {
+        msg_backend_destroy(backend);
+        return;
+    }
+
+    result = msg_backend_send(backend, 1u, &first);
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+
+    if (result.status != MPMC_OK) {
+        (void)msg_backend_ack_end(backend, 31u);
+        msg_backend_destroy(backend);
+        return;
+    }
+
+    result = msg_backend_send(backend, 1u, &second);
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+
+    if (result.status != MPMC_OK) {
+        (void)msg_backend_ack_end(backend, 31u);
+        msg_backend_destroy(backend);
+        return;
+    }
+
+    /* A primeira mensagem deve ser recebida primeiro. */
+    result = msg_backend_receive(backend, 1u, &received, false);
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+
+    if (result.status != MPMC_OK) {
+        (void)msg_backend_ack_end(backend, 31u);
+        msg_backend_destroy(backend);
+        return;
+    }
+
+    check_message(&received, &first);
+
+    /* A segunda mensagem deve ser recebida em seguida. */
+    result = msg_backend_receive(backend, 1u, &received, false);
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+
+    if (result.status != MPMC_OK) {
+        (void)msg_backend_ack_end(backend, 31u);
+        msg_backend_destroy(backend);
+        return;
+    }
+
+    /*
+     * A espera por ACK só é executada quando a segunda mensagem foi
+     * efetivamente recebida e corresponde à operação registrada.
+     */
+    check_message(&received, &second);
+
+    struct sigaction action = {.sa_handler = on_alarm};
+    struct sigaction previous;
+    sigemptyset(&action.sa_mask);
+
+    int rc = sigaction(SIGALRM, &action, &previous);
+    CHECK(rc == 0);
+
+    if (rc == 0) {
+        alarm(2);
+        result = msg_backend_ack_wait(backend, 31u);
+        alarm(0);
+
+        CHECK(result.status == MPMC_OK);
+        CHECK(result.system_errno == 0);
+
+        CHECK(sigaction(SIGALRM, &previous, NULL) == 0);
+    }
+
+    CHECK_RESULT(msg_backend_ack_end(backend, 31u), MPMC_OK, 0);
+
+    msg_backend_destroy(backend);
+}
+
+/**
+ * @brief Verifica que o recebimento não bloqueante não espera por mensagens.
+ */
+static void test_nonblocking_receive(void) {
+    msg_backend_t *backend = NULL;
+    mpmc_result_t result = msg_backend_create(&backend, 1u);
+
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+    CHECK(backend != NULL);
+
+    if (result.status != MPMC_OK || backend == NULL) return;
+
+    message_t received = {0};
+    message_t message = {
+        .sender_pid = getpid(),
+        .sequence = 1u,
+        .sent_at = {.tv_sec = 40, .tv_nsec = 100},
+        .operation_id = 40u,
+    };
+
+    /* A fila vazia deve retornar WOULD_BLOCK imediatamente. */
+    CHECK_RESULT(msg_backend_receive(backend, 1u, &received, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
+
+    CHECK_RESULT(msg_backend_send(backend, 1u, &message), MPMC_OK, 0);
+
+    result = msg_backend_receive(backend, 1u, &received, false);
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+
+    if (result.status == MPMC_OK) {
+        check_message(&received, &message);
+    }
+
+    /* Depois do consumo, a fila deve estar vazia novamente. */
+    CHECK_RESULT(msg_backend_receive(backend, 1u, &received, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
+
+    msg_backend_destroy(backend);
+}
+
+/**
+ * @brief Confere todos os campos de uma mensagem.
+ * @param received Mensagem recebida.
+ * @param expected Mensagem esperada.
+ * @details Compara os campos individualmente, sem considerar padding.
+ */
+static void check_message(const message_t *received, const message_t *expected) {
+    CHECK(received->sender_pid == expected->sender_pid);
+    CHECK(received->sequence == expected->sequence);
+    CHECK(received->sent_at.tv_sec == expected->sent_at.tv_sec);
+    CHECK(received->sent_at.tv_nsec == expected->sent_at.tv_nsec);
+    CHECK(received->operation_id == expected->operation_id);
+}
 
 /**
  * @brief Executa o cenário de dois consumidores e confirmações seletivas.
  * @return Zero se contagens e ACKs corresponderem ao esperado; um em falha.
  */
 int main(void) {
+    test_arguments();
+    test_queue_isolation();
+    test_fifo();
+    test_nonblocking_receive();
+
     msg_backend_t *parent = NULL;
     mpmc_result_t result = msg_backend_create(&parent, 2u);
     if (result.status != MPMC_OK || parent == NULL) {
@@ -126,8 +436,9 @@ int main(void) {
     }
 
     msg_backend_destroy(parent);
+    printf("%u verificações adicionais de filas, %u falhas\n", checks, failures);
     puts("Message backend event tests passed.");
-    return 0;
+    return failures == 0u ? 0 : 1;
 }
 
 /**
