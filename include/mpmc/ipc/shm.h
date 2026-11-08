@@ -15,6 +15,9 @@
  * @defgroup sysv_primitives Primitivas System V
  * @ingroup ipc
  * @brief Operações de baixo nível e tradução de erros de chamadas de sistema.
+ * @details O kernel valida identificadores, tamanhos, endereços e buffers que
+ * recebe diretamente. O wrapper valida somente saídas que ele próprio escreve em C.
+ * Falhas de sistema preservam errno mesmo quando traduzidas para uma categoria específica.
  * @{ */
 
 /**
@@ -33,8 +36,9 @@
  *
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: segmento privado criado e identificador escrito em out_shmid; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: size zero ou out_shmid nulo; system_errno é zero.
- * - MPMC_ERR_SYS: falha em shmget(); system_errno contém o errno capturado nessa falha.
+ * - MPMC_ERR_INVALID_ARG: out_shmid nulo, com system_errno zero; ou shmget()
+ *   rejeitou size com EINVAL, inclusive tamanho zero; system_errno preserva EINVAL.
+ * - MPMC_ERR_SYS: outra falha em shmget(); system_errno contém o errno capturado.
  *
  * @pre size deve ser maior que zero.
  * @pre out_shmid deve apontar para uma variável válida.
@@ -44,10 +48,9 @@
  * quando o ponteiro é válido.
  *
  * @par Tratamento de errno
- * Em caso de falha de shmget(), retorna status MPMC_ERR_SYS e armazena
- * em system_errno o código de erro fornecido pelo sistema operacional.
- *
- * Erros de validação dos argumentos possuem system_errno igual a zero.
+ * Em falha de shmget(), system_errno preserva a causa fornecida pelo kernel,
+ * inclusive quando traduzida para MPMC_ERR_INVALID_ARG. Apenas a rejeição local
+ * de out_shmid nulo possui system_errno igual a zero.
  *
  * @warning O segmento criado deve ser posteriormente removido
  * por sysv_shm_remove() para evitar recursos IPC residuais.
@@ -78,11 +81,12 @@ mpmc_result_t sysv_shm_create(size_t size, int *out_shmid);
  * @param[out] out_addr Ponteiro que recebe o endereço inicial do segmento.
  *
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
- * - MPMC_OK: segmento associado com sucesso.
- * - MPMC_ERR_INVALID_ARG: shmid negativo ou ponteiro de saída nulo.
- * - MPMC_ERR_SYS: falha em shmat(), com o erro original armazenado em system_errno.
- *
- * Nos resultados MPMC_OK e MPMC_ERR_INVALID_ARG, system_errno é zero.
+ * - MPMC_OK: segmento associado com sucesso; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: out_addr nulo, com system_errno zero; ou shmat()
+ *   retornou EINVAL por identificador inválido, preservado em system_errno.
+ * - MPMC_ERR_SHUTDOWN: shmat() retornou EIDRM por segmento removido;
+ *   system_errno preserva EIDRM.
+ * - MPMC_ERR_SYS: outra falha em shmat(); system_errno contém o errno capturado.
  *
  * @pre out_addr deve apontar para uma variável válida.
  * @pre shmid deve identificar um segmento existente, acessível ao processo.
@@ -93,8 +97,8 @@ mpmc_result_t sysv_shm_create(size_t size, int *out_shmid);
  *
  * @par Tratamento de erros
  * Quando shmat() falha, o campo system_errno do resultado recebe o
- * valor de errno correspondente à falha. Nos demais casos, esse
- * campo é inicializado com zero.
+ * valor de errno correspondente à falha, independentemente da categoria traduzida.
+ * Em sucesso ou rejeição local de out_addr nulo, esse campo é zero.
  *
  * @note Processos distintos podem associar o mesmo segmento em
  * endereços virtuais diferentes.
@@ -110,8 +114,9 @@ mpmc_result_t sysv_shm_attach(int shmid, void **out_addr);
  *
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: associação desfeita com sucesso; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: address nulo; system_errno é zero.
- * - MPMC_ERR_SYS: falha em shmdt(); system_errno contém o errno capturado nessa falha.
+ * - MPMC_ERR_INVALID_ARG: shmdt() rejeitou um endereço sem associação válida com
+ *   EINVAL; system_errno preserva EINVAL.
+ * - MPMC_ERR_SYS: outra falha em shmdt(); system_errno contém o errno capturado.
  *
  * @post Em caso de sucesso, os ponteiros para a associação desfeita não devem mais ser usados.
  * @note Desanexar não equivale a remover o segmento do sistema.
@@ -128,8 +133,11 @@ mpmc_result_t sysv_shm_detach(const void *address);
  *
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: segmento marcado para remoção com sucesso; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: shmid negativo; system_errno é zero.
- * - MPMC_ERR_SYS: falha em shmctl(IPC_RMID); system_errno contém o errno capturado nessa falha.
+ * - MPMC_ERR_INVALID_ARG: shmctl(IPC_RMID) retornou EINVAL por identificador inválido;
+ *   system_errno preserva EINVAL.
+ * - MPMC_ERR_SHUTDOWN: shmctl(IPC_RMID) retornou EIDRM por segmento removido;
+ *   system_errno preserva EIDRM.
+ * - MPMC_ERR_SYS: outra falha em shmctl(IPC_RMID); system_errno contém o errno capturado.
  *
  * @warning Somente o supervisor deve solicitar remoção do objeto global, pois outros
  * processos podem estar usando o segmento.
@@ -152,23 +160,25 @@ mpmc_result_t sysv_shm_remove(int shmid);
  * @param[out] out_info Ponteiro que recebe os metadados do segmento.
  *
  * @return Estrutura mpmc_result_t com um dos seguintes estados:
- * - MPMC_OK: informações recuperadas com sucesso.
- * - MPMC_ERR_INVALID_ARG: identificador negativo ou ponteiro de saída nulo.
- * - MPMC_ERR_SYS: falha em shmctl(IPC_STAT); system_errno contém o errno
+ * - MPMC_OK: informações recuperadas com sucesso; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: shmctl(IPC_STAT) retornou EINVAL por identificador inválido
+ *   ou EFAULT por out_info inacessível; system_errno preserva o errno capturado.
+ * - MPMC_ERR_SHUTDOWN: shmctl(IPC_STAT) retornou EIDRM por segmento removido;
+ *   system_errno preserva EIDRM.
+ * - MPMC_ERR_SYS: outra falha em shmctl(IPC_STAT); system_errno contém o errno
  *   capturado nessa falha.
  *
- * Nos resultados MPMC_OK e MPMC_ERR_INVALID_ARG, system_errno é zero.
- *
- * @pre out_info deve apontar para uma estrutura shmid_ds válida.
+ * @pre Se out_info não for nulo, deve apontar para uma estrutura shmid_ds válida.
  *
  * @post Em caso de sucesso, *out_info contém os metadados do segmento.
- * Em caso de falha, *out_info permanece inalterado.
+ * Em caso de falha, *out_info permanece inalterado quando o ponteiro é válido.
  *
  * @note O campo shm_segsz de shmid_ds informa o tamanho do segmento,
  * em bytes, permitindo verificar o requisito de 2048 bytes do projeto.
  *
  * @note A operação não modifica o conteúdo nem as propriedades
  * do segmento consultado.
+ * @note out_info é passado diretamente ao kernel, inclusive quando nulo.
  */
 mpmc_result_t sysv_shm_stat(int shmid, struct shmid_ds *out_info);
 

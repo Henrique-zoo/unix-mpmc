@@ -96,16 +96,42 @@ static void on_alarm(int signal_number) {
 static void test_arguments(void) {
     int sentinel = -123;
 
-    CHECK_RESULT(sysv_sem_create(0, &sentinel), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(sysv_sem_create(0, &sentinel), MPMC_ERR_INVALID_ARG, EINVAL);
     CHECK(sentinel == -123);
 
     CHECK_RESULT(sysv_sem_create(UINT_MAX, &sentinel), MPMC_ERR_INVALID_ARG, 0);
     CHECK(sentinel == -123);
 
     CHECK_RESULT(sysv_sem_create(1, NULL), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(sysv_sem_set(-1, 0, 0), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(sysv_sem_change(-1, 0, -1, true), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(sysv_sem_remove(-1), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(sysv_sem_set(-1, 0, 0), MPMC_ERR_INVALID_ARG, EINVAL);
+    CHECK_RESULT(sysv_sem_change(-1, 0, -1, true), MPMC_ERR_INVALID_ARG, EINVAL);
+    CHECK_RESULT(sysv_sem_remove(-1), MPMC_ERR_INVALID_ARG, EINVAL);
+}
+
+/** @brief Delega argumentos ao kernel e verifica aplicação ou rejeição atômica do vetor. */
+static void test_atomic_apply(void) {
+    CHECK_RESULT(sysv_sem_set(owned_semid, 0, 1), MPMC_OK, 0);
+    CHECK_RESULT(sysv_sem_set(owned_semid, 1, 0), MPMC_OK, 0);
+    struct sembuf operations[] = {
+        {.sem_num = 0, .sem_op = -1, .sem_flg = IPC_NOWAIT},
+        {.sem_num = 1, .sem_op = -1, .sem_flg = IPC_NOWAIT},
+    };
+
+    CHECK_RESULT(sysv_sem_apply(owned_semid, operations, 0), MPMC_ERR_INVALID_ARG, EINVAL);
+    CHECK_RESULT(sysv_sem_apply(owned_semid, NULL, 1), MPMC_ERR_INVALID_ARG, EFAULT);
+    CHECK_RESULT(sysv_sem_apply(owned_semid, operations, 2), MPMC_ERR_WOULD_BLOCK, EAGAIN);
+    CHECK(semctl(owned_semid, 0, GETVAL) == 1);
+    CHECK(semctl(owned_semid, 1, GETVAL) == 0);
+
+    operations[1].sem_num = 2;
+    CHECK_RESULT(sysv_sem_apply(owned_semid, operations, 2), MPMC_ERR_INVALID_INDEX, EFBIG);
+    CHECK(semctl(owned_semid, 0, GETVAL) == 1);
+
+    operations[1].sem_num = 1;
+    operations[1].sem_op = 1;
+    CHECK_RESULT(sysv_sem_apply(owned_semid, operations, 2), MPMC_OK, 0);
+    CHECK(semctl(owned_semid, 0, GETVAL) == 0);
+    CHECK(semctl(owned_semid, 1, GETVAL) == 1);
 }
 
 /**
@@ -197,6 +223,9 @@ static void test_injected_errors(void) {
     } cases[] = {
         {EIDRM, MPMC_ERR_SHUTDOWN},
         {EINVAL, MPMC_ERR_INVALID_ARG},
+        {E2BIG, MPMC_ERR_INVALID_ARG},
+        {EFAULT, MPMC_ERR_INVALID_ARG},
+        {ERANGE, MPMC_ERR_INVALID_ARG},
         {EACCES, MPMC_ERR_SYS},
     };
 
@@ -209,6 +238,11 @@ static void test_injected_errors(void) {
         CHECK(result.status == cases[i].status);
         CHECK(result.system_errno == cases[i].error);
     }
+
+    /* A própria chamada decide a precedência entre múltiplos argumentos inválidos. */
+    injected_semop_errno = EACCES;
+    CHECK_RESULT(sysv_sem_apply(-1, NULL, 0), MPMC_ERR_SYS, EACCES);
+    injected_semop_errno = 0;
 }
 
 /**
@@ -226,6 +260,7 @@ int main(void) {
     if (result.status != MPMC_OK) return EXIT_FAILURE;
 
     test_values_and_indices();
+    test_atomic_apply();
     test_alter_only_permission();
     test_interruption();
     test_injected_errors();
