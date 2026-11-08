@@ -147,7 +147,7 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
 		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
 		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation \
-		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_transport_contract \
+		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_transport_contract \
 		$(UNIT_DIR)/test_transport
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
