@@ -323,8 +323,8 @@ static void check_message(const message_t *received, const message_t *expected) 
 }
 
 /**
- * @brief Executa o cenário de dois consumidores e confirmações seletivas.
- * @return Zero se contagens e ACKs corresponderem ao esperado; um em falha.
+ * @brief Executa os testes das filas de dados, cenário de dois consumidores e confirmações seletivas.
+ * @return Zero se todos os cenários passarem; um se falha.
  */
 int main(void) {
     test_arguments();
