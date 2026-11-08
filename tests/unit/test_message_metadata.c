@@ -10,6 +10,39 @@
 
 #include "mpmc/workers/producer.h"
 
+/* producer_run() is not exercised here; these doubles keep the metadata test
+ * independent of the transport/backend implementations. */
+size_t ipc_producer_count(const ipc_context_t *context) {
+    (void)context;
+    return 0u;
+}
+
+mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message_t *message) {
+    (void)context;
+    (void)producer_id;
+    (void)message;
+    return (mpmc_result_t){.status = MPMC_ERR_STATE};
+}
+
+mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsigned expected) {
+    (void)context;
+    (void)operation_id;
+    (void)expected;
+    return (mpmc_result_t){.status = MPMC_ERR_STATE};
+}
+
+mpmc_result_t ipc_ack_wait(ipc_context_t *context, uint64_t operation_id) {
+    (void)context;
+    (void)operation_id;
+    return (mpmc_result_t){.status = MPMC_ERR_STATE};
+}
+
+mpmc_result_t ipc_ack_end(ipc_context_t *context, uint64_t operation_id) {
+    (void)context;
+    (void)operation_id;
+    return (mpmc_result_t){.status = MPMC_ERR_STATE};
+}
+
 /**
  * @brief Verifica PID, sequência, operação e timestamp dos metadados.
  * @return Zero se todos os cenários passarem; um na primeira inconsistência,

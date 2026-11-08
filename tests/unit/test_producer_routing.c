@@ -50,6 +50,39 @@ static unsigned g_failures;
 /* Espiões: o roteamento não pode criar processos nem objetos IPC.     */
 /* ------------------------------------------------------------------ */
 
+/* producer_run() não é exercitado aqui; estes dublês evitam depender de um backend IPC
+ * ao compilar producer.c (necessário para producer_message_next()). */
+size_t ipc_producer_count(const ipc_context_t *context) {
+    (void)context;
+    return 0u;
+}
+
+mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message_t *message) {
+    (void)context;
+    (void)producer_id;
+    (void)message;
+    return (mpmc_result_t){.status = MPMC_ERR_STATE};
+}
+
+mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsigned expected) {
+    (void)context;
+    (void)operation_id;
+    (void)expected;
+    return (mpmc_result_t){.status = MPMC_ERR_STATE};
+}
+
+mpmc_result_t ipc_ack_wait(ipc_context_t *context, uint64_t operation_id) {
+    (void)context;
+    (void)operation_id;
+    return (mpmc_result_t){.status = MPMC_ERR_STATE};
+}
+
+mpmc_result_t ipc_ack_end(ipc_context_t *context, uint64_t operation_id) {
+    (void)context;
+    (void)operation_id;
+    return (mpmc_result_t){.status = MPMC_ERR_STATE};
+}
+
 static unsigned g_fork_calls;
 static unsigned g_ipc_calls;
 
