@@ -509,8 +509,39 @@ mesmo que vários comandos `produz` usem o mesmo índice lógico simultaneamente
 O supervisor deve parar de aceitar comandos, notificar/encerrar os filhos e recolhê-los
 antes de remover recursos globais. Nenhum filho pode ficar bloqueado indefinidamente
 em `semop`, `msgsnd`, `msgrcv` ou no ACK. A política exata de sinais e prazo para
-encerramento forçado é decisão de implementação, mas deve evitar zumbis e recursos
-System V abandonados.
+encerramento forçado deve evitar zumbis e recursos System V abandonados.
+
+A coordenação implementada concede dois segundos, comuns a todos os filhos, após
+o início da sinalização por `SIGTERM`. `CLOCK_MONOTONIC` define o instante limite;
+`poll()` espera notificações no self-pipe pelo tempo restante, e `waitpid()` com
+`WNOHANG` recolhe os filhos disponíveis. Despertares e `EINTR` não reiniciam o prazo.
+Ao vencer o prazo, o supervisor envia `SIGKILL` aos filhos restantes e os recolhe.
+Esse prazo limita a fase cooperativa; a coleta após `SIGKILL` ainda espera o kernel.
+
+A espera instala temporariamente o tratador de `SIGCHLD` e desbloqueia esse sinal,
+restaurando a ação e a máscara anteriores ao terminar. Portanto, funciona também
+quando chamada diretamente ou após o REPL restaurar seus tratadores. Falhas no
+relógio, configuração ou espera antecipam a tentativa de encerramento forçado e
+não substituem o primeiro erro. Se `SIGKILL` falhar, a coleta final não bloqueia:
+o chamador deve resolver o erro e repetir o shutdown antes de destruir o contexto.
+
+Um reporter opcional acompanha o fluxo de `supervisor_dispatch()` até a sinalização,
+coleta e espera. Cada falha é comunicada somente onde se origina; a propagação do
+resultado não duplica o diagnóstico. O retorno preserva o primeiro erro, inclusive
+quando a drenagem de eventos falha antes de uma coleta ou quando a restauração de
+sinais falha após outro erro. A callback recebe valores já capturados e pode alterar
+errno sem modificar as causas registradas. O chamador pode copiar os diagnósticos;
+o supervisor não retém o reporter nem seus dados.
+
+A união do diagnóstico é discriminada pela operação: envio usa PID e sinal, coleta
+e registro de relatório usam PID, e espera usa os bits de `poll.revents`. Erro do
+próprio `poll()` usa revents zero e errno capturado; erro indicado no descritor usa
+os bits originais e system_errno zero. Operações de configuração de sinais e de
+cálculo do prazo não possuem dados específicos. O fallback de duração zero nos
+relatórios continua sendo uma degradação permitida, sem diagnóstico de shutdown.
+
+Essa coordenação é exercitada com filhos controlados. A validação de shutdown
+durante todas as esperas reais de dados/espaço/ACK continua na integração de #20/#26.
 
 A remoção de um segmento/filas não é substituto geral para supervisão dos filhos.
 O `waitpid()` deve ser usado para recolher processos. `IPC_RMID` é responsabilidade
