@@ -87,6 +87,7 @@ static void test_argument_validation(void) {
     CHECK_RESULT(ipc_ack_begin(NULL, 1u, 1u), MPMC_ERR_INVALID_ARG, 0);
     CHECK_RESULT(ipc_ack_wait(NULL, 1u), MPMC_ERR_INVALID_ARG, 0);
     CHECK_RESULT(ipc_ack_end(NULL, 1u), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(ipc_ack_abandon(NULL, 1u), MPMC_ERR_INVALID_ARG, 0);
     CHECK_RESULT(ipc_poll_events(NULL), MPMC_ERR_INVALID_ARG, 0);
     CHECK_RESULT(ipc_consumed_count(NULL, 1u, &count), MPMC_ERR_INVALID_ARG, 0);
     CHECK(count == 77u);
@@ -154,6 +155,12 @@ static void test_queue_statuses(ipc_context_t *context) {
     CHECK_RESULT(ipc_ack_begin(context, 9u, 1u), MPMC_ERR_STATE, 0);
     CHECK_RESULT(ipc_ack_end(context, 9u), MPMC_OK, 0);
     CHECK_RESULT(ipc_ack_end(context, 9u), MPMC_OK, 0);
+
+    /* Operação sem dono: argumentos inválidos recusados; abandono é idempotente. */
+    CHECK_RESULT(ipc_ack_abandon(context, 0u), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(ipc_ack_abandon(context, 31u), MPMC_OK, 0);
+    CHECK_RESULT(ipc_ack_abandon(context, 31u), MPMC_OK, 0);
+    CHECK_RESULT(ipc_poll_events(context), MPMC_OK, 0);
 }
 
 /** @brief Valida dados, ACK por operação e contagem do supervisor sem bloqueio. */

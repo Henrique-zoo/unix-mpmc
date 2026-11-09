@@ -66,6 +66,8 @@ static struct {
     size_t init_calls;
     size_t destroy_calls;
     size_t poll_calls;
+    size_t abandon_calls;
+    uint64_t abandoned_id;
     size_t count_calls;
     size_t count_ids[FIXTURE_CLOCKS];
     uint64_t consumed[FIXTURE_PRODUCERS];
@@ -182,6 +184,17 @@ mpmc_result_t mpmc_test_ipc_poll_events(ipc_context_t *context) {
     }
 
     ++g_fixture.poll_calls;
+    return (mpmc_result_t){.status = MPMC_OK};
+}
+
+mpmc_result_t mpmc_test_ipc_ack_abandon(ipc_context_t *context, uint64_t operation_id) {
+    if (!g_fixture.active || context != &g_ipc_context) {
+        g_fixture.bad_ipc_context = true;
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    }
+
+    ++g_fixture.abandon_calls;
+    g_fixture.abandoned_id = operation_id;
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
@@ -432,6 +445,14 @@ static void test_controlled_report_presentation(void) {
             "regressão do relógio não produz duração negativa nem underflow"
         );
     }
+
+    /* Só o produtor que falhou (PID 4103, operação 3) tem seus ACKs descartados. */
+    CHECK(
+        g_fixture.abandon_calls == 1u && g_fixture.abandoned_id == 3u,
+        "ACKs abandonados apenas para o produtor com falha (chamadas=%zu, operação=%" PRIu64 ")",
+        g_fixture.abandon_calls,
+        g_fixture.abandoned_id
+    );
 
     CHECK(g_fixture.waitpid_calls == 4u, "somente os quatro estados esperados foram consultados");
     CHECK(!g_fixture.bad_wait_options, "reap utilizou WNOHANG nos cenários não bloqueantes");

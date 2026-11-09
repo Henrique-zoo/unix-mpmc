@@ -12,7 +12,10 @@
  * - argumentos, idempotência e seletividade de msg_backend_ack_abandon().
  * Todo bloqueio tem prazo: esperas de ACK usam alarm() e filhos são recolhidos com prazo,
  * sendo mortos por SIGKILL ao vencer. Cada cenário cria o próprio backend e só o pai remove
- * as filas, o que se confere por msgctl() no final. Reaproveita o padrão de
+ * as filas, o que se confere por msgctl() no final. Se o teste for interrompido (SIGINT,
+ * SIGTERM, SIGHUP) ou travar além do prazo, o tratador de sinais instalado em main() mata os
+ * filhos e remove as filas do backend em uso, para não deixar recursos System V órfãos (o
+ * pool de mensagens do macOS é pequeno e compartilhado). Reaproveita o padrão de
  * test_msg_stress.c e os cenários mockados de test_msg_backend.c, sem substituí-los.
  */
 #include <errno.h>
@@ -43,6 +46,10 @@
 static unsigned checks;
 static unsigned failures;
 static pid_t kids[MAX_KIDS];
+/** @brief Backend em uso pelo cenário atual, para limpeza em caso de sinal fatal. */
+static msg_backend_t *volatile live_backend;
+/** @brief PID do processo de teste; filhos herdam os tratadores e não removem filas. */
+static pid_t owner_pid;
 
 /** @brief Registra uma propriedade sem depender de assert(). */
 #define CHECK(condition)                                                                           \
@@ -60,6 +67,31 @@ static void on_alarm(int signal_number) {
     for (size_t index = 0u; index < MAX_KIDS; ++index) {
         if (kids[index] > 0) (void)kill(kids[index], SIGKILL);
     }
+}
+
+/** @brief Remove as filas do backend em uso; só chama funções seguras em tratador de sinal. */
+static void remove_live_queues(void) {
+    msg_backend_t *backend = live_backend;
+    if (backend == NULL) return;
+    for (size_t index = 0u; index < backend->producer_count; ++index) {
+        (void)msgctl(backend->data_queues[index], IPC_RMID, NULL);
+    }
+    (void)msgctl(backend->event_queue, IPC_RMID, NULL);
+    (void)msgctl(backend->ack_queue, IPC_RMID, NULL);
+}
+
+/**
+ * @brief Tratador de SIGINT/SIGTERM/SIGHUP: mata filhos, remove filas e termina.
+ * @details Filhos herdam este tratador; neles apenas terminam, sem remover filas do pai.
+ */
+static void on_fatal(int signal_number) {
+    if (getpid() == owner_pid) {
+        for (size_t index = 0u; index < MAX_KIDS; ++index) {
+            if (kids[index] > 0) (void)kill(kids[index], SIGKILL);
+        }
+        remove_live_queues();
+    }
+    _exit(128 + signal_number);
 }
 
 /** @brief Reduz o limite de bytes de uma fila; reduzir não exige privilégio. */
@@ -129,6 +161,7 @@ static void destroy_and_check(msg_backend_t *backend) {
     }
     ids[count++] = backend->event_queue;
     ids[count++] = backend->ack_queue;
+    live_backend = NULL;
     msg_backend_destroy(backend);
     for (size_t index = 0u; index < count; ++index) {
         CHECK(queued(ids[index]) == ULONG_MAX);
@@ -140,6 +173,7 @@ static void test_concurrent_operations(void) {
     msg_backend_t *backend = NULL;
     CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
     if (backend == NULL) return;
+    live_backend = backend;
     CHECK(set_qbytes(backend->data_queues[0], 4u * sizeof(message_t)));
     CHECK(set_qbytes(backend->ack_queue, 3u * sizeof(ack_event_t)));
     CHECK(set_qbytes(backend->event_queue, 2u * sizeof(consumption_event_t)));
@@ -197,11 +231,7 @@ static void test_early_ack_and_unregistered(void) {
     msg_backend_t *backend = NULL;
     CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
     if (backend == NULL) return;
-
-    struct sigaction action = {.sa_handler = on_alarm};
-    struct sigaction previous;
-    sigemptyset(&action.sa_mask);
-    CHECK(sigaction(SIGALRM, &action, &previous) == 0);
+    live_backend = backend;
 
     CHECK(msg_backend_ack_begin(backend, 5u, 3u).status == MPMC_OK);
     CHECK(msg_backend_ack_begin(backend, 6u, 1u).status == MPMC_OK);
@@ -247,7 +277,6 @@ static void test_early_ack_and_unregistered(void) {
     CHECK(queued(backend->ack_queue) == 0u);
     CHECK(msg_backend_ack_wait(backend, 9u).status == MPMC_ERR_STATE);
 
-    (void)sigaction(SIGALRM, &previous, NULL);
     destroy_and_check(backend);
 }
 
@@ -260,6 +289,7 @@ static int run_late_ack(bool abandon) {
     msg_backend_t *backend = NULL;
     CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
     if (backend == NULL) return -2;
+    live_backend = backend;
     CHECK(set_qbytes(backend->ack_queue, 2u * sizeof(ack_event_t)));
 
     /* Produtor ack=1 que desiste depois de enviar 4 mensagens (erro ou cancelamento). */
@@ -302,6 +332,7 @@ static void test_abandon_contract(void) {
     msg_backend_t *backend = NULL;
     CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
     if (backend == NULL) return;
+    live_backend = backend;
 
     CHECK(msg_backend_ack_abandon(backend, 0u).status == MPMC_ERR_INVALID_ARG);
     CHECK(msg_backend_ack_abandon(backend, (uint64_t)LONG_MAX + 1u).status
@@ -331,7 +362,24 @@ static void test_abandon_contract(void) {
     destroy_and_check(backend);
 }
 
+/** @brief Instala SIGALRM (interrompe esperas, mata filhos) e os tratadores fatais. */
+static bool install_handlers(void) {
+    struct sigaction alarm_action = {.sa_handler = on_alarm};
+    struct sigaction fatal_action = {.sa_handler = on_fatal};
+    sigemptyset(&alarm_action.sa_mask);
+    sigemptyset(&fatal_action.sa_mask);
+    return sigaction(SIGALRM, &alarm_action, NULL) == 0
+        && sigaction(SIGINT, &fatal_action, NULL) == 0
+        && sigaction(SIGTERM, &fatal_action, NULL) == 0
+        && sigaction(SIGHUP, &fatal_action, NULL) == 0;
+}
+
 int main(void) {
+    owner_pid = getpid();
+    if (!install_handlers()) {
+        perror("sigaction");
+        return 1;
+    }
     test_concurrent_operations();
     test_early_ack_and_unregistered();
     test_late_acks();

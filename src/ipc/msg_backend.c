@@ -472,6 +472,7 @@ void msg_backend_worker_close(msg_backend_t *backend) {
     free(backend->data_queues);
     free(backend->consumed_counts);
     free(backend->registrations);
+    free(backend->abandoned);
     free(backend);
 }
 
@@ -483,5 +484,6 @@ void msg_backend_destroy(msg_backend_t *backend) {
     free(backend->data_queues);
     free(backend->consumed_counts);
     free(backend->registrations);
+    free(backend->abandoned);
     free(backend);
 }
