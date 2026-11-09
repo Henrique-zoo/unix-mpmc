@@ -352,7 +352,12 @@ Um tipo recebido diferente de 1/2 ou corpo de tamanho diferente de `sizeof(messa
 nesta ordem:
 
 1. se o tipo recebido era 2, envia `{operation_id}` a `Q_ack` com `mtype = operation_id`;
-2. envia `{producer_id, count = 1}` a `Q_evt` (um evento por mensagem retirada, com ou sem ACK).
+2. envia `{producer_id, count}` a `Q_evt` (um evento por mensagem retirada, com ou sem ACK).
+   Com `blocking=true`, o envio espera se `Q_evt` estiver cheia. Com `blocking=false`,
+   nunca espera: sem espaço, o consumo é acumulado no processo consumidor e vai como
+   `count` maior no próximo evento do índice, ou em `ipc_worker_close()` (que pode
+   aguardar o supervisor drenar `Q_evt`, já fora de qualquer consumo). Assim `consome i n 2`
+   não fica preso por causa do supervisor e nenhuma retirada deixa de ser contada.
 
 O ACK precede o evento estatístico intencionalmente: se `Q_evt` estiver cheia, o
 consumidor pode aguardar o supervisor depois de já ter publicado a confirmação, evitando

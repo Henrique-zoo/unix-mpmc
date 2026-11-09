@@ -198,6 +198,14 @@ $(UNIT_DIR)/test_consumer_integration: tests/unit/test_consumer_integration.c \
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+$(UNIT_DIR)/test_consumer_concurrency: tests/unit/test_consumer_concurrency.c \
+		$(WORKERS_DIR)/consumer.c $(WORKERS_DIR)/producer.c $(WORKERS_DIR)/producer_routing.c \
+		src/ipc/transport.c src/ipc/msg_backend.c \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_producer_routing: tests/unit/test_producer_routing.c \
 		$(WORKERS_DIR)/producer_routing.c $(WORKERS_DIR)/producer.c
 	@mkdir -p $(dir $@)
@@ -292,7 +300,8 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 		$(UNIT_DIR)/test_msg_ack_lifecycle \
 		$(UNIT_DIR)/test_isolation \
 		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_consumer \
-		$(UNIT_DIR)/test_consumer_integration $(UNIT_DIR)/test_transport_contract \
+		$(UNIT_DIR)/test_consumer_integration $(UNIT_DIR)/test_consumer_concurrency \
+		$(UNIT_DIR)/test_transport_contract \
 		$(UNIT_DIR)/test_transport_parity \
 		$(UNIT_DIR)/test_transport $(UNIT_DIR)/test_protocol_properties \
 		$(UNIT_DIR)/test_supervisor_report $(UNIT_DIR)/test_supervisor_shutdown \
@@ -315,6 +324,7 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 	@$(UNIT_DIR)/test_producer
 	@$(UNIT_DIR)/test_consumer
 	@$(UNIT_DIR)/test_consumer_integration
+	@$(UNIT_DIR)/test_consumer_concurrency
 	@$(UNIT_DIR)/test_msg_backend
 	@$(UNIT_DIR)/test_msg_stress
 	@$(UNIT_DIR)/test_msg_ack_concurrency

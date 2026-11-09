@@ -3,7 +3,8 @@
  * @brief Testa consumer_run() sobre os backends SHM e MSG reais.
  * @ingroup tests
  * @details Cobre zero disponível, consumo parcial, n completo, ausência de reinserção,
- * interrupção do consumo bloqueante, liberação local no filho e ACK feito pelo backend.
+ * interrupção do consumo bloqueante, liberação local no filho, ACK feito pelo backend e consumo
+ * sem espera com a fila de eventos cheia (modo 2).
  * Os dois paradigmas executam a mesma sequência.
  */
 #include <errno.h>
@@ -222,6 +223,89 @@ static void test_backend_acks(ipc_context_t *context) {
     (void)ipc_ack_end(context, 50u);
 }
 
+/* Lote pequeno: cabe em qualquer msg_qbytes razoável sem exigir um consumidor concorrente. */
+#define EVENT_BACKLOG_BATCH 32u
+#define EVENT_BACKLOG_ROUNDS 80u /* 2560 eventos: excede Q_evt (1024 no Linux, 128 no macOS). */
+#define NONBLOCKING_CALL_LIMIT_MS 1000L
+
+static long elapsed_ms(const struct timespec *start) {
+    struct timespec now;
+    (void)clock_gettime(CLOCK_MONOTONIC, &now);
+    return (now.tv_sec - start->tv_sec) * 1000L + (now.tv_nsec - start->tv_nsec) / 1000000L;
+}
+
+/*
+ * Consumo sem espera com Q_evt cheia (modo 2). O filho consome muito mais do que cabe em
+ * Q_evt sem que ninguém drene a fila: nenhuma chamada pode ficar presa, e nenhum consumo
+ * pode se perder. Só depois de o filho reportar o supervisor passa a drenar Q_evt
+ * (o filho entrega os eventos acumulados ao fechar).
+ */
+static void test_nonblocking_with_full_event_queue(ipc_context_t *context) {
+    const uint64_t before = backend_total(context, 2u);
+    int fds[2];
+    if (pipe(fds) != 0) {
+        CHECK(false, "pipe");
+        return;
+    }
+    pid_t pid = fork();
+    if (pid == 0) {
+        child_report_t report = {.status = MPMC_OK};
+        for (unsigned round = 0u; round < EVENT_BACKLOG_ROUNDS; ++round) {
+            if (!send_messages(context, 2u, EVENT_BACKLOG_BATCH, 20u)) {
+                report.status = -1;
+                break;
+            }
+            struct timespec start;
+            (void)clock_gettime(CLOCK_MONOTONIC, &start);
+            mpmc_result_t result;
+            consumer_result_t out = run_consumer(
+                context, 2u, EVENT_BACKLOG_BATCH, CONSUMER_NONBLOCKING, &result
+            );
+            report.consumed_count += out.consumed_count;
+            if (result.status != MPMC_OK || elapsed_ms(&start) > NONBLOCKING_CALL_LIMIT_MS) {
+                report.status = result.status != MPMC_OK ? (int)result.status : -2;
+                break;
+            }
+        }
+        ssize_t written = write(fds[1], &report, sizeof report);
+        ipc_worker_close(context); /* entrega o acumulado; pode esperar o supervisor drenar */
+        _exit(written == (ssize_t)sizeof report ? 0 : 1);
+    }
+    CHECK(pid > 0, "fork");
+
+    child_report_t report = {.status = -3};
+    struct pollfd pfd = {.fd = fds[0], .events = POLLIN};
+    const bool got_report = poll(&pfd, 1, 15000) > 0
+        && read(fds[0], &report, sizeof report) == (ssize_t)sizeof report;
+    CHECK(got_report, "nonblocking consumer must not hang on a full event queue");
+    if (!got_report) {
+        (void)kill(pid, SIGKILL);
+    }
+    CHECK(report.status == MPMC_OK, "every nonblocking call must succeed without waiting");
+    CHECK(
+        report.consumed_count == EVENT_BACKLOG_BATCH * EVENT_BACKLOG_ROUNDS,
+        "child must consume every message it requested"
+    );
+
+    int wait_status = 0;
+    pid_t reaped = 0;
+    for (int attempt = 0; attempt < 1500 && reaped == 0; ++attempt) {
+        (void)ipc_poll_events(context); /* o supervisor drena enquanto o filho encerra */
+        reaped = waitpid(pid, &wait_status, WNOHANG);
+        if (reaped == 0) {
+            (void)poll(NULL, 0, 10);
+        }
+    }
+    CHECK(reaped == pid && WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 0,
+          "child must exit once the supervisor drains the events");
+    close(fds[0]);
+    close(fds[1]);
+    CHECK(
+        backend_total(context, 2u) == before + EVENT_BACKLOG_BATCH * EVENT_BACKLOG_ROUNDS,
+        "no consumption may be lost when Q_evt was full"
+    );
+}
+
 int main(void) {
     (void)alarm(WATCHDOG_SECONDS);
     for (current_mode = 1; current_mode <= 2; ++current_mode) {
@@ -238,6 +322,7 @@ int main(void) {
         /* ACK do modo 1 ainda é stub (issue #11): só o modo 2 pode verificá-lo. */
         if (current_mode == 2) {
             test_backend_acks(context);
+            test_nonblocking_with_full_event_queue(context);
         }
         ipc_destroy(context);
     }
