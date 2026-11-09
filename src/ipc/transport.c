@@ -84,6 +84,14 @@ mpmc_result_t ipc_ack_end(ipc_context_t *context, uint64_t operation_id) {
         : shm_backend_ack_end(context->shared_backend, operation_id);
 }
 
+mpmc_result_t ipc_ack_abandon(ipc_context_t *context, uint64_t operation_id) {
+    if (context == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    if (context->mode == IPC_MESSAGE_QUEUE) {
+        return msg_backend_ack_abandon(context->message_backend, operation_id);
+    }
+    return (mpmc_result_t){.status = MPMC_OK};
+}
+
 mpmc_result_t ipc_poll_events(ipc_context_t *context) {
     if (context == NULL) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};

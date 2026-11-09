@@ -56,13 +56,18 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count);
  *   preserva o errno capturado na operação que falhou.
  * @details Prepara estrutura cujo primeiro campo é `long mtype` positivo.
  * Usa mtype=2 se a operação possui contexto local de ACK ativo; caso contrário,
- * usa mtype=1. A política não acrescenta campos ao corpo message_t.
+ * usa mtype=1. Para operações com ACK, o envio usa IPC_NOWAIT; em fila cheia,
+ * drena ACKs da própria operação e aguarda brevemente antes de tentar novamente.
+ * Sem ACK, o envio permanece bloqueante. A política não acrescenta campos ao corpo message_t.
  * O tamanho enviado a msgsnd() exclui esse campo. O envelope não armazena
  * ponteiros de memória privados do processo produtor.
  * O envio é bloqueante: com a fila cheia (limite msg_qbytes), msgsnd() espera
  * vaga (backpressure) e prossegue quando um consumidor retira mensagens.
- * @warning Um ACK por mensagem em fila auxiliar limitada pode causar
- * deadlock por contrapressão. Ver docs/protocol.md para mitigação exigida.
+ * @note Um ACK por mensagem em fila auxiliar limitada causaria deadlock por
+ * contrapressão se o produtor bloqueasse em msgsnd() sem drenar os próprios ACKs. O laço
+ * acima evita isso: o produtor com ACK nunca fica bloqueado no kernel sem consumir os ACKs
+ * da sua operação. ACKs de operações sem dono são descartados por
+ * msg_backend_ack_abandon(). Ver docs/protocol.md.
  */
 mpmc_result_t msg_backend_send(
     msg_backend_t *backend,
@@ -92,14 +97,17 @@ mpmc_result_t msg_backend_send(
  *   system_errno; um corpo de tamanho incompatível também retorna este estado,
  *   mas com system_errno zero.
  * @details A remoção de dados e a publicação de eventos/ACKs não são uma
- * transação atômica de kernel; a recuperação de interrupções entre etapas é pendente.
+ * transação atômica de kernel; uma morte do consumidor entre as etapas pode deixar uma
+ * mensagem retirada sem ser contada (limite conhecido em docs/protocol.md).
  * Recebe com tipo zero para manter FIFO entre os dois tipos de dados e usa
  * o mtype recebido para decidir se deve emitir ACK.
  * @note Usa sysv_msg_receive_typed() para obter o tipo sem adicioná-lo a message_t.
  * @note Depois da retirada, o envio do evento e do ACK repete EINTR (não devolve
  * MPMC_ERR_INTERRUPTED), para reduzir a janela em que uma mensagem é retirada
- * sem ser contada. Esse envio pode bloquear se a fila de controle estiver cheia;
- * o protocolo que evita esse bloqueio pertence à #14.
+ * sem ser contada. Esse envio pode bloquear se a fila de controle estiver cheia; o
+ * bloqueio termina porque o produtor dono drena seus ACKs (send/ack_wait/ack_end), o
+ * supervisor drena os eventos (msg_backend_poll_events()) e descarta os ACKs de operações
+ * abandonadas (msg_backend_ack_abandon()).
  */
 mpmc_result_t msg_backend_receive(
     msg_backend_t *backend,
@@ -115,7 +123,8 @@ mpmc_result_t msg_backend_receive(
  * @param expected Quantidade de confirmações a aguardar (1..1024).
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: operação registrada localmente; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: backend nulo, operation_id zero ou expected fora de 1..1024.
+ * - MPMC_ERR_INVALID_ARG: backend nulo, operation_id zero ou maior que LONG_MAX,
+ *   ou expected fora de 1..1024.
  * - MPMC_ERR_STATE: operation_id já registrado.
  * - MPMC_ERR_SYS: falha ao ampliar a tabela de registros; system_errno contém o
  *   errno de realloc(), ou zero em overflow de capacidade.
@@ -136,9 +145,11 @@ mpmc_result_t msg_backend_ack_begin(
  * - MPMC_ERR_INVALID_ARG: backend nulo ou operation_id zero.
  * - MPMC_ERR_STATE: operação não registrada, ou ACK com corpo inválido.
  * - MPMC_ERR_INTERRUPTED: msgrcv() interrompida por sinal; system_errno contém EINTR.
- * - MPMC_ERR_SYS: falha em msgrcv() ou malloc(), com errno capturado.
- * @warning O algoritmo deve progredir sem bloquear circularmente quando
- * filas de dados e canais de controle estiverem sujeitos a capacidade máxima (#14).
+ * - MPMC_ERR_SYS: falha em msgrcv() ou nanosleep(), com errno capturado.
+ * @note Esta é a única espera bloqueante do canal de ACK do produtor e ela consome ACKs, de
+ * modo que não forma espera circular com consumidores bloqueados na fila de ACK. A espera
+ * não tem prazo próprio: termina com os ACKs esperados, com sinal (MPMC_ERR_INTERRUPTED) ou
+ * com a remoção da fila (MPMC_ERR_SHUTDOWN).
  */
 mpmc_result_t msg_backend_ack_wait(msg_backend_t *backend, uint64_t operation_id);
 
@@ -147,10 +158,37 @@ mpmc_result_t msg_backend_ack_wait(msg_backend_t *backend, uint64_t operation_id
  * @param backend Backend do processo produtor.
  * @param operation_id Trabalho previamente registrado.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
- * - MPMC_OK: registro removido, ou operação inexistente (idempotente).
+ * - MPMC_OK: registro removido e ACKs pendentes dessa operação descartados, ou
+ *   operação inexistente (idempotente).
  * - MPMC_ERR_INVALID_ARG: backend nulo ou operation_id zero.
+ * - MPMC_ERR_STATE: ACK pendente dessa operação com corpo inválido.
+ * - MPMC_ERR_INTERRUPTED: drenagem interrompida por sinal; system_errno contém EINTR.
+ * - MPMC_ERR_SYS: falha em msgrcv(); system_errno contém o errno capturado.
+ * @note O registro local é removido mesmo se a drenagem falhar; IDs devem ser
+ * exclusivos durante a vida das filas para que ACKs tardios não sejam associados
+ * a outra operação.
  */
 mpmc_result_t msg_backend_ack_end(msg_backend_t *backend, uint64_t operation_id);
+
+/**
+ * @brief Declara sem dono uma operação cujo produtor terminou sem receber todos os ACKs.
+ * @param backend Backend pertencente ao supervisor.
+ * @param operation_id ID da operação encerrada, 1..LONG_MAX.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: operação registrada como abandonada (idempotente) e ACKs pendentes dela
+ *   descartados; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: backend nulo, operation_id zero ou maior que LONG_MAX.
+ * - MPMC_ERR_SYS: falha ao ampliar a lista de abandonadas (system_errno contém o errno de
+ *   realloc(), ou zero em overflow de capacidade) ou falha em msgrcv() ao descartar.
+ * - MPMC_ERR_SHUTDOWN: msgrcv() retornou EIDRM, preservado em system_errno.
+ * @details Consumidores ainda podem retirar mensagens dessa operação depois do fim do
+ * produtor e publicar ACKs que ninguém lerá; sem descarte, eles ocupariam a fila de ACK e
+ * bloqueariam os consumidores em msgsnd(). O ID fica na lista e cada chamada de
+ * msg_backend_poll_events() descarta, sem bloquear, os ACKs que chegarem depois.
+ * @note Só o supervisor chama esta função. Não afeta operações vivas: o descarte é
+ * seletivo por mtype = operation_id.
+ */
+mpmc_result_t msg_backend_ack_abandon(msg_backend_t *backend, uint64_t operation_id);
 
 /**
  * @brief Drena eventos de consumo e acumula estatísticas no processo pai.
@@ -163,7 +201,9 @@ mpmc_result_t msg_backend_ack_end(msg_backend_t *backend, uint64_t operation_id)
  * @details Filhos enviam registros IPC; o pai atualiza suas próprias
  * contagens locais após msgrcv(). É obrigatório drenar antes de imprimir os
  * números finais; os eventos não podem ser perdidos ou contados em duplicidade.
- * EINTR durante a drenagem é repetido.
+ * EINTR durante a drenagem é repetido. Depois dos eventos, descarta os ACKs tardios das
+ * operações declaradas em msg_backend_ack_abandon(); o primeiro erro desse descarte é o
+ * retornado.
  */
 mpmc_result_t msg_backend_poll_events(msg_backend_t *backend);
 
@@ -186,7 +226,8 @@ mpmc_result_t msg_backend_consumed_count(
 /**
  * @brief Libera somente o estado local do processo filho.
  * @param backend Backend herdado pelo fork().
- * @details Nunca remove filas de dados/controle globais via IPC_RMID.
+ * @details Nunca remove filas de dados/controle globais via IPC_RMID. Libera também os
+ * registros de ACK e a lista de operações abandonadas herdados.
  */
 void msg_backend_worker_close(msg_backend_t *backend);
 

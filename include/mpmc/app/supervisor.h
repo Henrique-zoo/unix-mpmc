@@ -40,13 +40,14 @@ typedef enum {
     SUPERVISOR_UNBLOCK_SIGCHLD,     /**< Falha ao desbloquear SIGCHLD. */
     SUPERVISOR_RESTORE_SIGCHLD,     /**< Falha ao restaurar a ação de SIGCHLD. */
     SUPERVISOR_RESTORE_SIGNAL_MASK, /**< Falha ao restaurar a máscara de sinais. */
+    SUPERVISOR_ABANDON_ACK,         /**< Falha ao descartar ACKs de um produtor que não concluiu. */
 } supervisor_shutdown_operation_t;
 
 /**
  * @brief Diagnóstico individual de uma falha na coordenação do encerramento.
  * @details operation discrimina os membros da união anônima:
  * - SUPERVISOR_SEND_SIGNAL: send_signal, com PID e sinal enviados a kill().
- * - SUPERVISOR_WAIT_CHILD e SUPERVISOR_RECORD_REPORT: child_pid.
+ * - SUPERVISOR_WAIT_CHILD, SUPERVISOR_RECORD_REPORT e SUPERVISOR_ABANDON_ACK: child_pid.
  * - SUPERVISOR_WAIT_EVENTS: poll_revents; zero se poll() retornou -1, com
  *   errno em result.system_errno, ou os eventos de erro do descritor, com
  *   result.system_errno zero.

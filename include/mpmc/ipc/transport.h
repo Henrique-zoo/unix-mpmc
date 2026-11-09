@@ -175,8 +175,10 @@ size_t ipc_producer_count(const ipc_context_t *context);
  * @pre Para solicitar confirmação, chamar ipc_ack_begin() para o
  * message->operation_id antes do primeiro envio. O backend consulta esse contexto
  * para determinar a política de ACK e preserva todos os campos da mensagem.
- * @warning No modo 2, o envio com ACK ativo ainda usa msgsnd() bloqueante simples, sem o
- * laço de drenagem descrito em docs/protocol.md (pendente: #14).
+ * @note No modo 2, o envio com ACK ativo usa msgsnd() com IPC_NOWAIT: em fila cheia, drena
+ * os ACKs da própria operação, espera até 1 ms e repete, de modo que o produtor nunca
+ * bloqueia no kernel sem consumir ACKs (docs/protocol.md). Sem ACK ativo, o envio é
+ * bloqueante.
  */
 mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message_t *message);
 
@@ -273,10 +275,30 @@ mpmc_result_t ipc_ack_wait(ipc_context_t *context, uint64_t operation_id);
  * - MPMC_ERR_INVALID_ARG: context nulo ou operation_id zero; system_errno é zero.
  * - MPMC_ERR_STATE: stub do modo 1 (pendente: #11).
  * @note Chamar ao final do trabalho, mesmo quando o envio/espera falhar, desde que
- * ipc_ack_begin() tenha retornado MPMC_OK. A drenagem de ACKs restantes da operação
- * descrita em docs/protocol.md é pendente (#14).
+ * ipc_ack_begin() tenha retornado MPMC_OK. No modo 2, drena sem bloquear os ACKs da
+ * operação que já estão na fila; os que chegarem depois (consumo posterior ao fim do
+ * produtor) são descartados pelo supervisor via ipc_ack_abandon()/ipc_poll_events().
  */
 mpmc_result_t ipc_ack_end(ipc_context_t *context, uint64_t operation_id);
+
+/**
+ * @brief Declara sem dono uma operação cujo produtor terminou sem concluir a espera de ACK.
+ * @param context Contexto pertencente ao processo supervisor.
+ * @param operation_id ID da operação do filho produtor recolhido.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: no modo 2, operação registrada como abandonada e ACKs pendentes descartados;
+ *   no modo 1, nada a fazer; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: context nulo, ou operation_id zero ou maior que LONG_MAX (modo 2),
+ *   com system_errno zero.
+ * - MPMC_ERR_SYS: falha de alocação ou de msgrcv(), com errno preservado (modo 2).
+ * - MPMC_ERR_SHUTDOWN: msgrcv() retornou EIDRM, preservado em system_errno (modo 2).
+ * @details O supervisor a chama ao recolher um produtor que não terminou com sucesso.
+ * Consumidores podem continuar retirando mensagens desse trabalho; sem o descarte, os ACKs
+ * sem dono lotariam a fila de ACK e bloqueariam os consumidores. A partir daí,
+ * ipc_poll_events() descarta os ACKs tardios. Chamar para trabalhos sem ACK é inofensivo.
+ * Apenas o supervisor a chama.
+ */
+mpmc_result_t ipc_ack_abandon(ipc_context_t *context, uint64_t operation_id);
 
 /**
  * @brief Consolida eventos de controle e estatísticas no supervisor.

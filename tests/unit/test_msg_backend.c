@@ -1,19 +1,22 @@
 /**
  * @file test_msg_backend.c
- * @brief Testa a consolidação de consumo, a política de ACK entre processos e as filas de dados.
+ * @brief Testa a consolidação de consumo, a política de ACK entre processos e
+ * as filas de dados.
  * @ingroup tests
  * @details Os consumidores são criados antes do registro de ACK no produtor,
  * verificando que a solicitação chega pelo envelope e não pelo heap herdado.
- * As esperas de confirmação usam alarm() como limite de tempo. Verifica o isolamento
- * entre filas, a ordem FIFO e o recebimento não bloqueante. Também testa a
- * consolidação de eventos e a política de ACK entre processos.
+ * As esperas de confirmação usam alarm() como limite de tempo. Verifica o
+ * isolamento entre filas, a ordem FIFO e o recebimento não bloqueante. Também
+ * testa a consolidação de eventos e a política de ACK entre processos.
  */
 #include <errno.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/msg.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -37,6 +40,7 @@ static void test_queue_cleanup_remove_failure(void);
 static void test_three_queues(void);
 static void test_would_block_publishes_nothing(void);
 static void test_contract_violations(void);
+static void test_ack_control_operations(void);
 mpmc_result_t mpmc_test_msg_create(int *out_msqid);
 mpmc_result_t mpmc_test_msg_remove(int msqid);
 mpmc_result_t mpmc_test_msg_send(
@@ -46,6 +50,24 @@ mpmc_result_t mpmc_test_msg_send(
     size_t size,
     bool nowait
 );
+mpmc_result_t mpmc_test_msg_receive(
+    int msqid,
+    long desired_type,
+    void *out_payload,
+    size_t capacity,
+    bool nowait,
+    ssize_t *out_size
+);
+mpmc_result_t mpmc_test_msg_receive_typed(
+    int msqid,
+    long desired_type,
+    void *out_payload,
+    size_t capacity,
+    bool nowait,
+    ssize_t *out_size,
+    long *out_type
+);
+int mpmc_test_nanosleep(const struct timespec *request, struct timespec *remaining);
 
 /**
  * @brief Quantidade de verificações executadas nesta suíte.
@@ -112,10 +134,33 @@ static unsigned send_calls;
  */
 static bool last_send_nowait;
 
+/** @brief Tipo da última mensagem enviada pelo backend. */
+static long last_send_type;
+
 /**
  * @brief Identificador da última fila utilizada pelo substituto de envio.
  */
 static int last_send_msqid = -1;
+
+/** @brief Capacidade da fila de ACK simulada. */
+#define ACK_CONTROL_MAX 32u
+
+typedef struct {
+    long type;
+    uint64_t operation_id;
+    ssize_t size;
+} ack_control_message_t;
+
+static bool ack_control_active;
+static bool ack_control_send_active;
+static int ack_control_queue = -1;
+static int ack_control_data_queue = -1;
+static ack_control_message_t ack_control_messages[ACK_CONTROL_MAX];
+static size_t ack_control_message_count;
+static unsigned ack_control_send_would_block;
+static unsigned ack_control_receive_calls;
+static unsigned ack_control_sleep_calls;
+static mpmc_result_t ack_control_receive_failure;
 
 /**
  * @brief Quantidade de chamadas realizadas ao substituto de remoção.
@@ -133,7 +178,8 @@ static unsigned fail_remove_call;
 #define ALL_QUEUES_MAX 128u
 
 /**
- * @brief Identificadores de todas as filas criadas pelo backend durante a suíte.
+ * @brief Identificadores de todas as filas criadas pelo backend durante a
+ * suíte.
  */
 static int all_queue_ids[ALL_QUEUES_MAX];
 
@@ -217,9 +263,118 @@ mpmc_result_t mpmc_test_msg_send(
 ) {
     ++send_calls;
     last_send_nowait = nowait;
+    last_send_type = type;
     last_send_msqid = msqid;
 
+    if (ack_control_active && ack_control_send_active && msqid == ack_control_data_queue) {
+        if (ack_control_send_would_block != 0u) {
+            --ack_control_send_would_block;
+            return (mpmc_result_t){
+                .status = MPMC_ERR_WOULD_BLOCK,
+                .system_errno = EAGAIN,
+            };
+        }
+        return (mpmc_result_t){.status = MPMC_OK};
+    }
+
     return sysv_msg_send(msqid, type, payload, size, nowait);
+}
+
+/**
+ * @brief Injeta uma confirmação tipada na fila de controle simulada.
+ */
+static void ack_control_check(bool condition) {
+    ++checks;
+    if (!condition) {
+        ++failures;
+        fprintf(stderr, "FALHA %s:%d: controle ACK\n", __FILE__, __LINE__);
+    }
+}
+
+static void ack_control_push(long type, uint64_t operation_id, ssize_t size) {
+    ack_control_check(ack_control_message_count < ACK_CONTROL_MAX);
+    if (ack_control_message_count == ACK_CONTROL_MAX) return;
+    ack_control_messages[ack_control_message_count++] = (ack_control_message_t){
+        .type = type,
+        .operation_id = operation_id,
+        .size = size,
+    };
+}
+
+/**
+ * @brief Intercepta msgrcv() somente na fila ACK controlada pelo teste.
+ */
+mpmc_result_t mpmc_test_msg_receive(
+    int msqid,
+    long desired_type,
+    void *out_payload,
+    size_t capacity,
+    bool nowait,
+    ssize_t *out_size
+) {
+    if (!ack_control_active || msqid != ack_control_queue) {
+        return sysv_msg_receive(msqid, desired_type, out_payload, capacity, nowait, out_size);
+    }
+
+    ++ack_control_receive_calls;
+    if (ack_control_receive_failure.status != MPMC_OK) {
+        mpmc_result_t result = ack_control_receive_failure;
+        ack_control_receive_failure = (mpmc_result_t){.status = MPMC_OK};
+        return result;
+    }
+
+    for (size_t index = 0u; index < ack_control_message_count; ++index) {
+        if (ack_control_messages[index].type != desired_type) continue;
+        ack_control_message_t message = ack_control_messages[index];
+        for (size_t next = index + 1u; next < ack_control_message_count; ++next) {
+            ack_control_messages[next - 1u] = ack_control_messages[next];
+        }
+        --ack_control_message_count;
+        if (message.size < 0 || (size_t)message.size > capacity) {
+            return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = E2BIG};
+        }
+        if ((size_t)message.size >= sizeof(message.operation_id)) {
+            memcpy(out_payload, &message.operation_id, sizeof(message.operation_id));
+        }
+        *out_size = message.size;
+        return (mpmc_result_t){.status = MPMC_OK};
+    }
+
+    if (nowait) {
+        return (mpmc_result_t){.status = MPMC_ERR_WOULD_BLOCK, .system_errno = ENOMSG};
+    }
+    return (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR};
+}
+
+/**
+ * @brief Usa msgrcv() tipado real; o backend só a utiliza para a fila de dados.
+ */
+mpmc_result_t mpmc_test_msg_receive_typed(
+    int msqid,
+    long desired_type,
+    void *out_payload,
+    size_t capacity,
+    bool nowait,
+    ssize_t *out_size,
+    long *out_type
+) {
+    return sysv_msg_receive_typed(
+        msqid, desired_type, out_payload, capacity, nowait, out_size, out_type
+    );
+}
+
+/**
+ * @brief Torna o pequeno backoff do ACK determinístico na suíte.
+ */
+int mpmc_test_nanosleep(const struct timespec *request, struct timespec *remaining) {
+    if (ack_control_active) {
+        ack_control_check(request != NULL);
+        ack_control_check(request != NULL && request->tv_sec == 0);
+        ack_control_check(request != NULL && request->tv_nsec == 1000000);
+        ++ack_control_sleep_calls;
+        return 0;
+    }
+    return nanosleep(request, remaining);
 }
 
 /**
@@ -857,7 +1012,8 @@ static void test_queue_cleanup_remove_failure(void) {
             }
         }
 
-        /* Única limpeza: a fila cuja remoção foi simulada como falha ainda existe. */
+        /* Única limpeza: a fila cuja remoção foi simulada como falha ainda existe.
+         */
         for (size_t index = 0u; index < created_queue_count; ++index) {
             if (removed_queue_results[index].status != MPMC_OK) {
                 result = sysv_msg_remove(created_queue_ids[index]);
@@ -869,9 +1025,9 @@ static void test_queue_cleanup_remove_failure(void) {
 
 /**
  * @brief Verifica a independência de três filas lógicas.
- * @details Envia uma mensagem a cada índice, recebe na ordem inversa e confirma que
- * cada fila devolve somente a própria mensagem e fica vazia em seguida. O índice
- * seguinte ao último (p + 1) deve ser rejeitado.
+ * @details Envia uma mensagem a cada índice, recebe na ordem inversa e confirma
+ * que cada fila devolve somente a própria mensagem e fica vazia em seguida. O
+ * índice seguinte ao último (p + 1) deve ser rejeitado.
  */
 static void test_three_queues(void) {
     msg_backend_t *backend = NULL;
@@ -943,8 +1099,9 @@ static void check_no_orphan_queues(void) {
 /**
  * @brief Verifica que o recebimento bloqueante espera por uma mensagem.
  * @details Um filho pede uma mensagem a uma fila vazia com blocking=true. Se o
- * recebimento retornasse sem esperar, o filho terminaria com erro antes do envio.
- * Depois do envio do pai, o filho deve receber exatamente a mensagem enviada.
+ * recebimento retornasse sem esperar, o filho terminaria com erro antes do
+ * envio. Depois do envio do pai, o filho deve receber exatamente a mensagem
+ * enviada.
  */
 static void test_blocking_receive(void) {
     msg_backend_t *backend = NULL;
@@ -982,7 +1139,8 @@ static void test_blocking_receive(void) {
         _exit(matches ? 0 : 1);
     }
 
-    /* O filho deve ficar bloqueado na fila vazia; retorno antecipado seria erro. */
+    /* O filho deve ficar bloqueado na fila vazia; retorno antecipado seria erro.
+     */
     struct timespec delay = {
         .tv_sec = 0,
         .tv_nsec = 50000000,
@@ -1017,9 +1175,10 @@ static void test_blocking_receive(void) {
 }
 
 /**
- * @brief Verifica a ordem FIFO e o esgotamento de uma fila com várias mensagens.
- * @details Envia oito mensagens, recebe todas na ordem de inserção e confirma que
- * a tentativa seguinte, sem bloqueio, informa fila vazia.
+ * @brief Verifica a ordem FIFO e o esgotamento de uma fila com várias
+ * mensagens.
+ * @details Envia oito mensagens, recebe todas na ordem de inserção e confirma
+ * que a tentativa seguinte, sem bloqueio, informa fila vazia.
  */
 static void test_fifo_order(void) {
     msg_backend_t *backend = NULL;
@@ -1067,10 +1226,12 @@ static void test_fifo_order(void) {
 }
 
 /**
- * @brief Verifica que um recebimento sem mensagem não publica evento nem conta consumo.
+ * @brief Verifica que um recebimento sem mensagem não publica evento nem conta
+ * consumo.
  * @details Com a fila vazia, receive não bloqueante retorna WOULD_BLOCK e o
- * contador consolidado permanece zero. Depois de uma retirada válida, o contador
- * passa a um, o que mostra que a contagem funciona e que o zero anterior era real.
+ * contador consolidado permanece zero. Depois de uma retirada válida, o
+ * contador passa a um, o que mostra que a contagem funciona e que o zero
+ * anterior era real.
  */
 static void test_would_block_publishes_nothing(void) {
     msg_backend_t *backend = NULL;
@@ -1101,7 +1262,8 @@ static void test_would_block_publishes_nothing(void) {
 }
 
 /**
- * @brief Verifica que corpo de tamanho errado e tipo desconhecido retornam MPMC_ERR_STATE.
+ * @brief Verifica que corpo de tamanho errado e tipo desconhecido retornam
+ * MPMC_ERR_STATE.
  * @details Injeta diretamente na fila de dados mensagens fora do contrato. O
  * backend deve classificá-las como violação de estado (system_errno zero) e não
  * contá-las como consumo.
@@ -1119,7 +1281,8 @@ static void test_contract_violations(void) {
     message_t out = {0};
     uint64_t count = UINT64_MAX;
 
-    /* Um envio e uma retirada válidos revelam o identificador da fila de dados. */
+    /* Um envio e uma retirada válidos revelam o identificador da fila de dados.
+     */
     CHECK_RESULT(msg_backend_send(backend, 1u, &message), MPMC_OK, 0);
 
     int queue_id = last_send_msqid;
@@ -1148,8 +1311,126 @@ static void test_contract_violations(void) {
 }
 
 /**
- * @brief Executa os testes das filas de dados, cenário de dois consumidores e confirmações
- * seletivas.
+ * @brief Verifica o ciclo de controle de ACK por operação com entradas
+ * determinísticas.
+ */
+static void test_ack_control_operations(void) {
+    size_t queue_start = all_queue_count;
+    msg_backend_t *backend = NULL;
+    mpmc_result_t result = msg_backend_create(&backend, 1u);
+    CHECK(result.status == MPMC_OK);
+    CHECK(backend != NULL);
+    if (result.status != MPMC_OK || backend == NULL) return;
+
+    CHECK(all_queue_count == queue_start + 3u);
+    if (all_queue_count < queue_start + 3u) {
+        msg_backend_destroy(backend);
+        return;
+    }
+
+    ack_control_queue = all_queue_ids[queue_start + 2u];
+    ack_control_data_queue = all_queue_ids[queue_start];
+    ack_control_message_count = 0u;
+    ack_control_receive_calls = 0u;
+    ack_control_sleep_calls = 0u;
+    ack_control_receive_failure = (mpmc_result_t){.status = MPMC_OK};
+    ack_control_active = true;
+
+    CHECK_RESULT(msg_backend_ack_begin(NULL, 101u, 1u), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 0u, 1u), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, UINT64_MAX, 1u), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 100u, 0u), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 100u, 1025u), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_ack_wait(backend, 999u), MPMC_ERR_STATE, 0);
+
+    CHECK_RESULT(msg_backend_ack_begin(backend, 101u, 2u), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 101u, 2u), MPMC_ERR_STATE, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 202u, 1u), MPMC_OK, 0);
+
+    /* A fila cheia força uma drenagem seletiva antes do segundo envio. */
+    ack_control_push(101, 101u, (ssize_t)sizeof(uint64_t));
+    ack_control_push(202, 202u, (ssize_t)sizeof(uint64_t));
+    ack_control_send_active = true;
+    ack_control_send_would_block = 1u;
+    unsigned sends_before = send_calls;
+    message_t message = {.sender_pid = getpid(), .sequence = 1u, .operation_id = 101u};
+    result = msg_backend_send(backend, 1u, &message);
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+    CHECK(send_calls == sends_before + 2u);
+    CHECK(last_send_type == 2);
+    CHECK(last_send_nowait);
+    CHECK(ack_control_sleep_calls == 1u);
+    CHECK(ack_control_message_count == 1u);
+    CHECK(ack_control_messages[0].operation_id == 202u);
+
+    /* Confirmação recebida antes da espera permanece contabilizada no registro.
+     */
+    ack_control_push(101, 101u, (ssize_t)sizeof(uint64_t));
+    result = msg_backend_ack_wait(backend, 101u);
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+    unsigned receives_after_wait = ack_control_receive_calls;
+    CHECK_RESULT(msg_backend_ack_wait(backend, 101u), MPMC_OK, 0);
+    CHECK(ack_control_receive_calls == receives_after_wait);
+
+    /* A confirmação de outra operação não foi consumida pelo wait anterior. */
+    result = msg_backend_ack_wait(backend, 202u);
+    CHECK(result.status == MPMC_OK);
+    CHECK(result.system_errno == 0);
+
+    /* O encerramento drena ACKs excedentes e remove só o registro solicitado. */
+    ack_control_push(101, 101u, (ssize_t)sizeof(uint64_t));
+    CHECK_RESULT(msg_backend_ack_end(backend, 101u), MPMC_OK, 0);
+    CHECK(ack_control_message_count == 0u);
+    CHECK_RESULT(msg_backend_ack_wait(backend, 101u), MPMC_ERR_STATE, 0);
+    CHECK_RESULT(msg_backend_ack_end(backend, 101u), MPMC_OK, 0);
+
+    /* Sem registro ativo, a mensagem não solicita ACK e mantém envio bloqueante.
+     */
+    message.sequence = 2u;
+    CHECK_RESULT(msg_backend_send(backend, 1u, &message), MPMC_OK, 0);
+    CHECK(last_send_type == 1);
+    CHECK(!last_send_nowait);
+    ack_control_send_active = false;
+
+    /* Uma interrupção não apaga o progresso nem o registro da operação. */
+    CHECK_RESULT(msg_backend_ack_begin(backend, 303u, 1u), MPMC_OK, 0);
+    ack_control_receive_failure = (mpmc_result_t){
+        .status = MPMC_ERR_INTERRUPTED,
+        .system_errno = EINTR,
+    };
+    CHECK_RESULT(msg_backend_ack_wait(backend, 303u), MPMC_ERR_INTERRUPTED, EINTR);
+    ack_control_push(303, 303u, (ssize_t)sizeof(uint64_t));
+    CHECK_RESULT(msg_backend_ack_wait(backend, 303u), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_ack_end(backend, 303u), MPMC_OK, 0);
+
+    /* Corpo inválido não conta como ACK; a operação pode receber um ACK válido
+     * depois. */
+    CHECK_RESULT(msg_backend_ack_begin(backend, 404u, 1u), MPMC_OK, 0);
+    ack_control_push(404, 404u, (ssize_t)sizeof(uint32_t));
+    CHECK_RESULT(msg_backend_ack_wait(backend, 404u), MPMC_ERR_STATE, 0);
+    ack_control_push(404, 404u, (ssize_t)sizeof(uint64_t));
+    CHECK_RESULT(msg_backend_ack_wait(backend, 404u), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_ack_end(backend, 404u), MPMC_OK, 0);
+
+    /* Liberação também remove o registro se detectar ACK pendente malformado. */
+    CHECK_RESULT(msg_backend_ack_begin(backend, 505u, 1u), MPMC_OK, 0);
+    ack_control_push(505, 505u, (ssize_t)sizeof(uint32_t));
+    CHECK_RESULT(msg_backend_ack_end(backend, 505u), MPMC_ERR_STATE, 0);
+    CHECK_RESULT(msg_backend_ack_wait(backend, 505u), MPMC_ERR_STATE, 0);
+
+    CHECK_RESULT(msg_backend_ack_end(backend, 202u), MPMC_OK, 0);
+    ack_control_active = false;
+    ack_control_send_active = false;
+    ack_control_queue = -1;
+    ack_control_data_queue = -1;
+    msg_backend_destroy(backend);
+}
+
+/**
+ * @brief Executa os testes das filas de dados, cenário de dois consumidores e
+ * confirmações seletivas.
  * @return Zero se todos os cenários passarem; um se falha.
  */
 int main(void) {
@@ -1161,6 +1442,7 @@ int main(void) {
     test_nonblocking_receive();
     test_would_block_publishes_nothing();
     test_contract_violations();
+    test_ack_control_operations();
     test_blocking_receive();
     test_send_uses_blocking_mode();
     test_queue_cleanup();
@@ -1202,7 +1484,8 @@ int main(void) {
         _exit(result.status == MPMC_OK ? 0 : 1);
     }
 
-    /* Os consumidores ja existem quando o produtor registra sua operacao de ACK. */
+    /* Os consumidores ja existem quando o produtor registra sua operacao de ACK.
+     */
     if (msg_backend_ack_begin(parent, 2u, 1u).status != MPMC_OK
         || msg_backend_send(parent, 1u, &first).status != MPMC_OK
         || msg_backend_send(parent, 1u, &second).status != MPMC_OK) {

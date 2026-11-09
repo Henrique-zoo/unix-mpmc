@@ -387,6 +387,18 @@ void mpmc_shutdown_test_ipc_destroy(ipc_context_t *context) {
 }
 
 /**
+ * @brief Simula o descarte de ACKs de um produtor que não concluiu, sem IPC real.
+ * @param context Contexto simulado ainda vivo.
+ * @param operation_id Operação do produtor recolhido; não interpretada.
+ * @return Estrutura mpmc_result_t com MPMC_OK e system_errno zero.
+ */
+mpmc_result_t mpmc_shutdown_test_ipc_ack_abandon(ipc_context_t *context, uint64_t operation_id) {
+    (void)operation_id;
+    CHECK(context == &fixture.ipc && fixture.ipc.live);
+    return (mpmc_result_t){.status = MPMC_OK};
+}
+
+/**
  * @brief Simula uma drenagem sem eventos e sem acesso a recursos globais.
  * @param context Contexto simulado ainda vivo.
  * @return Estrutura mpmc_result_t com MPMC_OK e system_errno zero quando não há

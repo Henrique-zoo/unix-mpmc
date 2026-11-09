@@ -233,8 +233,9 @@ Consulte @ref ipc_protocol e @ref testing_plan.
 
 ## Pendências de integração
 
-- #13 e #14: completar as garantias de progresso e recuperação do backend de filas.
-  A integração atual usa sysv_msg_receive_typed() e os tipos de dados 1/2 para
+- #13 e #14: a correlação e o ciclo de vida de ACK do backend de filas estão fechados
+  (laço de envio com drenagem, `ack_abandon` pelo supervisor; ver @ref ipc_wire_formats).
+  Resta a janela entre retirada e evento. A integração atual usa sysv_msg_receive_typed() e os tipos de dados 1/2 para
   distinguir operações sem/com ACK, recebendo por tipo zero para preservar FIFO.
 - #16: a fachada de transporte já despacha para os backends e seus contratos estão
   fixados em `transport.h` (#45). Falta propagar resultados e diagnósticos de cleanup

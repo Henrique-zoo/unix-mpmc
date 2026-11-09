@@ -181,6 +181,7 @@ typedef enum {
     CALL_MSG_ACK_BEGIN,
     CALL_MSG_ACK_WAIT,
     CALL_MSG_ACK_END,
+    CALL_MSG_ACK_ABANDON,
     CALL_MSG_POLL,
     CALL_MSG_COUNT,
     CALL_MSG_CLOSE,
@@ -327,6 +328,12 @@ mpmc_result_t msg_backend_ack_wait(msg_backend_t *backend, uint64_t operation_id
 
 mpmc_result_t msg_backend_ack_end(msg_backend_t *backend, uint64_t operation_id) {
     call_t *call = record(CALL_MSG_ACK_END, backend);
+    call->operation_id = operation_id;
+    return g_result;
+}
+
+mpmc_result_t msg_backend_ack_abandon(msg_backend_t *backend, uint64_t operation_id) {
+    call_t *call = record(CALL_MSG_ACK_ABANDON, backend);
     call->operation_id = operation_id;
     return g_result;
 }
@@ -596,6 +603,7 @@ typedef enum {
     OP_ACK_BEGIN,
     OP_ACK_WAIT,
     OP_ACK_END,
+    OP_ACK_ABANDON,
     OP_POLL,
     OP_CONSUMED,
     OP_COUNT
@@ -608,6 +616,7 @@ static const char *const k_op_names[OP_COUNT] = {
     "ipc_ack_begin",
     "ipc_ack_wait",
     "ipc_ack_end",
+    "ipc_ack_abandon",
     "ipc_poll_events",
     "ipc_consumed_count",
 };
@@ -638,6 +647,8 @@ static mpmc_result_t invoke(op_t op, ipc_context_t *context) {
             return ipc_ack_wait(context, ACK_OPERATION);
         case OP_ACK_END:
             return ipc_ack_end(context, ACK_OPERATION);
+        case OP_ACK_ABANDON:
+            return ipc_ack_abandon(context, ACK_OPERATION);
         case OP_POLL:
             return ipc_poll_events(context);
         case OP_CONSUMED:
@@ -668,6 +679,8 @@ static call_kind_t expected_kind(op_t op, ipc_mode_t mode) {
             return queues ? CALL_MSG_ACK_WAIT : CALL_SHM_ACK_WAIT;
         case OP_ACK_END:
             return queues ? CALL_MSG_ACK_END : CALL_SHM_ACK_END;
+        case OP_ACK_ABANDON:
+            return queues ? CALL_MSG_ACK_ABANDON : CALL_NONE;
         case OP_POLL:
             return queues ? CALL_MSG_POLL : CALL_NONE;
         case OP_CONSUMED:
@@ -727,6 +740,7 @@ static void check_forwarded_arguments(op_t op, ipc_mode_t mode, const call_t *ca
             break;
         case OP_ACK_WAIT:
         case OP_ACK_END:
+        case OP_ACK_ABANDON:
             CHECK(call->operation_id == ACK_OPERATION, "%s: operation_id repassado errado", name);
             break;
         case OP_POLL:

@@ -662,6 +662,37 @@ static mpmc_result_t record_report(
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
+/**
+ * @brief Descarta os ACKs sem dono de um produtor que terminou sem sucesso.
+ * @param supervisor Instância proprietária do contexto IPC.
+ * @param finished Registro do filho recolhido.
+ * @param succeeded Verdadeiro se o filho saiu com EXIT_SUCCESS.
+ * @param[in,out] result Resultado agregado; recebe o primeiro erro.
+ * @param reporter Destino opcional dos diagnósticos; pode ser nullptr.
+ * @details Só trabalhos produtores que não saíram com sucesso podem deixar ACKs pendentes:
+ * um produtor ack=1 bem-sucedido já recebeu todos. Consumidores podem retirar depois do fim
+ * do produtor mensagens dele e publicar ACKs que ninguém lerá, o que lotaria a fila de ACK
+ * e bloquearia os consumidores. ipc_ack_abandon() descarta os que já existem e
+ * ipc_poll_events() descarta os que chegarem depois.
+ */
+static void abandon_producer_acks(
+    supervisor_t *supervisor,
+    const child_record_t *finished,
+    bool succeeded,
+    mpmc_result_t *result,
+    const supervisor_shutdown_reporter_t *reporter
+) {
+    if (finished->kind != COMMAND_PRODUCE || succeeded) return;
+
+    const supervisor_shutdown_error_t error = {
+        .operation = SUPERVISOR_ABANDON_ACK,
+        .result = ipc_ack_abandon(supervisor->ipc, finished->operation_id),
+        .child_pid = finished->pid,
+    };
+
+    record_shutdown_error(result, &error, reporter);
+}
+
 /** @details EINTR em waitpid() é repetido; cada estado coletado é correlacionado
  * ao registro original antes da remoção. ECHILD indica perda externa da
  * propriedade do filho, é reportado como erro e também limpa o registro obsoleto.
@@ -724,6 +755,7 @@ mpmc_result_t supervisor_reap(
                 };
 
                 record_shutdown_error(&result, &report_error, reporter);
+                abandon_producer_acks(supervisor, &lost, false, &result, reporter);
                 remove_child(supervisor, index);
                 continue;
             }
@@ -789,6 +821,13 @@ mpmc_result_t supervisor_reap(
         };
 
         record_shutdown_error(&result, &report_error, reporter);
+        abandon_producer_acks(
+            supervisor,
+            &finished,
+            end == CHILD_END_EXITED && end_value == EXIT_SUCCESS,
+            &result,
+            reporter
+        );
         remove_child(supervisor, index);
     }
 

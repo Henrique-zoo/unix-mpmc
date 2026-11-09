@@ -327,14 +327,15 @@ se deve tentar ler os totais desse contexto. `ipc_poll_events()` não faz nada n
 | Fila | Quantidade | Tipo (`mtype`) | Corpo (`msgsz`, sem `mtype`) |
 |---|---:|---|---|
 | Dados `D_i` | `p` | 1 sem ACK; 2 com ACK | `message_t`, 32 bytes |
-| ACK `Q_ack` | 1 | `operation_id` do produtor | `{ pid_t sender_pid; uint32_t sequence; }`, 8 bytes |
-| Eventos `Q_evt` | 1 | 1 | `{ uint32_t producer_id; }`, 4 bytes |
+| ACK `Q_ack` | 1 | `operation_id` do produtor | `{ uint64_t operation_id; }`, 8 bytes |
+| Eventos `Q_evt` | 1 | 1 | `{ size_t producer_id; uint64_t count; }`, 16 bytes |
 
 Os dados do paradigma 2 trafegam só por filas, nunca por `shm`. As filas `Q_ack` e `Q_evt`
 são recursos de controle: não substituem as `p` filas de dados exigidas.
 
 **Capacidade.** O limite de cada fila é `msg_qbytes`. Por exemplo, 16384 bytes
-comportam 512 corpos de dados de 32 bytes ou 2048 corpos de ACK de 8 bytes. O limite
+comportam 512 corpos de dados de 32 bytes, 2048 corpos de ACK de 8 bytes ou 1024 corpos de
+evento de 16 bytes. O limite
 varia entre sistemas e deve ser consultado, não tratado como constante. Como no
 modo 1, `msgsnd` bloqueante em fila cheia é backpressure esperado.
 
@@ -350,8 +351,8 @@ Um tipo recebido diferente de 1/2 ou corpo de tamanho diferente de `sizeof(messa
 é violação de contrato (`MPMC_ERR_STATE`). Depois de retirar a mensagem, o consumidor,
 nesta ordem:
 
-1. envia `{producer_id}` a `Q_evt` (um evento por mensagem retirada, com ou sem ACK);
-2. se o tipo recebido era 2, envia `{sender_pid, sequence}` a `Q_ack` com `mtype = operation_id`.
+1. envia `{producer_id, count = 1}` a `Q_evt` (um evento por mensagem retirada, com ou sem ACK);
+2. se o tipo recebido era 2, envia `{operation_id}` a `Q_ack` com `mtype = operation_id`.
 
 O tipo zero seleciona a primeira mensagem da fila, preservando FIFO entre dados com
 e sem ACK; filtrar apenas pelo tipo 1 ou 2 alteraria essa ordem. Os valores 1 e 2
@@ -371,7 +372,8 @@ na prática os IDs crescem a partir de 1.
 | `ack_begin(op, n)` | Só estado local: guarda `op`, `n` e um contador em zero. A fila `Q_ack` já existe |
 | Envio de cada mensagem | Laço: `msgsnd(D_i, IPC_NOWAIT)`; em sucesso, segue. Em `EAGAIN`, drena as confirmações próprias (`msgrcv(Q_ack, tipo = op, IPC_NOWAIT)` até `ENOMSG`), somando ao contador, espera no máximo 1 ms com `nanosleep()` e repete. `EINTR` no laço retorna `MPMC_ERR_INTERRUPTED` |
 | `ack_wait(op)` | `msgrcv(Q_ack, tipo = op)` bloqueante até o contador chegar a `n` |
-| `ack_end(op)` | Drena sem bloquear as confirmações restantes de `op` e libera o estado local da operação; não há recurso do kernel a liberar |
+| `ack_end(op)` | Drena sem bloquear as confirmações restantes de `op` e libera o estado local da operação, mesmo se a drenagem falhar; não há recurso do kernel a liberar. Operação desconhecida é sucesso (idempotente) |
+| `ack_abandon(op)` | Só o supervisor. Registra `op` como sem dono e descarta, sem bloquear, os ACKs de `op` já enfileirados; `poll_events` repete o descarte a cada chamada, para os ACKs que chegarem depois |
 
 Por que isso não trava: um `msgsnd` bloqueante por ACK, sozinho, permitiria o ciclo em que
 produtores esperam vaga em `D_i` enquanto consumidores esperam vaga em `Q_ack`. Aqui, um
@@ -379,11 +381,42 @@ produtor com `ack=1` nunca fica bloqueado no kernel sem drenar os próprios ACKs
 espera em `ack_wait` (que consome ACKs) ou em `nanosleep` curto (depois de drenar). Logo,
 se `Q_ack` encher, o produtor dono dos ACKs acaba drenando e libera os consumidores.
 
-**Limite conhecido, ACKs órfãos.** Se um produtor morre antes de receber seus ACKs, as
-confirmações que chegarem depois ficam em `Q_ack` sem dono. Ao recolher um filho produtor,
-o supervisor drena `Q_ack` no tipo do `operation_id` dele; ACKs que cheguem depois dessa
-purga permanecem até o `shutdown`. Em operação normal isso não ocorre, porque o produtor
-só termina depois de receber todos os ACKs.
+**Integração com envio e recepção, sem espera circular.** Há três atores e cada um só
+espera por algo que outro ator sempre libera:
+
+| Ator | Onde pode bloquear | Quem o libera |
+|---|---|---|
+| Produtor `ack=1` | `ack_wait` (consome os próprios ACKs) e `nanosleep` de 1 ms depois de drenar. Nunca em `msgsnd` bloqueante de `D_i` | Consumidores, ao retirar e confirmar |
+| Produtor sem ACK | `msgsnd` bloqueante em `D_i` cheia (backpressure) | Consumidores, ao retirar |
+| Consumidor | `msgrcv` em `D_i` vazia; `msgsnd` em `Q_evt` ou `Q_ack` cheias, depois da retirada | Supervisor drena `Q_evt` em `poll_events`; o produtor dono drena `Q_ack` (envio, `ack_wait`, `ack_end`); o supervisor descarta `Q_ack` sem dono (`ack_abandon`) |
+| Supervisor | Nunca em fila: só `IPC_NOWAIT` e `waitpid(WNOHANG)` | — |
+
+Como o produtor com ACK nunca bloqueia no kernel sem drenar os próprios ACKs, e como o
+supervisor nunca bloqueia, o grafo de espera não tem ciclo: consumidor bloqueado em `Q_ack`
+cheia depende de um produtor que está drenando ou de um supervisor que descarta. O envio
+usa `mtype = 2` apenas quando o contexto local de ACK existe; sem `ack_begin` (`ack=2`),
+a mensagem sai com `mtype = 1`, nenhum ACK é emitido e `ack_wait` é recusada com
+`MPMC_ERR_STATE`.
+
+**ACKs sem dono.** Se um produtor `ack=1` termina sem receber todos os ACKs (erro, sinal,
+cancelamento), consumidores ainda podem retirar mensagens dele e publicar ACKs que
+ninguém lerá. Esses ACKs ocupam `Q_ack` e acabariam bloqueando consumidores em `msgsnd`.
+Por isso, ao recolher um filho **produtor que não saiu com `EXIT_SUCCESS`** (inclusive
+morte por sinal e perda por `ECHILD`), `supervisor_reap` chama `ipc_ack_abandon()` com o
+`operation_id` dele; a partir daí `ipc_poll_events()` descarta os ACKs tardios dessa
+operação a cada ciclo. Um produtor que termina com sucesso já recebeu todos os ACKs e não
+é abandonado. Limites: a lista de operações abandonadas cresce em uma entrada por produtor
+que falhou e é percorrida a cada `poll_events` (uma chamada `msgrcv` não bloqueante por
+entrada); o descarte é seletivo por `mtype`, então ACKs de operações vivas não são
+afetados; `operation_id` não é reutilizado durante a vida das filas, ou um ACK tardio
+poderia ser creditado a outra operação.
+
+**Limpeza em falhas.** `ack_begin` só cria o registro local depois de ter memória para ele.
+`producer_run` chama `ack_end` em sucesso, falha ou cancelamento, e `ack_end` remove o
+registro local mesmo que a drenagem falhe. Os identificadores das filas pertencem ao
+supervisor: o filho usa `worker_close` (libera só memória local, inclusive registros de ACK
+e a lista de abandonadas herdada) e nunca remove filas; `msg_backend_destroy` remove todas
+as filas de dados e de controle e libera a memória, mesmo que uma remoção falhe.
 
 **Estatísticas.** O supervisor chama `ipc_poll_events()` a cada ciclo do REPL (no máximo
 100 ms), ao receber `SIGCHLD` e durante o `shutdown`: lê `Q_evt` com `IPC_NOWAIT` até
