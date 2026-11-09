@@ -111,17 +111,20 @@ facilitar a documentação técnica.
 A implementação de `shm_backend` fica no diretório `src/ipc/shm_backend/`.
 O arquivo `lifecycle.c` contém a criação, a inicialização e a liberação dos
 segmentos e conjuntos de semáforos. `operations.c` implementa envio, recebimento
-e leitura sincronizada da contagem. `shm_ring.c` implementa as operações locais do buffer, cujo
-layout e contratos privados ficam em `shm_ring.h`. A interface para a fachada
-permanece em `include/mpmc/ipc/shm_backend.h`.
+e leitura sincronizada da contagem. `ack.c` implementa o registro, a correlação,
+a notificação auxiliar e a espera de ACK por operação. `shm_ring.c` implementa
+as operações locais do buffer, cujo layout e contratos privados ficam em
+`shm_ring.h`. A interface para a fachada permanece em
+`include/mpmc/ipc/shm_backend.h`.
 
 Tipos que precisam ser conhecidos por vários arquivos de implementação devem
 ser definidos em um cabeçalho privado no mesmo diretório. `shm_ring_t` já segue
-essa organização. `shm_backend_internal.h` define `shm_segment_t` e a representação
-completa de `struct shm_backend`, incluindo o vetor local de segmentos, os
-identificadores dos conjuntos e os índices MUTEX/EMPTY/FULL. `lifecycle.c` e
-`operations.c` compartilham esses tipos. O layout e as operações do buffer continuam
-em `shm_ring.h`, independentes dos tipos de contexto do backend.
+essa organização. `shm_backend_internal.h` define `shm_segment_t`, os tipos de
+controle e bitmap de ACK e a representação completa de `struct shm_backend`,
+incluindo os vetores locais de segmentos, os identificadores dos conjuntos e
+os índices MUTEX/EMPTY/FULL e ACK. `lifecycle.c`, `operations.c` e `ack.c`
+compartilham esses tipos. O layout e as operações do buffer continuam em
+`shm_ring.h`, independentes dos tipos de contexto do backend.
 Um arquivo `shm_backend.c` pode conter rotinas comuns se houver necessidade,
 mas definir tipos nele não os torna visíveis aos demais arquivos `.c`.
 
@@ -162,7 +165,7 @@ com a operação (detach, remoção de segmento ou remoção de conjunto), índi
 conforme a operação; não se deve assumir que os dois números coincidam.
 O chamador pode copiar os registros para um relatório ou apresentá-los na camada
 de aplicação; os registros temporários só são válidos durante cada chamada da
-callback. O backend não retém o reporter nem aloca uma lista de erros.
+callback. O backend não retém o reporter nem aloca uma lista de erros. Os recursos globais de ACK não pertencem a um produtor específico; falhas ao limpá-los são incluídas no primeiro erro retornado pela operação, mas não são atribuídas artificialmente a um `producer_id` na callback.
 
 A limpeza tenta todos os recursos e libera o estado local mesmo quando há falhas.
 `worker_close` mantém os objetos globais; `destroy` também solicita `IPC_RMID`.
@@ -196,7 +199,7 @@ e do encerramento permanece na #20. Cada worker fecha seu estado local; somente 
 recolher todos os filhos o supervisor destrói os objetos globais. Não há tentativa
 de reparar contadores ou continuar usando o contexto após uma falha fatal.
 
-O protocolo de ACK continua pendente (#11). A implementação atual não mascara sinais
+O módulo `ack.c` implementa o registro, a correlação por operação, a deduplicação por sequência, a espera e a finalização dos ACKs SHM. A auxiliar interna de notificação também está implementada, mas `shm_backend_receive()` ainda não a chama; essa integração permanece na #11. A implementação atual não mascara sinais
 entre aquisição e publicação. Término de processo nesse intervalo também exige
 descartar o contexto; recuperá-lo para continuar outras operações está fora do
 contrato da #10. `worker_close` e `destroy` tratam backend nulo como operação vazia,
@@ -257,7 +260,6 @@ continua aceitando o próximo comando depois de qualquer erro recuperável.
 ## Decisões a revisar quando houver implementação
 
 - Layout binário e capacidade de cada segmento de 2048 bytes.
-- Mecanismo de ACK por operação nos dois backends, incluindo ausência de deadlock.
 - Volume máximo de jobs simultâneos e limites de IPC do kernel.
 - Saída no terminal quando filhos e REPL imprimem simultaneamente.
 - Relação entre tempo de operação da aplicação e tempos de execução dos filhos.
@@ -273,7 +275,7 @@ Consulte @ref ipc_protocol e @ref testing_plan.
 - #16: a fachada de transporte já despacha para os backends e seus contratos estão
   fixados em `transport.h` (#45). Falta propagar resultados e diagnósticos de cleanup
   em `ipc_worker_close`/`ipc_destroy` e completar a integração da aplicação. Os dados
-  e as contagens do modo 1 já são exercitados com IPC real; seus ACKs continuam stubs (#11).
+  e as contagens do modo 1 já são exercitados com IPC real; o mecanismo interno de registro e espera de ACK SHM já está implementado; falta integrar a notificação ao recebimento real na #11.
 - #17: o núcleo de producer_run() e o roteamento já existem e possuem testes com
   transporte substituto. Falta ligar a chamada ao ponto de entrada do filho no supervisor
   e comprovar a execução integrada, incluindo os ACKs reais dos dois backends.

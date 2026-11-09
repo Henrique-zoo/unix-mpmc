@@ -7,9 +7,9 @@
  * A fachada existe (src/ipc/transport.c) e apenas despacha para o backend selecionado.
  * - Modo 2 (filas): todas as operações abaixo possuem implementação; os retornos
  *   documentados correspondem ao que msg_backend.c produz hoje.
- * - Modo 1 (memória compartilhada): ciclo de vida, envio, recebimento e contagens
- *   sincronizadas são reais. Somente as operações de ACK permanecem como stubs
- *   que retornam MPMC_ERR_STATE (pendente: #11).
+ * - Modo 1 (memória compartilhada): ciclo de vida, envio, recebimento, contagens
+ *   sincronizadas e registro/espera/finalização de ACK por operação estão implementados.
+ *   A notificação automática de consumo dentro de ipc_receive() ainda está pendente (#11).
  * Itens marcados como "pendente" não podem ser verificados nesta revisão.
  *
  * @par Convenção de retorno
@@ -26,7 +26,7 @@
  * "estrutura vazia"); é diagnóstico e não deve ser usado para decidir o fluxo.
  * Falhas de argumentos rejeitados pelo kernel preservam errno, mesmo quando
  * classificadas como MPMC_ERR_INVALID_ARG; EIDRM resulta em MPMC_ERR_SHUTDOWN.
- * MPMC_ERR_NO_SPACE permanece reservado para a tabela de ACK da issue #11.
+ * MPMC_ERR_NO_SPACE é retornado pelo modo 1 quando as 64 posições de ACK estão ocupadas.
  *
  * @par Falhas fatais no modo 1
  * ipc_send(), ipc_receive() e ipc_consumed_count() seguem a política de
@@ -181,10 +181,9 @@ size_t ipc_producer_count(const ipc_context_t *context);
  * @pre Para solicitar confirmação, chamar ipc_ack_begin() para o
  * message->operation_id antes do primeiro envio. O backend consulta esse contexto
  * para determinar a política de ACK e preserva todos os campos da mensagem.
- * @note No modo 2, o envio com ACK ativo usa msgsnd() com IPC_NOWAIT: em fila cheia, drena
- * os ACKs da própria operação, espera até 1 ms e repete, de modo que o produtor nunca
- * bloqueia no kernel sem consumir ACKs (docs/protocol.md). Sem ACK ativo, o envio é
- * bloqueante.
+ * @note No modo 2, o envio com ACK ativo usa msgsnd() com IPC_NOWAIT: em fila cheia,
+ * drena os ACKs da própria operação, espera até 1 ms e repete. Sem ACK ativo, o envio
+ * é bloqueante.
  */
 mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message_t *message);
 
@@ -196,7 +195,9 @@ mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message
  * @param blocking Se true, aguarda um item; se false, não espera.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: mensagem retirada e contada; no modo 2, confirmação publicada se
- *   solicitada. system_errno é zero. ACKs do modo 1 ainda são pendentes.
+ *   solicitada. system_errno é zero. No modo 1, o registro e a espera de ACK
+ *   estão implementados, mas a notificação automática no recebimento permanece
+ *   pendente (#11).
  * - MPMC_ERR_INVALID_ARG: context/out nulo, com system_errno zero; ou argumento
  *   rejeitado por semop()/msgrcv()/msgsnd(), com errno preservado.
  * - MPMC_ERR_INVALID_INDEX: índice lógico fora de 1..p (decidido pela fachada, nos dois
@@ -212,7 +213,8 @@ mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message
  *   system_errno zero.
  * @details A contagem pertence ao backend. No modo 2, ele também sinaliza o produtor
  * quando a operação pediu ACK; o worker não duplica a confirmação. No modo 1,
- * blocking=false ainda pode aguardar o mutex; a retirada não emite ACK nesta etapa.
+ * blocking=false ainda pode aguardar o mutex. O mecanismo de ACK por operação está
+ * implementado, mas a retirada ainda não chama a auxiliar de notificação (#11).
  * @warning No modo 1, falha de publicação ocorre depois da retirada e da contagem,
  * podendo deixar out preenchido; a operação não é desfeita e o contexto torna-se
  * inutilizável. Não repetir o recebimento; aplicar @ref shm_operation_failures.
@@ -239,13 +241,13 @@ mpmc_result_t ipc_receive(
  * - MPMC_OK: operação registrada; system_errno é zero.
  * - MPMC_ERR_INVALID_ARG: context nulo, operation_id zero ou maior que LONG_MAX, ou
  *   expected fora de 1..1024 (decidido pela fachada, nos dois modos); system_errno é zero.
- * - MPMC_ERR_STATE: operation_id já registrada (modo 2) ou stub do modo 1 (pendente: #11).
- * - MPMC_ERR_SYS: falha de alocação do registro; system_errno preserva o errno de
- *   realloc(); o estouro do tamanho do registro retorna este estado com system_errno zero.
+ * - MPMC_ERR_STATE: operation_id já registrada (modos 1 e 2); system_errno é zero.
+ * - MPMC_ERR_NO_SPACE: tabela de 64 operações do modo 1 cheia; system_errno é zero.
+ * - MPMC_ERR_SYS: falha de alocação do registro no modo 2; system_errno preserva errno.
+ *   Falhas de semáforo no modo 1 também preservam errno.
  * @pre Deve ser chamada ANTES do primeiro envio da operação que espera ACKs. Se retornar
  * erro, nada foi registrado e ipc_ack_end() não deve ser chamada.
- * @note Pendentes: recusa de operation_id maior que LONG_MAX (modo 2, #14) e
- * MPMC_ERR_NO_SPACE quando a tabela de 64 operações do modo 1 estiver cheia (#11).
+ * @note operation_id maior que LONG_MAX é rejeitado pela fachada comum nos dois modos.
  */
 mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsigned expected);
 
@@ -258,16 +260,24 @@ mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsig
  * - MPMC_ERR_INVALID_ARG: context nulo ou operation_id zero ou maior que LONG_MAX, com
  *   system_errno zero;
  *   ou msgrcv() retornou EINVAL/EFAULT, preservado em system_errno (modo 2).
- * - MPMC_ERR_STATE: operação não registrada, ou ACK inconsistente (modo 2), ou stub do
- *   modo 1 (pendente: #11).
- * - MPMC_ERR_INTERRUPTED: espera interrompida por sinal; system_errno é EINTR; as
- *   confirmações já contadas permanecem e ipc_ack_end() continua obrigatória (modo 2).
- * - MPMC_ERR_SHUTDOWN: msgrcv() retornou EIDRM, preservado em system_errno (modo 2).
- * - MPMC_ERR_SYS: outra falha de msgrcv(); system_errno preserva o errno (modo 2).
+ * - MPMC_ERR_STATE: operação não registrada ou ACK inconsistente (modo 2);
+ *   no modo 1, operação não registrada ou já possui outro waiter ativo;
+ *   system_errno é zero.
+ * - MPMC_ERR_INTERRUPTED: espera interrompida por sinal; system_errno é EINTR;
+ *   as confirmações já contabilizadas permanecem e ipc_ack_end() continua obrigatória.
+ * - MPMC_ERR_SHUTDOWN: semop() retornou EIDRM (modo 1) ou msgrcv() retornou EIDRM
+ *   (modo 2), preservado em system_errno.
+ * - MPMC_ERR_SYS: outra falha de semop() (modo 1) ou msgrcv() (modo 2);
+ *   system_errno preserva o errno.
  * @pre A operação já enviou as `expected` mensagens correspondentes.
  * @note ACKs recebidos antes desta chamada permanecem contabilizados.
- * @warning A garantia de ausência de deadlock por saturação do canal de confirmações
- * depende do laço de drenagem no envio e é pendente (#14).
+ * @warning No modo 1, falhas fatais de semop() podem comprometer o contexto SHM,
+ * inclusive durante a aquisição/liberação do mutex ou a espera pela notificação.
+ * Aplicar @ref shm_operation_failures e encaminhar o encerramento coordenado;
+ * não continuar usando o contexto após uma falha fatal.
+ * No modo 2, o envio com ACK usa msgsnd(..., IPC_NOWAIT), drena as confirmações
+ * próprias ao encontrar EAGAIN e aplica backoff curto antes de tentar novamente
+ * (mecanismo implementado na #14).
  */
 mpmc_result_t ipc_ack_wait(ipc_context_t *context, uint64_t operation_id);
 
@@ -276,15 +286,23 @@ mpmc_result_t ipc_ack_wait(ipc_context_t *context, uint64_t operation_id);
  * @param context Contexto do produtor.
  * @param operation_id Identificador preparado em ipc_ack_begin().
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
- * - MPMC_OK: estado local liberado; no modo 2, também quando a operação é desconhecida
- *   ou já foi encerrada (a chamada é idempotente); system_errno é zero.
+ * - MPMC_OK: estado local liberado; operação desconhecida ou já encerrada também
+ *   retorna sucesso nos dois modos (chamada idempotente); system_errno é zero.
  * - MPMC_ERR_INVALID_ARG: context nulo ou operation_id zero ou maior que LONG_MAX;
  *   system_errno é zero.
- * - MPMC_ERR_STATE: stub do modo 1 (pendente: #11).
- * @note Chamar ao final do trabalho, mesmo quando o envio/espera falhar, desde que
- * ipc_ack_begin() tenha retornado MPMC_OK. No modo 2, drena sem bloquear os ACKs da
- * operação que já estão na fila; os que chegarem depois (consumo posterior ao fim do
- * produtor) são descartados pelo supervisor via ipc_ack_abandon()/ipc_poll_events().
+ * - MPMC_ERR_STATE: existe um waiter ativo para a operação no modo 1;
+ *   o registro permanece intacto; system_errno é zero.
+ * - MPMC_ERR_INTERRUPTED: operação de semáforo interrompida no modo 1; system_errno contém EINTR.
+ * - MPMC_ERR_SHUTDOWN: semáforo removido no modo 1 ou fila removida no modo 2;
+ *   system_errno contém EIDRM.
+ * - MPMC_ERR_SYS: outra falha de semáforo (modo 1) ou operação de fila (modo 2);
+ *   system_errno preserva errno.
+ * @note Chamar ao final do trabalho, mesmo quando envio/espera falhar, desde que
+ * ipc_ack_begin() tenha retornado MPMC_OK. No modo 1, tokens restantes são drenados
+ * antes da reutilização da posição. Apenas um waiter pode aguardar cada operação;
+ * ack_end retorna MPMC_ERR_STATE enquanto essa espera estiver ativa. No modo 2,
+ * ack_end drena ACKs já enfileirados, e o supervisor descarta ACKs tardios via
+ * ipc_ack_abandon()/ipc_poll_events().
  */
 mpmc_result_t ipc_ack_end(ipc_context_t *context, uint64_t operation_id);
 

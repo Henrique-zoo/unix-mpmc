@@ -238,7 +238,8 @@ static void test_shared_memory_flow(ipc_context_t *context) {
     CHECK(count == 0);
     CHECK_RESULT(ipc_consumed_count(context, 2, &count), MPMC_OK, 0);
     CHECK(count == 1);
-    CHECK_RESULT(ipc_ack_begin(context, sent.operation_id, 1), MPMC_ERR_STATE, 0);
+    CHECK_RESULT(ipc_ack_begin(context, sent.operation_id, 1), MPMC_OK, 0);
+    CHECK_RESULT(ipc_ack_end(context, sent.operation_id), MPMC_OK, 0);
 }
 
 /**
