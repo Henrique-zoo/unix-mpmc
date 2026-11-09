@@ -908,6 +908,41 @@ static void test_end_releases_slot_after_unlock_failure(void) {
 }
 
 /**
+ * @brief Verifica a limpeza do waiter após uma interrupção adicional do mutex.
+ */
+static void test_waiter_release_retries_interrupted_lock(void) {
+    const uint64_t operation_id = 113;
+
+    check_result(shm_backend_ack_begin(owned_backend, operation_id, 1), MPMC_OK, 0);
+
+    /*
+     * As duas primeiras aquisições registram o waiter e consultam a operação.
+     * A terceira ocorre durante a limpeza do waiter.
+     */
+    inject_sem_failure(
+        owned_backend->ack_semid,
+        SHM_ACK_SEM_MUTEX,
+        -1,
+        2,
+        (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR}
+    );
+
+    alarm_seen = 0;
+    alarm(1);
+
+    mpmc_result_t result = shm_backend_ack_wait(owned_backend, operation_id);
+
+    alarm(0);
+
+    CHECK(alarm_seen);
+    check_result(result, MPMC_ERR_INTERRUPTED, EINTR);
+    CHECK(!sem_failure.enabled);
+
+    /* A espera terminou e o registro deve poder ser encerrado normalmente. */
+    check_result(shm_backend_ack_end(owned_backend, operation_id), MPMC_OK, 0);
+}
+
+/**
  * @brief Verifica a propagação de uma falha fatal na espera por ACK.
  * @details Executado por último: após EIDRM, o contexto não é reutilizado.
  */
@@ -980,6 +1015,7 @@ int main(void) {
         test_capacity_bitmap_and_reuse();
         test_preserving_path_recovers_unlock_failure();
         test_end_releases_slot_after_unlock_failure();
+        test_waiter_release_retries_interrupted_lock();
         test_wait_fatal_sem_failure();
     }
 
