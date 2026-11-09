@@ -186,6 +186,12 @@ $(UNIT_DIR)/ack_cleanup_for_test.o: $(SHM_BACKEND_DIR)/ack.c
 		-Dsysv_sem_remove=mpmc_test_sem_remove \
 		-c $< -o $@
 
+$(UNIT_DIR)/test_shm_ack_lifecycle: tests/unit/test_shm_ack_lifecycle.c \
+        $(UNIT_DIR)/ack_for_test.o $(SHM_BACKEND_DIR)/lifecycle.c $(SHM_OPERATIONS_OBJECT) \
+        $(SHM_RING_OBJECT) src/ipc/shm.c src/ipc/sem.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_shm_backend_ack_create: tests/unit/test_shm_backend_ack_create.c \
 		$(SHM_BACKEND_DIR)/ack.c src/error.c
 	@mkdir -p $(dir $@)
@@ -350,6 +356,7 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
 		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_backend_ack \
 		$(UNIT_DIR)/test_shm_backend_ack_cleanup $(UNIT_DIR)/test_shm_backend_ack_create \
+        $(UNIT_DIR)/test_shm_ack_lifecycle \
 		$(UNIT_DIR)/test_shm_operations $(UNIT_DIR)/test_shm_stress \
 		$(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
 		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_msg_stress \
@@ -375,6 +382,7 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 	@$(UNIT_DIR)/test_shm
 	@$(UNIT_DIR)/test_shm_backend
 	@$(UNIT_DIR)/test_shm_backend_ack
+	@$(UNIT_DIR)/test_shm_ack_lifecycle
 	@$(UNIT_DIR)/test_shm_backend_ack_cleanup
 	@$(UNIT_DIR)/test_shm_backend_ack_create
 	@$(UNIT_DIR)/test_shm_operations

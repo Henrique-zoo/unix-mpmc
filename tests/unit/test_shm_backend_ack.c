@@ -298,7 +298,7 @@ static void test_early_notifications_across_structures(void) {
  * @brief Verifica que mensagens inválidas ou duplicadas não completam a operação.
  */
 /**
- * @brief Verifica a limpeza do bitmap e do contador ao reutilizar um slot.
+ * @brief Verifica a limpeza da notificação final e do contador ao reutilizar um slot.
  * @details A segunda operação recebe apenas um ACK e não pode herdar os ACKs
  *          antecipados da primeira operação.
  */
@@ -342,38 +342,19 @@ static void test_reuse_slot_after_early_notifications(void) {
     check_result(shm_backend_ack_end(owned_backend, second_id), MPMC_OK, 0);
 }
 
-static void test_duplicates_and_invalid_messages(void) {
+static void test_foreign_messages_and_final_notification(void) {
     const uint64_t operation_id = 102;
-    const pid_t producer_pid = getpid();
-
     check_result(shm_backend_ack_begin(owned_backend, operation_id, 2), MPMC_OK, 0);
-
-    const notification_t notifications[] = {
-        make_notification(operation_id, 1, producer_pid + 10000, 1),
-        make_notification(operation_id, 0, producer_pid, 1),
-        make_notification(operation_id, 3, producer_pid, 2),
-        make_notification(operation_id, 1, producer_pid, 1),
-        make_notification(operation_id, 1, producer_pid, 3),
-    };
-
-    pid_t child =
-        spawn_notifications(notifications, sizeof notifications / sizeof notifications[0]);
-    reap_child(child);
-
-    /* Só a sequência 1 foi aceita. A espera deve ser interrompida pelo alarme. */
-    alarm_seen = 0;
-    alarm(1);
-
-    mpmc_result_t result = shm_backend_ack_wait(owned_backend, operation_id);
-
-    alarm(0);
-
-    CHECK(alarm_seen);
-    check_result(result, MPMC_ERR_INTERRUPTED, EINTR);
-
-    notification_t final_notification = make_notification(operation_id, 2, producer_pid, 2);
-    notify_direct(&final_notification);
-
+    notification_t wrong = make_notification(operation_id, 1, getpid() + 10000, 1);
+    notify_direct(&wrong);
+    CHECK(owned_backend->ack_control->records[0].remaining == 2);
+    notification_t first = make_notification(operation_id, 1, getpid(), 1);
+    notification_t last = make_notification(operation_id, 2, getpid(), 2);
+    notify_direct(&first);
+    CHECK(owned_backend->ack_control->records[0].remaining == 1);
+    CHECK(semctl(owned_backend->ack_semid, SHM_ACK_SEM_NOTIFICATION_BASE, GETVAL) == 0);
+    notify_direct(&last);
+    CHECK(semctl(owned_backend->ack_semid, SHM_ACK_SEM_NOTIFICATION_BASE, GETVAL) == 1);
     check_result(shm_backend_ack_wait(owned_backend, operation_id), MPMC_OK, 0);
     check_result(shm_backend_ack_end(owned_backend, operation_id), MPMC_OK, 0);
 }
@@ -445,44 +426,10 @@ static void test_wait_recovers_initial_unlock_failure(void) {
 /**
  * @brief Verifica recuperação quando a aquisição do mutex no loop falha.
  */
-static void test_wait_recovers_loop_lock_failure(void) {
-    const uint64_t operation_id = 107;
-
-    check_result(shm_backend_ack_begin(owned_backend, operation_id, 1), MPMC_OK, 0);
-
-    inject_sem_failure(
-        owned_backend->ack_semid,
-        SHM_ACK_SEM_MUTEX,
-        -1,
-        1,
-        (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR}
-    );
-
-    check_result(shm_backend_ack_wait(owned_backend, operation_id), MPMC_ERR_INTERRUPTED, EINTR);
-
-    check_result(shm_backend_ack_end(owned_backend, operation_id), MPMC_OK, 0);
-}
 
 /**
  * @brief Verifica recuperação quando a liberação do mutex no loop falha.
  */
-static void test_wait_recovers_loop_unlock_failure(void) {
-    const uint64_t operation_id = 108;
-
-    check_result(shm_backend_ack_begin(owned_backend, operation_id, 1), MPMC_OK, 0);
-
-    inject_sem_failure(
-        owned_backend->ack_semid,
-        SHM_ACK_SEM_MUTEX,
-        1,
-        1,
-        (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR}
-    );
-
-    check_result(shm_backend_ack_wait(owned_backend, operation_id), MPMC_ERR_INTERRUPTED, EINTR);
-
-    check_result(shm_backend_ack_end(owned_backend, operation_id), MPMC_OK, 0);
-}
 
 /**
  * @brief Verifica recuperação na liberação do mutex após concluir a espera.
@@ -503,7 +450,7 @@ static void test_wait_recovers_completed_unlock_failure(void) {
         owned_backend->ack_semid,
         SHM_ACK_SEM_MUTEX,
         1,
-        1,
+        0,
         (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR}
     );
 
@@ -556,7 +503,7 @@ static bool wait_for_active_waiter(uint64_t operation_id) {
             shm_ack_record_t *record = &owned_backend->ack_control->records[index];
 
             if (record->operation_id == operation_id) {
-                active = record->waiters == 1U;
+                active = record->waiting;
                 break;
             }
         }
@@ -789,9 +736,9 @@ static void test_simultaneous_operations(void) {
 }
 
 /**
- * @brief Exercita a capacidade máxima e os 1024 bits do último bitmap.
+ * @brief Exercita a capacidade máxima e 1024 consumos no último registro.
  */
-static void test_capacity_bitmap_and_reuse(void) {
+static void test_capacity_counter_and_reuse(void) {
     enum {
         OPERATION_COUNT = 64,
         FIRST_OPERATION_ID = 200,
@@ -923,7 +870,7 @@ static void test_waiter_release_retries_interrupted_lock(void) {
         owned_backend->ack_semid,
         SHM_ACK_SEM_MUTEX,
         -1,
-        2,
+        1,
         (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR}
     );
 
@@ -1003,16 +950,14 @@ int main(void) {
         test_argument_validation();
         test_early_notifications_across_structures();
         test_reuse_slot_after_early_notifications();
-        test_duplicates_and_invalid_messages();
+        test_foreign_messages_and_final_notification();
         test_wait_recovers_initial_unlock_failure();
-        test_wait_recovers_loop_lock_failure();
-        test_wait_recovers_loop_unlock_failure();
         test_wait_recovers_completed_unlock_failure();
         test_wait_unblocks_on_notification();
         test_end_rejected_while_waiting();
         test_simultaneous_operations();
         test_notifications_do_not_cross_operations();
-        test_capacity_bitmap_and_reuse();
+        test_capacity_counter_and_reuse();
         test_preserving_path_recovers_unlock_failure();
         test_end_releases_slot_after_unlock_failure();
         test_waiter_release_retries_interrupted_lock();

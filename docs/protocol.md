@@ -172,13 +172,11 @@ Regras comuns aos dois backends:
 | Segmento `S_i` | `p` | Exatamente 2048 bytes, buffer circular da estrutura `i` |
 | Conjunto de semáforos `M_i` | `p` | 3 semáforos da estrutura `i` |
 | Segmento de controle `C` | 1 | 2048 bytes; cabeçalho de controle e 64 registros de operação |
-| Segmentos de bitmap `B_j` | 4 | 2048 bytes cada; bitmaps de sequências das 64 operações |
 | Conjunto de semáforos `K` | 1 | 65 semáforos: mutex global e 64 notificações por operação |
 
 `lifecycle.c` cria e inicializa `S_i`, `M_i` e os recursos globais de ACK.
 O módulo `ack.c` implementa o registro, a correlação, a espera e a finalização
-das operações. A integração que dispara a notificação de ACK dentro do fluxo
-de `shm_backend_receive()` ainda pertence à #11.
+das operações. O recebimento real chama a confirmação após publicar a vaga.
 
 **Layout de `S_i` (2048 bytes):**
 
@@ -255,7 +253,7 @@ separada de `empty` nesse caminho. A publicação também é atômica individual
 2. Sob exclusão mútua, copia a entrada de `head` para a saída, avança o índice,
    decrementa `count` e incrementa `consumed_total`, usando `shm_ring_pop()`.
 3. Executa `[V(mutex), V(empty)]` em outra `semop()` para publicar a vaga.
-   A implementação atual ainda não consulta o registro de ACK nem confirma o consumo.
+4. Confirma a retirada para a operação ACK após publicar a vaga; só o último consumo a notifica.
 
 **Falhas e sinais.** Se o vetor de aquisição falhar, nenhuma reserva parcial
 permanece e a operação não altera o buffer. Rejeições locais de argumentos
@@ -288,86 +286,37 @@ preservação do contexto exigiria outro protocolo e está fora do contrato da #
 Simplesmente bloquear os sinais antes de um `semop()` bloqueante pode impedir que
 SIGTERM cancele a espera.
 
-**ACK por operação (`ack=1`, mecanismo interno implementado; integração pendente na #11).**
+**ACK por operação (`ack=1`).**
 
-O protocolo mantém até 64 operações simultâneas. Os recursos são globais ao
-backend, compartilhados pelos processos que herdam os identificadores via
-`fork()`:
+Um segmento global de controle de 2048 bytes mantém até 64 operações simultâneas.
+Cada registro contém `operation_id`, PID proprietário, `remaining` (uint16_t) e
+`waiting` (bool). Um conjunto global contém um mutex e 64 semáforos de conclusão.
+A capacidade de 64 é uma escolha de implementação, não um requisito do enunciado.
+Não há bitmaps nem versão de layout: o supervisor cria os recursos antes do fork.
 
-- O segmento de controle `C` tem 2048 bytes. Seu cabeçalho contém `magic` e
-  `version`; a tabela possui 64 registros com `operation_id`, `producer_pid`,
-  `expected` e `received`.
-- Os quatro segmentos de bitmap `B_j` têm 2048 bytes cada. Cada operação
-  ocupa 128 bytes, suficientes para 1024 sequências. Cada bit representa
-  uma sequência, indexada por `sequence - 1`; 16 operações cabem em cada
-  segmento.
-- O conjunto `K` tem 65 semáforos. O índice 0 é o mutex global, inicializado
-  em 1. Os índices 1 a 64 são notificações individuais, inicializadas em 0,
-  uma para cada posição da tabela.
+`shm_backend_ack_begin(op, n)` reserva uma posição sob o mutex, descarta a eventual
+notificação final antiga e registra `remaining=n` antes do primeiro envio. IDs
+repetidos são rejeitados; tabela cheia retorna `MPMC_ERR_NO_SPACE`.
 
-**Registro (`shm_backend_ack_begin`).** Sob o mutex global, rejeita um
-`operation_id` já registrado com `MPMC_ERR_STATE`, procura a primeira posição
-livre e retorna `MPMC_ERR_NO_SPACE` se as 64 posições estiverem ocupadas.
-Antes de reutilizar uma posição, drena suas notificações pendentes e zera
-seu bitmap. Em seguida registra o ID da operação, o PID do produtor,
-a quantidade esperada e o contador recebido, inicialmente zero. O limite
-de `expected` é 1024.
+`shm_backend_receive()` retira a mensagem, atualiza o total e publica a vaga antes
+de chamar a auxiliar privada de confirmação. Ela identifica a operação pelo ID e
+confere seu PID. Uma operação desconhecida é ignorada (mensagem sem ACK ou lote já
+encerrado). Cada retirada efetiva decrementa o contador exatamente uma vez;
+**não há deduplicação por sequência**. A transição de um para zero publica um único
+token de conclusão, no mesmo vetor semop() que libera o mutex.
 
-**Notificação de consumo (`shm_backend_ack_notify_consumed`, auxiliar interna).**
-A notificação procura o `operation_id` da mensagem sob o mutex. Operações
-desconhecidas são ignoradas: isso cobre mensagens sem ACK solicitado e
-operações já encerradas. Para uma operação ativa, confere se
-`sender_pid` corresponde ao PID registrado e se `sequence` está no intervalo
-de 1 a `expected`. Uma sequência inválida ou já marcada no bitmap não gera
-novo ACK. Para uma sequência válida ainda não recebida, marca o bit e
-incrementa `received`; a publicação do token de notificação e a liberação
-do mutex são realizadas em um único vetor atômico de `semop()`.
+`shm_backend_ack_wait()` retorna imediatamente se o lote já concluiu. Caso contrário,
+marca `waiting`, libera o mutex e espera um token. Confirmações anteriores à espera
+não se perdem. A limpeza da indicação de espera readquire o mutex, repetindo EINTR
+somente nessa aquisição de limpeza, e preserva a interrupção da espera original.
+`ack_end()` rejeita uma posição com waiter ativo e libera as demais de forma idempotente.
 
-O índice lógico `producer_id` identifica a estrutura de destino e deve ser
-válido (1..p), mas não faz parte da chave de correlação do ACK. Uma operação
-striped pode enviar mensagens a várias estruturas: sua correlação usa
-`(operation_id, sender_pid, sequence)` e converge para o mesmo registro.
-
-**Espera (`shm_backend_ack_wait`).** O produtor verifica `received >= expected`
-sob o mutex e o libera antes de bloquear. Se ainda faltarem mensagens, aguarda
-um token no semáforo individual daquela operação e repete a verificação.
-Assim, não mantém o mutex durante a espera. Notificações anteriores à chamada
-de espera não se perdem: os tokens permanecem acumulados no semáforo da
-operação até serem consumidos pelo waiter. Apenas um processo pode aguardar
-cada operação por vez; uma segunda chamada enquanto houver waiter ativo retorna
-`MPMC_ERR_STATE`. O registro permanece protegido contra reutilização durante
-a espera. A espera é interrompível; uma interrupção por `EINTR` é propagada
-como `MPMC_ERR_INTERRUPTED`. O waiter é liberado se a operação conseguir
-reacquirir o mutex e atualizar o registro; se essa recuperação falhar,
-o contador pode permanecer ativo.
-
-**Finalização (`shm_backend_ack_end`).** Sob o mutex, verifica se existe
-um waiter ativo. Nesse caso, retorna `MPMC_ERR_STATE` e preserva o registro
-e o bitmap, que podem ser finalizados após o término da espera. Sem waiter
-ativo, zera o bitmap e libera o registro. Os tokens restantes são drenados
-por `shm_backend_ack_begin()` antes da reutilização do slot. Encerrar um ID
-que já não está registrado é idempotente. A limpeza
-do backend também desassocia os mapeamentos locais e, quando solicitada pelo
-supervisor, remove os segmentos e o conjunto global de semáforos.
-
-O contador de waiter é protegido pelo mutex global. Se um processo morrer
-abruptamente durante a espera, ou se uma falha impedir a atualização desse
-contador sob o mutex, o registro pode permanecer ocupado. A recuperação
-geral de workers mortos e o cancelamento coordenado de esperas não fazem
-parte desta implementação; permanecem no escopo da #20.
-
-Cada operação pode receber no máximo 1024 notificações distintas, abaixo
-do limite de valor de um semáforo System V no Linux. O limite de 64 refere-se
-a operações simultaneamente registradas, não à quantidade total de operações
-executadas durante a vida do backend.
-
-**Limite atual da integração.** Embora o mecanismo de registro, deduplicação,
-notificação e espera esteja implementado, `shm_backend_receive()` ainda não
-chama `shm_backend_ack_notify_consumed()` após retirar uma mensagem. Portanto,
-o teste direto do mecanismo ACK não significa que o fluxo real de consumo já
-confirme automaticamente as mensagens ao produtor. Essa ligação permanece
-no escopo da #11. A integração do cancelamento coordenado de esperas durante
-o shutdown permanece no escopo da #20.
+Uma operação striped agrega consumos de todos os buffers pelo mesmo operation_id.
+Mensagens não carregam ack_required. O produtor só registra um lote para ack=1.
+Uma falha após a retirada, inclusive na confirmação, não autoriza repetir receive:
+a mensagem já foi consumida. O contexto segue a política de falha fatal descrita
+acima. Cancelamento encerra/recolhe os filhos antes de remover os recursos; a
+recuperação de um worker morto com reutilização do contexto continua fora do contrato.
 
 **Estatísticas.** `shm_backend_consumed_count()` lê `consumed_total` sob `mutex`.
 Só preenche a saída após liberar o mutex com sucesso. O total contabiliza retiradas
@@ -520,7 +469,7 @@ do trabalho. Os retornos por função estão em `transport.h`.
 | Contagem de consumo | `consumed_total` sob `mutex`, junto da retirada | Evento em `Q_evt`, consolidado pelo supervisor |
 | Canal de ACK | Tabela em `C` e contadores no conjunto `K` | `Q_ack`, com `mtype = operation_id` |
 | Limite de ACK | 64 operações com ACK simultâneas | Capacidade de `Q_ack`, com drenagem pelo produtor |
-| Espera pelo ACK | `semop(−n)` | `msgrcv` por tipo |
+| Espera pelo ACK | `semop(−1)` na notificação final | `msgrcv` por tipo |
 | Garantia contra deadlock de ACK | `V` nunca bloqueia | Produtor `ack=1` sempre drena antes de esperar |
 | Janela retirada→contagem | Nenhuma (mesma seção crítica) | Poucas instruções, só em término forçado |
 

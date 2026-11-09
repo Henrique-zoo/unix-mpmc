@@ -4,9 +4,8 @@
  * @ingroup backends
  * @note Estão implementados o ciclo de vida dos recursos SHM, o envio, o
  * recebimento, a leitura sincronizada dos totais e o mecanismo interno de ACK:
- * registro, correlação, deduplicação, espera e finalização por operação.
- * A notificação auxiliar de consumo existe, mas ainda não é chamada por
- * shm_backend_receive(); essa integração pertence à issue #11.
+ * registro, correlação, espera e finalização por operação. O recebimento
+ * confirma cada retirada uma vez e notifica somente a conclusão do lote.
  *
  * @anchor shm_operation_failures
  * @par Falhas nas operações sincronizadas
@@ -52,7 +51,7 @@
  * @brief Estado opaco do backend por memória compartilhada.
  * @details Mantém os segmentos System V de 2048 bytes por estrutura lógica,
  * seus conjuntos de semáforos e os recursos globais de ACK: um segmento de
- * controle, quatro segmentos de bitmap e um conjunto com 65 semáforos.
+ * controle de 2048 bytes e um conjunto com 65 semáforos.
  * Os mapeamentos são locais a cada processo; os objetos IPC são compartilhados.
  * Apenas `ipc/transport.c` deve acessar diretamente esta interface.
  */
@@ -211,19 +210,22 @@ mpmc_result_t shm_backend_send(
  * - MPMC_ERR_SHUTDOWN: semop() retornou EIDRM por remoção do conjunto;
  *   system_errno preserva EIDRM.
  * - MPMC_ERR_SYS: outra falha em semop(); system_errno contém o errno capturado.
+ * - MPMC_ERR_STATE: tabela ACK indisponível ou inconsistente; system_errno é zero.
  * @pre Para backend não nulo e producer_id válido, o segmento está associado,
  * o buffer inicializado e o conjunto de três semáforos disponível.
  * @pre out não nulo aponta para uma mensagem gravável durante a chamada.
  * @post Em sucesso, out contém a mensagem mais antiga e consumed_total aumenta em um.
  * @note blocking=false aplica IPC_NOWAIT apenas à espera por itens. A chamada ainda
  * pode aguardar a exclusão mútua do buffer.
- * @note A retirada atualiza o buffer e o total consumido, mas ainda não chama
- * a auxiliar interna shm_backend_ack_notify_consumed(). A notificação automática
- * de ACK a partir do recebimento permanece pendente de integração na issue #11.
+ * @note Após publicar a vaga, confirma a retirada para a operação produtora.
+ * Operações sem registro ACK não geram notificação. A confirmação final é
+ * publicada somente quando todas as mensagens do lote forem retiradas.
  * @warning Falhas anteriores à retirada preservam out e o buffer. Se a publicação
  * da vaga falhar depois da retirada, out já contém a mensagem e a contagem já foi
  * incrementada. A função não reinsere o item nem desfaz essa contagem; o contexto
  * deve ser considerado inutilizável e o recebimento não deve ser repetido.
+ * Qualquer falha da confirmação após a retirada, inclusive EINTR, também exige
+ * encerrar o contexto: a mensagem já foi consumida e não pode ser retirada novamente.
  * Aplicar a política de @ref shm_operation_failures, inclusive para falhas de
  * recursos na aquisição.
  */
@@ -249,10 +251,10 @@ mpmc_result_t shm_backend_receive(
  * - MPMC_ERR_SHUTDOWN: recurso de semáforo removido; system_errno contém EIDRM.
  * - MPMC_ERR_SYS: outra falha em operação de semáforo; system_errno preserva errno.
  * @details Registra operation_id, PID do produtor e quantidade esperada. A tabela
- * e os bitmaps são compartilhados entre os processos do backend. A mesma operação
+ * é compartilhada entre os processos do backend. A mesma operação
  * pode abranger mensagens destinadas a diferentes estruturas lógicas.
- * @note A política de ACK não é um campo de message_t. A integração que emite a
- * notificação a partir de shm_backend_receive() ainda pertence à issue #11.
+ * @note A política de ACK não é um campo de message_t. O registro precede o
+ * primeiro envio; shm_backend_receive() confirma cada retirada efetiva uma vez.
  */
 mpmc_result_t shm_backend_ack_begin(
     shm_backend_t *backend,
@@ -265,7 +267,7 @@ mpmc_result_t shm_backend_ack_begin(
  * @param backend Backend do filho produtor.
  * @param operation_id Trabalho registrado anteriormente.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
- * - MPMC_OK: as expected sequências distintas foram confirmadas; system_errno é zero.
+ * - MPMC_OK: todos os consumos esperados foram confirmados; system_errno é zero.
  * - MPMC_ERR_INVALID_ARG: backend nulo ou operation_id zero; system_errno é zero.
  * - MPMC_ERR_STATE: operation_id não está registrado ou já possui outro waiter
  *   ativo; system_errno é zero.
@@ -275,7 +277,7 @@ mpmc_result_t shm_backend_ack_begin(
  * @details Apenas um processo pode aguardar cada operação. O registro permanece
  * protegido contra reutilização durante a espera. Consulta o contador sob mutex
  * e bloqueia no semáforo específico da operação sem manter o mutex adquirido.
- * Repete a consulta após cada notificação.
+ * Existe uma única notificação final; conclusão anterior à espera retorna imediatamente.
  * @note Notificações anteriores à chamada permanecem contabilizadas e não se perdem.
  * @warning Falhas de semop() diferentes de EINTR na aquisição ou na liberação
  * do mutex, ou na espera pela notificação, podem comprometer o contexto SHM.
@@ -285,8 +287,8 @@ mpmc_result_t shm_backend_ack_begin(
 mpmc_result_t shm_backend_ack_wait(shm_backend_t *backend, uint64_t operation_id);
 
 /**
- * @brief Encerra o registro e limpa o bitmap de uma operação ACK.
- * @details Tokens restantes são drenados por ack_begin() antes da reutilização do slot.
+ * @brief Encerra e libera o registro de uma operação ACK.
+ * @details A eventual notificação final é drenada por ack_begin() antes da reutilização do slot.
  * @param backend Backend do filho produtor.
  * @param operation_id ID da operação previamente registrada.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:

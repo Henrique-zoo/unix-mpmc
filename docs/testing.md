@@ -40,7 +40,7 @@ não é suficiente para provar correção concorrente.
 | U21 | `supervisor`/shutdown | Filhos reais sincronizados por pipes, saída após SIGTERM, filhos que ignoram SIGTERM, prazo comum e SIGKILL, preservação de sinais, EINTR sem reinício do prazo, erros de relógio/poll/sinalização e shutdown repetido |
 | U22 | `job_outcome`/REPL | Apresentação de resultados de trabalhos com eventos controlados, sem workers (`test_job_outcome` e `test_outcome_repl`): texto de erro de kernel, consumo parcial, cancelamento e falha ao criar o filho com operação, índice (`estrutura I` ou `todas as estruturas`) e quantidade efetiva; `system_errno` interpretado só em 1..4095 e com status diferente de `MPMC_OK`; parcial, cancelado e conclusão com menos mensagens nunca como sucesso; REPL segue aceitando comandos após falha de `fork()` (identificador não consumido); prompt só em stdout; uma linha inteira por evento, sem ordem global; contagem de avisos para redesenhar o prompt, fila finita sem perda ou repetição e eventos pendentes consolidados no `shutdown` |
 | U23 | `transport_parity` | Critérios de aceite da integração dos paradigmas pela fachada (`test_transport_parity`), com backends e processos reais: **C1** varredura prova que `producer.c`, `consumer.c` e `producer_routing.c` não citam paradigma nem syscall, e uma única função de cenário (só `ipc_*`, `producer_run()` e `consumer_run()`) produz resultado idêntico em SHM e MSG (códigos de saída, totais por fila, FIFO/PID/`operation_id`/`sent_at`); **C2** a mesma tabela de 22 chamadas inválidas dá o mesmo `status` nos dois modos (`INVALID_INDEX` para índice fora de 1..p, `INVALID_ARG` para ponteiro nulo/`operation_id`/`expected`), com `system_errno` zero nas rejeições locais; **C3** rollback real: `ipc_init()` com mais estruturas que o limite do kernel (`shmmni`/`msgmni`) falha com `*out` nulo e a contagem de objetos (`/proc/sysvipc/{shm,sem,msg}` no Linux, `ipcs` nos demais) volta ao valor anterior; sem `/proc` o pedido escala (128, 1024, 8192, 40000) até o kernel recusar; **C4** dois filhos chamam `ipc_worker_close()` sem remover nenhum recurso (conferido por `shmctl`/`semctl`/`msgctl`), o dono ainda opera, e `ipc_destroy()` remove todos. Validado por mutação (fachada sem validação, `msg_backend_create` sem rollback, `worker_close` destruindo, worker citando o paradigma) |
-| U24 | `shm_backend_ack` | Registro e finalização de operações, IDs duplicados/desconhecidos, notificações antecipadas, validação de PID/sequência, deduplicação, operações simultâneas e isolamento entre waiters, mensagens em múltiplas estruturas, limite de 64 posições e 1024 sequências, reutilização de slot após ACKs antecipados, waiter único, rejeição de `ack_end` durante espera, interrupção por sinal e propagação de falha fatal `EIDRM`; recuperação de falhas transitórias de liberação do mutex nos caminhos de erro e em ack_end, com verificação de reutilização do slot |
+| U24 | `shm_backend_ack` | Registro e finalização de operações, IDs duplicados/desconhecidos, notificações antecipadas, validação do PID, notificação final única, operações simultâneas e isolamento entre waiters, mensagens em múltiplas estruturas, limite de 64 posições e 1024 consumos, reutilização de slot após ACKs antecipados, waiter único, rejeição de `ack_end` durante espera, interrupção por sinal e propagação de falha fatal `EIDRM`; recuperação de falhas transitórias de liberação do mutex nos caminhos de erro e em ack_end, com verificação de reutilização do slot |
 
 ## Testes de integração (repetir para modos 1 e 2)
 
@@ -294,25 +294,14 @@ A comunicação de falhas fatais ao supervisor e o shutdown coordenado continuam
 pendentes de integração na #20 e não são comprovados por esta suíte.
 O cleanup de segurança encerra/recolhe apenas os filhos próprios e remove apenas
 os recursos do contexto.
-O teste U24 (`test_shm_backend_ack`, issue #50) exercita o mecanismo de ACK com memória compartilhada
-e semáforos System V reais. A suíte verifica validação de argumentos, registro
-e encerramento idempotente, notificações recebidas antes da espera, rejeição
-de PID/sequência incompatíveis, deduplicação de sequências, operações
-independentes e isolamento entre waiters de operações simultâneas. Também
-verifica mensagens distribuídas entre estruturas lógicas, o esgotamento das
-64 posições, o limite de 1024 sequências e a reutilização de um slot após
-notificações antecipadas, confirmando que o bitmap e o contador anteriores
-não são herdados. A espera é exercitada com interrupção por sinal, falhas
-transitórias de semáforo e falha fatal `EIDRM`, cuja propagação é verificada
-sem reutilizar o contexto após o erro. Uma operação admite apenas um waiter
-ativo e `ack_end` retorna `MPMC_ERR_STATE` enquanto a espera está ativa,
-permitindo a finalização após o término do waiter.
-
-Essa suíte testa diretamente o mecanismo interno; ela não comprova a
-notificação automática no fluxo de `shm_backend_receive()`, que ainda não
-está integrada e permanece no escopo da #11. A integração completa dos
-workers e o encerramento coordenado de esperas continuam sujeitos às
-pendências das issues #17 e #20.
+O teste U24 (`test_shm_backend_ack`) verifica registro, conclusão antecipada,
+proprietário, notificação final única, isolamento entre operações, limite de 64
+posições e 1024 consumos, reutilização, waiter único, interrupção e falhas de mutex.
+A deduplicação por sequência foi substituída pelo contrato de uma confirmação por
+retirada efetiva. `test_shm_ack_lifecycle` passa pelo buffer real: confirmações
+antecipadas, consumo parcial, espera bloqueada, quatro produtores concorrentes e
+striped, metadados sem perda/duplicação, cancelamento de produtor em ACK e remoção
+somente dos recursos do teste, preservando um backend espectador.
 
 Para Linux e macOS, SIGALRM é instalado com `sigaction()` sem SA_RESTART e fica
 desbloqueado durante os cenários. A coleta usa `alarm()` e `sigwait()` com
