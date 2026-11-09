@@ -61,12 +61,7 @@ static mpmc_result_t msg_backend_ack_receive(
     ack_event_t ack;
     ssize_t received = 0;
     mpmc_result_t result = sysv_msg_receive(
-        backend->ack_queue,
-        (long)registration->operation_id,
-        &ack,
-        sizeof(ack),
-        nowait,
-        &received
+        backend->ack_queue, (long)registration->operation_id, &ack, sizeof(ack), nowait, &received
     );
     if (result.status != MPMC_OK) {
         return result;
@@ -102,7 +97,8 @@ static mpmc_result_t msg_backend_ack_drain(
 
 /**
  * @brief Descarta sem bloquear todos os ACKs de uma operação encerrada.
- * @details Usada pelo supervisor: ACKs de operações sem dono só ocupam a fila de controle.
+ * @details Usada pelo supervisor: ACKs de operações sem dono só ocupam a fila
+ * de controle.
  */
 static mpmc_result_t msg_backend_purge_operation(msg_backend_t *backend, uint64_t operation_id) {
     for (;;) {
@@ -234,9 +230,9 @@ mpmc_result_t msg_backend_send(
         || producer_id > backend->producer_count) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
-    ack_registration_t *registration =
-        message->operation_id == 0u ? NULL
-                                    : msg_backend_find_registration(backend, message->operation_id);
+    ack_registration_t *registration = message->operation_id == 0u
+        ? NULL
+        : msg_backend_find_registration(backend, message->operation_id);
     if (registration == NULL) {
         return sysv_msg_send(
             backend->data_queues[producer_id - 1u], 1, message, sizeof(*message), false
@@ -248,11 +244,7 @@ mpmc_result_t msg_backend_send(
     }
     for (;;) {
         mpmc_result_t result = sysv_msg_send(
-            backend->data_queues[producer_id - 1u],
-            2,
-            message,
-            sizeof(*message),
-            true
+            backend->data_queues[producer_id - 1u], 2, message, sizeof(*message), true
         );
         if (result.status == MPMC_OK) {
             return result;
@@ -320,8 +312,8 @@ mpmc_result_t msg_backend_ack_begin(
     uint64_t operation_id,
     unsigned expected
 ) {
-    if (backend == NULL || operation_id == 0u || operation_id > (uint64_t)LONG_MAX
-        || expected == 0u || expected > 1024u) {
+    if (backend == NULL || operation_id == 0u || operation_id > (uint64_t)LONG_MAX || expected == 0u
+        || expected > 1024u) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
     if (msg_backend_find_registration(backend, operation_id) != NULL) {
@@ -413,7 +405,8 @@ mpmc_result_t msg_backend_poll_events(msg_backend_t *backend) {
         backend->consumed_counts[event.producer_id - 1u] += event.count;
     }
 
-    /* ACKs tardios de operações abandonadas não podem lotar Q_ack e travar consumidores. */
+    /* ACKs tardios de operações abandonadas não podem lotar Q_ack e travar
+     * consumidores. */
     mpmc_result_t first = {.status = MPMC_OK};
     for (size_t index = 0u; index < backend->abandoned_count; ++index) {
         mpmc_result_t purged = msg_backend_purge_operation(backend, backend->abandoned[index]);

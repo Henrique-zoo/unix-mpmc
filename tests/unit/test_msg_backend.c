@@ -1,12 +1,13 @@
 /**
  * @file test_msg_backend.c
- * @brief Testa a consolidação de consumo, a política de ACK entre processos e as filas de dados.
+ * @brief Testa a consolidação de consumo, a política de ACK entre processos e
+ * as filas de dados.
  * @ingroup tests
  * @details Os consumidores são criados antes do registro de ACK no produtor,
  * verificando que a solicitação chega pelo envelope e não pelo heap herdado.
- * As esperas de confirmação usam alarm() como limite de tempo. Verifica o isolamento
- * entre filas, a ordem FIFO e o recebimento não bloqueante. Também testa a
- * consolidação de eventos e a política de ACK entre processos.
+ * As esperas de confirmação usam alarm() como limite de tempo. Verifica o
+ * isolamento entre filas, a ordem FIFO e o recebimento não bloqueante. Também
+ * testa a consolidação de eventos e a política de ACK entre processos.
  */
 #include <errno.h>
 #include <limits.h>
@@ -177,7 +178,8 @@ static unsigned fail_remove_call;
 #define ALL_QUEUES_MAX 128u
 
 /**
- * @brief Identificadores de todas as filas criadas pelo backend durante a suíte.
+ * @brief Identificadores de todas as filas criadas pelo backend durante a
+ * suíte.
  */
 static int all_queue_ids[ALL_QUEUES_MAX];
 
@@ -442,7 +444,6 @@ static void test_arguments(void) {
  * @brief Verifica que cada índice lógico acessa somente sua própria fila.
  */
 static void test_queue_isolation(void) {
-    fprintf(stderr, "isolation start\n");
     msg_backend_t *backend = NULL;
     mpmc_result_t result = msg_backend_create(&backend, 2u);
 
@@ -481,14 +482,11 @@ static void test_queue_isolation(void) {
 
     /* A mensagem enviada à fila 1 não deve aparecer na fila 2. */
     CHECK_RESULT(msg_backend_send(backend, 1u, &first), MPMC_OK, 0);
-    fprintf(stderr, "isolation sent one\n");
 
     CHECK_RESULT(msg_backend_receive(backend, 2u, &received, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
-    fprintf(stderr, "isolation checked empty\n");
 
     /* A mensagem deve continuar disponível na fila 1. */
     result = msg_backend_receive(backend, 1u, &received, false);
-    fprintf(stderr, "isolation received one\n");
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
 
@@ -498,13 +496,11 @@ static void test_queue_isolation(void) {
 
     /* A mensagem enviada à fila 2 não deve aparecer na fila 1. */
     CHECK_RESULT(msg_backend_send(backend, 2u, &second), MPMC_OK, 0);
-    fprintf(stderr, "isolation sent two\n");
 
     CHECK_RESULT(msg_backend_receive(backend, 1u, &received, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
 
     /* A mensagem deve estar disponível na fila 2. */
     result = msg_backend_receive(backend, 2u, &received, false);
-    fprintf(stderr, "isolation received two\n");
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
 
@@ -512,7 +508,6 @@ static void test_queue_isolation(void) {
         check_message(&received, &second);
     }
 
-    fprintf(stderr, "isolation destroy\n");
     msg_backend_destroy(backend);
 }
 
@@ -899,7 +894,6 @@ static void test_send_backpressure(void) {
         };
 
         result = msg_backend_send(backend, 1u, &pending);
-        fprintf(stderr, "backpressure child send status=%d errno=%d\n", result.status, result.system_errno);
         msg_backend_worker_close(backend);
 
         _exit(result.status == MPMC_OK ? 0 : 1);
@@ -1018,7 +1012,8 @@ static void test_queue_cleanup_remove_failure(void) {
             }
         }
 
-        /* Única limpeza: a fila cuja remoção foi simulada como falha ainda existe. */
+        /* Única limpeza: a fila cuja remoção foi simulada como falha ainda existe.
+         */
         for (size_t index = 0u; index < created_queue_count; ++index) {
             if (removed_queue_results[index].status != MPMC_OK) {
                 result = sysv_msg_remove(created_queue_ids[index]);
@@ -1030,9 +1025,9 @@ static void test_queue_cleanup_remove_failure(void) {
 
 /**
  * @brief Verifica a independência de três filas lógicas.
- * @details Envia uma mensagem a cada índice, recebe na ordem inversa e confirma que
- * cada fila devolve somente a própria mensagem e fica vazia em seguida. O índice
- * seguinte ao último (p + 1) deve ser rejeitado.
+ * @details Envia uma mensagem a cada índice, recebe na ordem inversa e confirma
+ * que cada fila devolve somente a própria mensagem e fica vazia em seguida. O
+ * índice seguinte ao último (p + 1) deve ser rejeitado.
  */
 static void test_three_queues(void) {
     msg_backend_t *backend = NULL;
@@ -1104,8 +1099,9 @@ static void check_no_orphan_queues(void) {
 /**
  * @brief Verifica que o recebimento bloqueante espera por uma mensagem.
  * @details Um filho pede uma mensagem a uma fila vazia com blocking=true. Se o
- * recebimento retornasse sem esperar, o filho terminaria com erro antes do envio.
- * Depois do envio do pai, o filho deve receber exatamente a mensagem enviada.
+ * recebimento retornasse sem esperar, o filho terminaria com erro antes do
+ * envio. Depois do envio do pai, o filho deve receber exatamente a mensagem
+ * enviada.
  */
 static void test_blocking_receive(void) {
     msg_backend_t *backend = NULL;
@@ -1143,7 +1139,8 @@ static void test_blocking_receive(void) {
         _exit(matches ? 0 : 1);
     }
 
-    /* O filho deve ficar bloqueado na fila vazia; retorno antecipado seria erro. */
+    /* O filho deve ficar bloqueado na fila vazia; retorno antecipado seria erro.
+     */
     struct timespec delay = {
         .tv_sec = 0,
         .tv_nsec = 50000000,
@@ -1178,9 +1175,10 @@ static void test_blocking_receive(void) {
 }
 
 /**
- * @brief Verifica a ordem FIFO e o esgotamento de uma fila com várias mensagens.
- * @details Envia oito mensagens, recebe todas na ordem de inserção e confirma que
- * a tentativa seguinte, sem bloqueio, informa fila vazia.
+ * @brief Verifica a ordem FIFO e o esgotamento de uma fila com várias
+ * mensagens.
+ * @details Envia oito mensagens, recebe todas na ordem de inserção e confirma
+ * que a tentativa seguinte, sem bloqueio, informa fila vazia.
  */
 static void test_fifo_order(void) {
     msg_backend_t *backend = NULL;
@@ -1228,10 +1226,12 @@ static void test_fifo_order(void) {
 }
 
 /**
- * @brief Verifica que um recebimento sem mensagem não publica evento nem conta consumo.
+ * @brief Verifica que um recebimento sem mensagem não publica evento nem conta
+ * consumo.
  * @details Com a fila vazia, receive não bloqueante retorna WOULD_BLOCK e o
- * contador consolidado permanece zero. Depois de uma retirada válida, o contador
- * passa a um, o que mostra que a contagem funciona e que o zero anterior era real.
+ * contador consolidado permanece zero. Depois de uma retirada válida, o
+ * contador passa a um, o que mostra que a contagem funciona e que o zero
+ * anterior era real.
  */
 static void test_would_block_publishes_nothing(void) {
     msg_backend_t *backend = NULL;
@@ -1262,7 +1262,8 @@ static void test_would_block_publishes_nothing(void) {
 }
 
 /**
- * @brief Verifica que corpo de tamanho errado e tipo desconhecido retornam MPMC_ERR_STATE.
+ * @brief Verifica que corpo de tamanho errado e tipo desconhecido retornam
+ * MPMC_ERR_STATE.
  * @details Injeta diretamente na fila de dados mensagens fora do contrato. O
  * backend deve classificá-las como violação de estado (system_errno zero) e não
  * contá-las como consumo.
@@ -1280,7 +1281,8 @@ static void test_contract_violations(void) {
     message_t out = {0};
     uint64_t count = UINT64_MAX;
 
-    /* Um envio e uma retirada válidos revelam o identificador da fila de dados. */
+    /* Um envio e uma retirada válidos revelam o identificador da fila de dados.
+     */
     CHECK_RESULT(msg_backend_send(backend, 1u, &message), MPMC_OK, 0);
 
     int queue_id = last_send_msqid;
@@ -1309,7 +1311,8 @@ static void test_contract_violations(void) {
 }
 
 /**
- * @brief Verifica o ciclo de controle de ACK por operação com entradas determinísticas.
+ * @brief Verifica o ciclo de controle de ACK por operação com entradas
+ * determinísticas.
  */
 static void test_ack_control_operations(void) {
     size_t queue_start = all_queue_count;
@@ -1361,7 +1364,8 @@ static void test_ack_control_operations(void) {
     CHECK(ack_control_message_count == 1u);
     CHECK(ack_control_messages[0].operation_id == 202u);
 
-    /* Confirmação recebida antes da espera permanece contabilizada no registro. */
+    /* Confirmação recebida antes da espera permanece contabilizada no registro.
+     */
     ack_control_push(101, 101u, (ssize_t)sizeof(uint64_t));
     result = msg_backend_ack_wait(backend, 101u);
     CHECK(result.status == MPMC_OK);
@@ -1382,7 +1386,8 @@ static void test_ack_control_operations(void) {
     CHECK_RESULT(msg_backend_ack_wait(backend, 101u), MPMC_ERR_STATE, 0);
     CHECK_RESULT(msg_backend_ack_end(backend, 101u), MPMC_OK, 0);
 
-    /* Sem registro ativo, a mensagem não solicita ACK e mantém envio bloqueante. */
+    /* Sem registro ativo, a mensagem não solicita ACK e mantém envio bloqueante.
+     */
     message.sequence = 2u;
     CHECK_RESULT(msg_backend_send(backend, 1u, &message), MPMC_OK, 0);
     CHECK(last_send_type == 1);
@@ -1400,7 +1405,8 @@ static void test_ack_control_operations(void) {
     CHECK_RESULT(msg_backend_ack_wait(backend, 303u), MPMC_OK, 0);
     CHECK_RESULT(msg_backend_ack_end(backend, 303u), MPMC_OK, 0);
 
-    /* Corpo inválido não conta como ACK; a operação pode receber um ACK válido depois. */
+    /* Corpo inválido não conta como ACK; a operação pode receber um ACK válido
+     * depois. */
     CHECK_RESULT(msg_backend_ack_begin(backend, 404u, 1u), MPMC_OK, 0);
     ack_control_push(404, 404u, (ssize_t)sizeof(uint32_t));
     CHECK_RESULT(msg_backend_ack_wait(backend, 404u), MPMC_ERR_STATE, 0);
@@ -1423,41 +1429,25 @@ static void test_ack_control_operations(void) {
 }
 
 /**
- * @brief Executa os testes das filas de dados, cenário de dois consumidores e confirmações
- * seletivas.
+ * @brief Executa os testes das filas de dados, cenário de dois consumidores e
+ * confirmações seletivas.
  * @return Zero se todos os cenários passarem; um se falha.
  */
 int main(void) {
-    fprintf(stderr, "test arguments\n");
     test_arguments();
-    fprintf(stderr, "test isolation\n");
     test_queue_isolation();
-    fprintf(stderr, "test three queues\n");
     test_three_queues();
-    fprintf(stderr, "test fifo order\n");
     test_fifo_order();
-    fprintf(stderr, "test fifo ack\n");
     test_fifo();
-    fprintf(stderr, "test nonblocking\n");
     test_nonblocking_receive();
-    fprintf(stderr, "test would block\n");
     test_would_block_publishes_nothing();
-    fprintf(stderr, "test contract\n");
     test_contract_violations();
-    fprintf(stderr, "diagnostic: before ack control\n");
     test_ack_control_operations();
-    fprintf(stderr, "diagnostic: after ack control\n");
-    fprintf(stderr, "test blocking receive\n");
     test_blocking_receive();
-    fprintf(stderr, "test send mode\n");
     test_send_uses_blocking_mode();
-    fprintf(stderr, "test queue cleanup\n");
     test_queue_cleanup();
-    fprintf(stderr, "test backpressure\n");
     test_send_backpressure();
-    fprintf(stderr, "test remove failure\n");
     test_queue_cleanup_remove_failure();
-    fprintf(stderr, "diagnostic: before process ack tests\n");
 
     msg_backend_t *parent = NULL;
     mpmc_result_t result = msg_backend_create(&parent, 2u);
@@ -1494,7 +1484,8 @@ int main(void) {
         _exit(result.status == MPMC_OK ? 0 : 1);
     }
 
-    /* Os consumidores ja existem quando o produtor registra sua operacao de ACK. */
+    /* Os consumidores ja existem quando o produtor registra sua operacao de ACK.
+     */
     if (msg_backend_ack_begin(parent, 2u, 1u).status != MPMC_OK
         || msg_backend_send(parent, 1u, &first).status != MPMC_OK
         || msg_backend_send(parent, 1u, &second).status != MPMC_OK) {
