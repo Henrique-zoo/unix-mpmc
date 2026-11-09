@@ -303,6 +303,65 @@ static void test_early_ack_and_unregistered(void) {
 }
 
 /**
+ * @brief A fila de eventos cheia não pode reter ACKs de mensagens já retiradas.
+ * @details O consumidor processa duas mensagens, mas Q_evt comporta só um
+ * evento. Ele fica bloqueado publicando o segundo evento; ainda assim, como
+ * ACKs são publicados primeiro, o produtor pode concluir ack_wait(). Drenar
+ * Q_evt então libera o consumidor e permite a limpeza normal.
+ */
+static void test_ack_before_full_event_queue(void) {
+    msg_backend_t *backend = NULL;
+    CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
+    if (backend == NULL) return;
+    live_backend = backend;
+    CHECK(set_qbytes(backend->event_queue, sizeof(consumption_event_t)));
+    CHECK(msg_backend_ack_begin(backend, 88u, 2u).status == MPMC_OK);
+
+    for (unsigned seq = 1u; seq <= 2u; ++seq) {
+        message_t message = {.sender_pid = getpid(), .sequence = seq, .operation_id = 88u};
+        CHECK(msg_backend_send(backend, 1u, &message).status == MPMC_OK);
+    }
+
+    kids[0] = fork();
+    if (kids[0] == 0) {
+        for (unsigned index = 0u; index < 2u; ++index) {
+            message_t message;
+            if (msg_backend_receive(backend, 1u, &message, true).status != MPMC_OK) _exit(1);
+        }
+        _exit(0);
+    }
+    CHECK(kids[0] > 0);
+    if (kids[0] <= 0) {
+        (void)msg_backend_ack_end(backend, 88u);
+        destroy_and_check(backend);
+        return;
+    }
+
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    while (queued(backend->ack_queue) < 2u && elapsed_ms(&start) < CHILD_DEADLINE_MS) {
+        tick();
+    }
+    CHECK(queued(backend->ack_queue) == 2u);
+    CHECK(queued(backend->event_queue) == 1u);
+
+    alarm(WAIT_ALARM_SECONDS);
+    mpmc_result_t waited = msg_backend_ack_wait(backend, 88u);
+    alarm(0);
+    CHECK(waited.status == MPMC_OK);
+    CHECK(waitpid(kids[0], NULL, WNOHANG) == 0);
+
+    CHECK(msg_backend_poll_events(backend).status == MPMC_OK);
+    CHECK(reap(0u, CHILD_DEADLINE_MS, backend) == 0);
+    CHECK(msg_backend_ack_end(backend, 88u).status == MPMC_OK);
+    CHECK(msg_backend_poll_events(backend).status == MPMC_OK);
+    uint64_t consumed = 0u;
+    CHECK(msg_backend_consumed_count(backend, 1u, &consumed).status == MPMC_OK);
+    CHECK(consumed == 2u);
+    destroy_and_check(backend);
+}
+
+/**
  * @brief Operação encerrada antes do consumo: ACKs tardios e fila de controle
  * de 2 posições.
  * @param abandon Se verdadeiro, o pai (supervisor) chama
@@ -411,6 +470,7 @@ int main(void) {
     }
     test_concurrent_operations();
     test_early_ack_and_unregistered();
+    test_ack_before_full_event_queue();
     test_late_acks();
     test_abandon_contract();
     printf("%u verificações de ACK concorrente MSG, %u falhas\n", checks, failures);

@@ -290,11 +290,6 @@ mpmc_result_t msg_backend_receive(
         return (mpmc_result_t){.status = MPMC_ERR_STATE};
     }
 
-    consumption_event_t event = {.producer_id = producer_id, .count = 1u};
-    result = msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), false);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
     if (type == 2) {
         ack_event_t ack = {.operation_id = out->operation_id};
         result = msg_backend_send_retry(
@@ -303,6 +298,18 @@ mpmc_result_t msg_backend_receive(
         if (result.status != MPMC_OK) {
             return result;
         }
+    }
+
+    /*
+     * Publica o ACK antes do evento estatístico. Se Q_evt estiver cheia, o
+     * consumidor pode bloquear no evento, mas o produtor já consegue progredir
+     * pela confirmação. A ordem inversa acoplaria os canais de controle e poderia
+     * deixar ack_wait() parado enquanto o consumidor aguarda o supervisor.
+     */
+    consumption_event_t event = {.producer_id = producer_id, .count = 1u};
+    result = msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), false);
+    if (result.status != MPMC_OK) {
+        return result;
     }
     return (mpmc_result_t){.status = MPMC_OK};
 }
