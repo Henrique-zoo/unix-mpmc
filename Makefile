@@ -269,6 +269,18 @@ $(UNIT_DIR)/test_msg_ack_lifecycle: tests/unit/test_msg_ack_lifecycle.c \
 		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
 		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c $(LDLIBS) -o $@
 
+$(UNIT_DIR)/test_transport_parity: tests/unit/test_transport_parity.c \
+		src/ipc/msg_backend.c src/ipc/transport.c $(WORKERS_DIR)/producer.c \
+		$(WORKERS_DIR)/producer_routing.c $(WORKERS_DIR)/consumer.c \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(WORKERS_DIR) -I$(SHM_BACKEND_DIR) $(CFLAGS) \
+		tests/unit/test_transport_parity.c \
+		$(WORKERS_DIR)/producer.c $(WORKERS_DIR)/producer_routing.c $(WORKERS_DIR)/consumer.c \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c $(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_isolation: tests/unit/test_isolation.c src/app/command.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
@@ -281,6 +293,7 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 		$(UNIT_DIR)/test_isolation \
 		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_consumer \
 		$(UNIT_DIR)/test_consumer_integration $(UNIT_DIR)/test_transport_contract \
+		$(UNIT_DIR)/test_transport_parity \
 		$(UNIT_DIR)/test_transport $(UNIT_DIR)/test_protocol_properties \
 		$(UNIT_DIR)/test_supervisor_report $(UNIT_DIR)/test_supervisor_shutdown \
 		$(UNIT_DIR)/test_job_outcome $(UNIT_DIR)/test_outcome_repl
@@ -309,6 +322,7 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 	@$(UNIT_DIR)/test_isolation
 	@$(UNIT_DIR)/test_producer_routing
 	@$(UNIT_DIR)/test_transport_contract
+	@$(UNIT_DIR)/test_transport_parity
 	@$(UNIT_DIR)/test_transport
 	@$(UNIT_DIR)/test_protocol_properties
 
