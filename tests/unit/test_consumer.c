@@ -30,13 +30,15 @@ static mpmc_result_t receive_failure;
 static int check(bool condition, const char *description);
 static void reset_mocks(void);
 static int test_complete_reads(void);
+static int test_zero_available(void);
 static int test_partial_nonblocking_result(void);
 static int test_error_propagation(void);
 static int test_validation(void);
 static int test_maximum_count(void);
 
 int main(void) {
-    if (test_complete_reads() != 0 || test_partial_nonblocking_result() != 0
+    if (test_complete_reads() != 0 || test_zero_available() != 0
+        || test_partial_nonblocking_result() != 0
         || test_error_propagation() != 0 || test_validation() != 0
         || test_maximum_count() != 0) {
         return 1;
@@ -111,6 +113,37 @@ static int test_complete_reads(void) {
             }
         }
         if (check(close_calls == 0u, "worker must not close the inherited context")) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int test_zero_available(void) {
+    struct ipc_context context = {.producer_count = 2u};
+    const consumer_ack_mode_t modes[] = {CONSUMER_BLOCKING, CONSUMER_NONBLOCKING};
+
+    /* Falha já na primeira retirada: nada foi consumido, em qualquer política de espera. */
+    for (size_t index = 0u; index < sizeof modes / sizeof modes[0]; ++index) {
+        consumer_job_t job = {
+            .producer_id = 2u,
+            .message_count = 3u,
+            .ack_mode = modes[index],
+            .operation_id = 76u,
+        };
+        consumer_result_t out = {.consumed_count = 99u};
+        reset_mocks();
+        fail_receive_call = 1u;
+        receive_failure = (mpmc_result_t){.status = MPMC_ERR_WOULD_BLOCK, .system_errno = EAGAIN};
+
+        mpmc_result_t result = consumer_run(&context, &job, &out);
+        if (check(result.status == MPMC_ERR_WOULD_BLOCK && result.system_errno == EAGAIN,
+                  "empty structure must return the receive result unchanged")
+            || check(out.error.status == result.status && out.error.system_errno == EAGAIN
+                         && out.consumed_count == 0u,
+                     "zero available must report consumed_count zero, not stale data")
+            || check(receive_calls == 1u, "stop after the first empty receive")
+            || check(close_calls == 0u, "worker must not close the inherited context")) {
             return 1;
         }
     }
