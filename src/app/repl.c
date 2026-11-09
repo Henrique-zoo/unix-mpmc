@@ -18,6 +18,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "job_outcome.h"
 #include "mpmc/app/command.h"
 
 /** @brief Comprimento máximo aceito para uma linha de comando. */
@@ -149,17 +150,32 @@ static void dispatch_line(supervisor_t *supervisor, char *line, bool *shutdown) 
     if (is_blank_line(line)) return;
 
     command_t command;
+    bool dispatch_attempted = false;
     mpmc_result_t error = command_parse(line, &command);
     if (error.status == MPMC_OK) {
         error = command_validate(&command, supervisor_producer_count(supervisor));
     }
     if (error.status == MPMC_OK) {
+        dispatch_attempted = true;
         error = supervisor_dispatch(supervisor, &command, NULL);
     }
 
     if (error.status != MPMC_OK) {
-        char error_text[256];
-        (void)mpmc_error_format(error, error_text, sizeof error_text);
+        char error_text[512];
+        if (dispatch_attempted && error.status == MPMC_ERR_SYS
+            && command.kind != COMMAND_SHUTDOWN) {
+            /* O trabalho não começou: o diagnóstico informa o comando, o índice e a causa. */
+            job_outcome_t outcome = {
+                .kind = JOB_OUTCOME_SPAWN_FAILED,
+                .command = command.kind,
+                .producer_id = command.producer_id,
+                .requested = command.message_count,
+                .error = error,
+            };
+            (void)job_outcome_format(&outcome, error_text, sizeof error_text);
+        } else {
+            (void)mpmc_error_format(error, error_text, sizeof error_text);
+        }
         fprintf(stderr, "mpmc: %s\n", error_text);
         return;
     }

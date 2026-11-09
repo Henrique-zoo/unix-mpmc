@@ -46,6 +46,7 @@ release:
 UNIT_DIR := $(BUILD_DIR)/unit
 SHM_BACKEND_DIR := src/ipc/shm_backend
 WORKERS_DIR := src/workers
+APP_DIR := src/app
 SHM_RING_OBJECT := $(BUILD_DIR)/ipc/shm_backend/shm_ring.o
 SHM_OPERATIONS_OBJECT := $(BUILD_DIR)/ipc/shm_backend/operations.o
 
@@ -66,7 +67,7 @@ $(UNIT_DIR)/supervisor_report_for_test.o: src/app/supervisor.c
 		-c $< -o $@
 
 $(UNIT_DIR)/test_supervisor_report: tests/unit/test_supervisor_report.c \
-		$(UNIT_DIR)/supervisor_report_for_test.o
+		$(UNIT_DIR)/supervisor_report_for_test.o src/app/job_outcome.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -87,7 +88,7 @@ $(UNIT_DIR)/supervisor_shutdown_for_test.o: src/app/supervisor.c \
 		-c $< -o $@
 
 $(UNIT_DIR)/test_supervisor_shutdown: tests/unit/test_supervisor_shutdown.c \
-		$(UNIT_DIR)/supervisor_shutdown_for_test.o
+		$(UNIT_DIR)/supervisor_shutdown_for_test.o src/app/job_outcome.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -96,11 +97,25 @@ $(UNIT_DIR)/test_command: tests/unit/test_command.c src/app/command.c src/error.
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
 $(UNIT_DIR)/test_supervisor: tests/unit/test_supervisor.c \
-		$(UNIT_DIR)/supervisor_for_test.o src/app/command.c src/error.c \
+		$(UNIT_DIR)/supervisor_for_test.o src/app/command.c src/app/job_outcome.c src/error.c \
 		src/ipc/transport.c src/ipc/msg_backend.c $(SHM_BACKEND_DIR)/lifecycle.c \
 		$(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+# Apresentação de resultados de trabalhos (#54): formatador puro e REPL/supervisor com
+# eventos controlados e fork() substituído; nenhum worker é necessário.
+$(UNIT_DIR)/test_job_outcome: tests/unit/test_job_outcome.c $(APP_DIR)/job_outcome.c src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(APP_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/test_outcome_repl: tests/unit/test_outcome_repl.c \
+		$(UNIT_DIR)/supervisor_for_test.o $(APP_DIR)/repl.c $(APP_DIR)/command.c \
+		$(APP_DIR)/job_outcome.c src/error.c src/ipc/transport.c src/ipc/msg_backend.c \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(APP_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
 
 $(UNIT_DIR)/test_msg: tests/unit/test_msg.c src/ipc/msg.c src/error.c
 	@mkdir -p $(dir $@)
@@ -267,11 +282,14 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_consumer \
 		$(UNIT_DIR)/test_consumer_integration $(UNIT_DIR)/test_transport_contract \
 		$(UNIT_DIR)/test_transport $(UNIT_DIR)/test_protocol_properties \
-		$(UNIT_DIR)/test_supervisor_report $(UNIT_DIR)/test_supervisor_shutdown
+		$(UNIT_DIR)/test_supervisor_report $(UNIT_DIR)/test_supervisor_shutdown \
+		$(UNIT_DIR)/test_job_outcome $(UNIT_DIR)/test_outcome_repl
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
 	@$(UNIT_DIR)/test_supervisor_report
 	@$(UNIT_DIR)/test_supervisor_shutdown
+	@$(UNIT_DIR)/test_job_outcome
+	@$(UNIT_DIR)/test_outcome_repl
 	@$(UNIT_DIR)/test_msg
 	@$(UNIT_DIR)/test_sem
 	@$(UNIT_DIR)/test_error

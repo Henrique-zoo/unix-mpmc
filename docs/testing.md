@@ -36,6 +36,7 @@ não é suficiente para provar correção concorrente.
 | U20b | `msg_ack_lifecycle` | Critérios de aceite de ACK ponta a ponta no modo MSG (`test_msg_ack_lifecycle`), com `producer_run()`/`consumer_run()` em processos reais sobre `ipc_*`: **C1** 4 produtores `ack=1` (um *striped*) + 1 `ack=2`, 4 consumidores, sem troca de ACKs; **C2** produtor `ack=1` permanece vivo sem consumo e com consumo parcial, e só conclui após o consumo total; consumir mensagens de outro produtor não o libera; **C3** dados (3), ACK (2) e eventos (2) lotados sem deadlock; **C4** `SIGTERM` + `ack_abandon`, remoção da fila de ACK (libera `ack_wait` e consumidor preso em `msgsnd`) e da fila de dados (libera o laço de envio). Validado por mutação: `msgsnd` bloqueante sem drenagem e ACK sem correlação por `mtype` fazem o teste falhar |
 | U20b | supervisor e fachada | `ipc_ack_abandon` despachado só ao modo 2 (`test_transport`, `test_transport_contract`); `supervisor_reap` abandona somente produtor que não saiu com sucesso (`test_supervisor_report`) |
 | U21 | `supervisor`/shutdown | Filhos reais sincronizados por pipes, saída após SIGTERM, filhos que ignoram SIGTERM, prazo comum e SIGKILL, preservação de sinais, EINTR sem reinício do prazo, erros de relógio/poll/sinalização e shutdown repetido |
+| U22 | `job_outcome`/REPL | Apresentação de resultados de trabalhos com eventos controlados, sem workers (`test_job_outcome` e `test_outcome_repl`): texto de erro de kernel, consumo parcial, cancelamento e falha ao criar o filho com operação, índice (`estrutura I` ou `todas as estruturas`) e quantidade efetiva; `system_errno` interpretado só em 1..4095 e com status diferente de `MPMC_OK`; parcial, cancelado e conclusão com menos mensagens nunca como sucesso; REPL segue aceitando comandos após falha de `fork()` (identificador não consumido); prompt só em stdout; uma linha inteira por evento, sem ordem global; contagem de avisos para redesenhar o prompt, fila finita sem perda ou repetição e eventos pendentes consolidados no `shutdown` |
 
 ## Testes de integração (repetir para modos 1 e 2)
 
@@ -109,7 +110,7 @@ recursos IPC de outros usuários/processos por `ipcrm`.
 
 ```bash
 make debug
-make unit   # testes de command, supervisor, msg, sem, error, wrappers, backend, buffer shm e roteamento cíclico do produtor
+make unit   # testes de command, supervisor, msg, sem, error, wrappers, backend, buffer shm, roteamento cíclico do produtor e apresentação de resultados de trabalhos
 make test   # unitários + smoke + integração do REPL
 make docs
 ```

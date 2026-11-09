@@ -24,6 +24,11 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "job_outcome.h"
+
+/** @brief Capacidade da fila de eventos de resultado pendentes de apresentação. */
+#define SUPERVISOR_MAX_PENDING_OUTCOMES 32u
+
 /** @brief Registro de identidade e estado de um processo filho supervisionado. */
 typedef struct {
     pid_t pid;               /**< PID retornado por fork(). */
@@ -51,6 +56,9 @@ struct supervisor {
 
     int event_pipe[2];   /**< Self-pipe: leitura em [0], escrita em [1]. */
     size_t notice_count; /**< Avisos impressos em stderr desde a última consulta. */
+
+    job_outcome_t pending_outcomes[SUPERVISOR_MAX_PENDING_OUTCOMES]; /**< Eventos a apresentar. */
+    size_t pending_outcome_count; /**< Eventos ocupados em pending_outcomes. */
 };
 
 /** @brief Descritor usado pelo tratador para acordar o loop ativo. */
@@ -343,6 +351,43 @@ mpmc_result_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_m
     *out = supervisor;
 
     return (mpmc_result_t){.status = MPMC_OK};
+}
+
+/** @details Copia o evento para a fila interna; a impressão ocorre em supervisor_reap(). */
+mpmc_result_t supervisor_queue_outcome(supervisor_t *supervisor, const job_outcome_t *outcome) {
+    if (supervisor == NULL || outcome == NULL) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    }
+    if (job_outcome_format(outcome, NULL, 0u) < 0) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    }
+    if (supervisor->pending_outcome_count >= SUPERVISOR_MAX_PENDING_OUTCOMES) {
+        return (mpmc_result_t){.status = MPMC_ERR_NO_SPACE};
+    }
+    supervisor->pending_outcomes[supervisor->pending_outcome_count++] = *outcome;
+    return (mpmc_result_t){.status = MPMC_OK};
+}
+
+/**
+ * @brief Imprime em stderr os eventos de resultado pendentes e esvazia a fila.
+ * @param supervisor Instância ativa.
+ * @details Cada evento vira uma única linha, escrita de uma só vez, para que
+ * linhas de eventos concorrentes não se misturem. Cada linha conta como aviso, o
+ * que faz o REPL redesenhar o prompt em terminais.
+ */
+static void flush_pending_outcomes(supervisor_t *supervisor) {
+    for (size_t index = 0u; index < supervisor->pending_outcome_count; ++index) {
+        char text[512];
+        int length = job_outcome_format(&supervisor->pending_outcomes[index], text, sizeof text);
+        if (length < 0) {
+            continue;
+        }
+        char line[sizeof text + 16u];
+        (void)snprintf(line, sizeof line, "mpmc: %s\n", text);
+        (void)fputs(line, stderr);
+        ++supervisor->notice_count;
+    }
+    supervisor->pending_outcome_count = 0u;
 }
 
 /** @details Devolve e zera o contador incrementado por supervisor_reap() a cada
@@ -708,6 +753,8 @@ mpmc_result_t supervisor_reap(
     if (supervisor == nullptr) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 
     mpmc_result_t result = supervisor_poll_events(supervisor, reporter);
+
+    flush_pending_outcomes(supervisor);
 
     size_t index = 0;
 
