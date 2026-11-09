@@ -1,6 +1,8 @@
 # unix-mpmc
 
-> Sistema de múltiplos produtores e múltiplos consumidores em C, utilizando mecanismos de comunicação entre processos (IPC) System V no Unix/Linux.
+> Os dois paradigmas executam produtores e consumidores reais pelo supervisor.
+> O ACK confirma consumo por operação; striped, saturação, consumo parcial e
+> concorrência são exercitados pela suíte de integração do CLI nos dois modos.
 
 **Disciplina:** Sistemas Operacionais — Universidade de Brasília (UnB), 2026/2.
 **Trabalho:** Trabalho Prático 02 — Múltiplos Produtores / Múltiplos Consumidores.
@@ -426,7 +428,7 @@ a integração do REPL por pipes/FIFOs e o teste de redesenho do prompt com pseu
 A suíte de dados SHM também cobre FIFO, metadados, contagens, esperas interrompidas
 e dois produtores/consumidores concorrentes com IPC real. Os testes do ciclo de vida
 injetam falhas na criação/inicialização dos conjuntos e na liberação dos recursos.
-A execução dos workers pela aplicação permanece pendente; esses cenários ainda não comprovam toda a aplicação.
+A suíte `test_application.py` executa os workers reais pelo stdin nos dois modos.
 
 <a id="documentação-doxygen"></a>
 

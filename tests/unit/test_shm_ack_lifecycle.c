@@ -174,6 +174,40 @@ static void test_shutdown_waiter(void) {
     close(channel[1]);
 }
 
+/** @brief O relatório quiescente não espera por um mutex abandonado por filho morto. */
+static void test_abandoned_mutex_snapshot(void) {
+    OK(shm_backend_create(&backend, 1, nullptr));
+    message_t item = message(999, 1);
+    OK(shm_backend_send(backend, 1, &item));
+    receive_from(1);
+    int channel[2];
+    CHECK(pipe(channel) == 0);
+    pid_t child = start_child();
+    CHECK(child >= 0);
+    if (child == 0) {
+        if (sysv_sem_change(backend->segments[0].semid, SHM_SEM_MUTEX, -1, false).status != MPMC_OK)
+            _exit(30);
+        char byte = 1;
+        if (write(channel[1], &byte, 1) != 1) _exit(31);
+        for (;;) pause();
+    }
+    char byte;
+    CHECK(read(channel[0], &byte, 1) == 1);
+    CHECK(kill(child, SIGTERM) == 0);
+    int status;
+    CHECK(waitpid(child, &status, 0) == child);
+    CHECK(WIFSIGNALED(status));
+    for (size_t index = 0; index < 16; ++index)
+        if (children[index] == child) children[index] = 0;
+    uint64_t consumed;
+    OK(shm_backend_final_count(backend, 1, &consumed));
+    CHECK(consumed == 1);
+    OK(shm_backend_destroy(backend, nullptr));
+    backend = nullptr;
+    close(channel[0]);
+    close(channel[1]);
+}
+
 int main(void) {
     parent = getpid();
     struct sigaction action = {.sa_handler = on_alarm};
@@ -240,6 +274,7 @@ int main(void) {
     backend = nullptr;
     test_concurrent_producers();
     test_shutdown_waiter();
+    test_abandoned_mutex_snapshot();
     close(ready[0]);
     close(ready[1]);
     alarm(0);

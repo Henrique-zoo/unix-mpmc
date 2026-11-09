@@ -352,3 +352,10 @@ Os testes completos de integração de FIFO, ACKs e concorrência dos backends d
 dependem das respectivas implementações. Os *smoke tests* validam somente inicialização
 e shutdown; os cenários do REPL não substituem a verificação do transporte IPC completo.
 Scripts automatizados devem capturar a saída e impor limites de tempo para detectar travamentos.
+
+`tests/integration/test_application.py` executa o binário real com stdin e saída
+conectados por pipes. Usa selectors e prazos monotônicos, sem sleeps: ACK striped
+em três estruturas, produção sem espera seguida de consumo parcial, 1024 mensagens
+com contrapressão e seis produtores concorrentes na mesma estrutura. Repete todos
+os cenários em SHM e MSG, confere resultados, contagens e número de filhos, e encerra
+somente o grupo de processos criado por cada cenário se alguma asserção falhar.

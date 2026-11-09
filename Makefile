@@ -59,8 +59,11 @@ $(UNIT_DIR)/supervisor_report_for_test.o: src/app/supervisor.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) \
 		-Dfork=mpmc_test_fork -Dwaitpid=mpmc_test_waitpid \
+        -Dproducer_run_with_result=mpmc_test_producer_run -Dconsumer_run=mpmc_test_consumer_run \
+        -Dipc_worker_close=mpmc_test_worker_close \
 		-Dclock_gettime=mpmc_test_clock_gettime \
 		-Dipc_init=mpmc_test_ipc_init -Dipc_destroy=mpmc_test_ipc_destroy \
+        -Dipc_quiesce=mpmc_test_quiesce \
 		-Dipc_poll_events=mpmc_test_ipc_poll_events \
 		-Dipc_ack_abandon=mpmc_test_ipc_ack_abandon \
 		-Dipc_consumed_count=mpmc_test_ipc_consumed_count \
@@ -77,11 +80,14 @@ $(UNIT_DIR)/supervisor_shutdown_for_test.o: src/app/supervisor.c \
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) \
 		-Dfork=mpmc_shutdown_test_fork -Dkill=mpmc_shutdown_test_kill \
+        -Dproducer_run_with_result=mpmc_test_producer_run -Dconsumer_run=mpmc_test_consumer_run \
+        -Dipc_worker_close=mpmc_test_worker_close \
 		-Dclock_gettime=mpmc_shutdown_test_clock_gettime -Dpoll=mpmc_shutdown_test_poll \
 		'-Dsigaction(...)=mpmc_shutdown_test_sigaction(__VA_ARGS__)' \
 		-Dsigprocmask=mpmc_shutdown_test_sigprocmask -Dwaitpid=mpmc_shutdown_test_waitpid \
 		-Dread=mpmc_shutdown_test_read -Dpipe=mpmc_shutdown_test_pipe -Dclose=mpmc_shutdown_test_close \
 		-Dipc_init=mpmc_shutdown_test_ipc_init -Dipc_destroy=mpmc_shutdown_test_ipc_destroy \
+        -Dipc_quiesce=mpmc_test_quiesce \
 		-Dipc_poll_events=mpmc_shutdown_test_ipc_poll_events \
 		-Dipc_ack_abandon=mpmc_shutdown_test_ipc_ack_abandon \
 		-Dipc_consumed_count=mpmc_shutdown_test_ipc_consumed_count \
@@ -100,7 +106,8 @@ $(UNIT_DIR)/test_supervisor: tests/unit/test_supervisor.c \
 		$(UNIT_DIR)/supervisor_for_test.o src/app/command.c src/app/job_outcome.c src/error.c \
 		src/ipc/transport.c src/ipc/msg_backend.c $(SHM_BACKEND_DIR)/lifecycle.c \
 		$(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
-		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c
+		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c \
+        src/workers/producer.c src/workers/producer_routing.c src/workers/consumer.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -114,7 +121,8 @@ $(UNIT_DIR)/test_outcome_repl: tests/unit/test_outcome_repl.c \
 		$(UNIT_DIR)/supervisor_for_test.o $(APP_DIR)/repl.c $(APP_DIR)/command.c \
 		$(APP_DIR)/job_outcome.c src/error.c src/ipc/transport.c src/ipc/msg_backend.c \
 		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
-		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c
+		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c \
+        src/workers/producer.c src/workers/producer_routing.c src/workers/consumer.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(APP_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -420,6 +428,7 @@ test: all unit $(INTEGRATION_DIR)/test_repl
 	@sh tests/integration/test_invalid_commands.sh ./mpmc
 	@sh tests/integration/test_repl.sh ./mpmc
 	@$(INTEGRATION_DIR)/test_repl ./mpmc
+	@python3 tests/integration/test_application.py ./mpmc
 	@echo 'Unit, startup and REPL tests passed.'
 
 docs:

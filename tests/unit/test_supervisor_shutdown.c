@@ -1,3 +1,5 @@
+#include "mpmc/workers/consumer.h"
+#include "mpmc/workers/producer.h"
 /**
  * @file test_supervisor_shutdown.c
  * @brief Testes do prazo de shutdown com filhos reais e falhas controladas.
@@ -294,7 +296,7 @@ int mpmc_shutdown_test_pipe(int descriptors[2]) {
         return -1;
     }
     int result = pipe(descriptors);
-    if (result == 0) {
+    if (result == 0 && fixture.event_pipe[0] == -1) {
         fixture.event_pipe[0] = descriptors[0];
         fixture.event_pipe[1] = descriptors[1];
     }
@@ -1018,4 +1020,33 @@ static void check_error(size_t index, supervisor_shutdown_operation_t operation,
     CHECK(fixture.errors[index].operation == operation);
     CHECK(fixture.errors[index].result.status != MPMC_OK);
     CHECK(fixture.errors[index].result.system_errno == system_errno);
+}
+
+/** @brief Entradas não executadas: os filhos são controlados pela fixture de fork. */
+mpmc_result_t mpmc_test_producer_run(
+    ipc_context_t *context,
+    const producer_job_t *job,
+    producer_result_t *out
+) {
+    (void)context;
+    (void)job;
+    *out = (producer_result_t){.error = {.status = MPMC_ERR_STATE}};
+    return out->error;
+}
+mpmc_result_t mpmc_test_consumer_run(
+    ipc_context_t *context,
+    const consumer_job_t *job,
+    consumer_result_t *out
+) {
+    (void)context;
+    (void)job;
+    *out = (consumer_result_t){.error = {.status = MPMC_ERR_STATE}};
+    return out->error;
+}
+void mpmc_test_worker_close(ipc_context_t *context) {
+    (void)context;
+}
+
+void mpmc_test_quiesce(ipc_context_t *context) {
+    (void)context;
 }

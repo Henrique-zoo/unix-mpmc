@@ -150,6 +150,15 @@ typedef struct ipc_context ipc_context_t;
 mpmc_result_t ipc_init(ipc_context_t **out, size_t producer_count, ipc_mode_t mode);
 
 /**
+ * @brief Marca o contexto do pai como quiescente para o relatório final.
+ * @param context Contexto proprietário, ou nullptr para operação vazia.
+ * @pre Todos os filhos foram recolhidos e novos despachos estão proibidos.
+ * @details Novas operações de dados/ACK são recusadas. A contagem SHM pode
+ * ser lida sem adquirir um mutex abandonado por um worker encerrado.
+ */
+void ipc_quiesce(ipc_context_t *context);
+
+/**
  * @brief Informa a quantidade de estruturas lógicas disponíveis.
  * @param context Contexto inicializado.
  * @return Valor `p` informado a ipc_init(); retorna 0 se context for NULL.

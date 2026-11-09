@@ -301,7 +301,9 @@ static void test_natural_exit_report(void) {
     CHECK(supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_OK, "dispatch produz");
     CHECK(supervisor_dispatch(supervisor, &consume, NULL).status == MPMC_OK, "dispatch consome");
     CHECK(wait_for_reports(supervisor, 2u, 5000), "filhos naturais não foram recolhidos");
-    CHECK(supervisor_take_notices(supervisor) == 2u, "um aviso por filho recolhido");
+    CHECK(
+        supervisor_take_notices(supervisor) == 4u, "um resultado e um aviso de término por filho"
+    );
 
     bool seen_produce = false;
     bool seen_consume = false;
@@ -310,7 +312,7 @@ static void test_natural_exit_report(void) {
         CHECK(supervisor_report_get(supervisor, index, &report).status == MPMC_OK, "report_get");
         CHECK(report.pid > 0, "pid positivo");
         CHECK(report.end == CHILD_END_EXITED, "término natural: end=EXITED");
-        CHECK(report.value == EXIT_FAILURE, "worker sem backend sai com EXIT_FAILURE");
+        CHECK(report.value == EXIT_SUCCESS, "worker real conclui com EXIT_SUCCESS");
         CHECK(report.duration_ns < 10ull * 1000000000ull, "duração coerente (< 10 s)");
         CHECK(report.operation_id == 1u || report.operation_id == 2u, "operation_id 1 ou 2");
         if (report.kind == COMMAND_PRODUCE) {
@@ -327,7 +329,7 @@ static void test_natural_exit_report(void) {
     CHECK(strstr(text, "DURAÇÃO") != NULL, "cabeçalho da tabela");
     CHECK(count_lines_with(text, "produz") == 1u, "uma linha para o produz");
     CHECK(count_lines_with(text, "consome") == 1u, "uma linha para o consome");
-    CHECK(count_lines_with(text, "código 1 (falha)") == 2u, "término com código e rótulo");
+    CHECK(count_lines_with(text, "código 0 (sucesso)") == 2u, "término com código e rótulo");
     CHECK(
         count_lines_with(text, ".") >= 3u && strstr(text, " s\n") != NULL,
         "durações no formato S.mmm s (2 filhos + total)"
