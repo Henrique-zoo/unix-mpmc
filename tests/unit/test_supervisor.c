@@ -138,7 +138,7 @@ static mpmc_result_t g_reap_error = (mpmc_result_t){.status = MPMC_OK};
  */
 static bool wait_for_reports(supervisor_t *supervisor, size_t wanted, int timeout_ms) {
     for (int waited = 0; waited <= timeout_ms; waited += 10) {
-        mpmc_result_t error = supervisor_reap(supervisor, false);
+        mpmc_result_t error = supervisor_reap(supervisor, false, NULL);
         if (error.status != MPMC_OK && g_reap_error.status == MPMC_OK) {
             g_reap_error = error;
         }
@@ -298,8 +298,8 @@ static void test_natural_exit_report(void) {
     unsetenv("MPMC_TEST_WORKER_HANG");
 
     CHECK(supervisor_report_count(supervisor) == 0u, "sem filhos, sem relatórios");
-    CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_OK, "dispatch produz");
-    CHECK(supervisor_dispatch(supervisor, &consume).status == MPMC_OK, "dispatch consome");
+    CHECK(supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_OK, "dispatch produz");
+    CHECK(supervisor_dispatch(supervisor, &consume, NULL).status == MPMC_OK, "dispatch consome");
     CHECK(wait_for_reports(supervisor, 2u, 5000), "filhos naturais não foram recolhidos");
     CHECK(supervisor_take_notices(supervisor) == 2u, "um aviso por filho recolhido");
 
@@ -337,7 +337,7 @@ static void test_natural_exit_report(void) {
     CHECK(strstr(text, "Tempo total de operação do mpmc: ") != NULL, "tempo total do mpmc");
     CHECK(strstr(text, ">>") == NULL, "relatório não contém o marcador de prompt");
 
-    CHECK(supervisor_shutdown(supervisor).status == MPMC_OK, "shutdown sem filhos");
+    CHECK(supervisor_shutdown(supervisor, NULL).status == MPMC_OK, "shutdown sem filhos");
     CHECK(supervisor_report_count(supervisor) == 2u, "relatórios preservados após shutdown");
     supervisor_destroy(supervisor);
 }
@@ -357,7 +357,9 @@ static void test_operation_ids_distinct(void) {
 
     for (unsigned job = 1u; job <= JOBS; ++job) {
         command_t command = make_command(job % 2u == 1u ? COMMAND_PRODUCE : COMMAND_CONSUME);
-        CHECK(supervisor_dispatch(supervisor, &command).status == MPMC_OK, "dispatch %u", job);
+        CHECK(
+            supervisor_dispatch(supervisor, &command, NULL).status == MPMC_OK, "dispatch %u", job
+        );
     }
     CHECK(wait_for_reports(supervisor, JOBS, 10000), "todos os filhos devem ser recolhidos");
     CHECK(supervisor_report_count(supervisor) == JOBS, "um relatório por trabalho");
@@ -392,7 +394,7 @@ static void test_operation_ids_distinct(void) {
         CHECK(seen[id], "operation_id %u ausente", id);
     }
 
-    CHECK(supervisor_shutdown(supervisor).status == MPMC_OK, "shutdown");
+    CHECK(supervisor_shutdown(supervisor, NULL).status == MPMC_OK, "shutdown");
     supervisor_destroy(supervisor);
 }
 
@@ -423,7 +425,7 @@ static void test_print_report_empty_and_guards(void) {
         (void)fclose(read_only);
     }
 
-    (void)supervisor_shutdown(supervisor);
+    (void)supervisor_shutdown(supervisor, NULL);
     supervisor_destroy(supervisor);
 }
 
@@ -447,7 +449,7 @@ static void test_report_get_guards(void) {
     CHECK(supervisor_report_get(supervisor, 0u, NULL).status == MPMC_ERR_INVALID_ARG, "out NULL");
     CHECK(memcmp(&report, &untouched, sizeof report) == 0, "out intacto em erro");
 
-    (void)supervisor_shutdown(supervisor);
+    (void)supervisor_shutdown(supervisor, NULL);
     supervisor_destroy(supervisor);
 }
 
@@ -460,17 +462,21 @@ static void test_fork_failure(void) {
     unsetenv("MPMC_TEST_WORKER_HANG");
 
     g_fork_failures_left = 2;
-    mpmc_result_t error = supervisor_dispatch(supervisor, &produce);
+    mpmc_result_t error = supervisor_dispatch(supervisor, &produce, NULL);
     errno = EINVAL;
     CHECK(error.status == MPMC_ERR_SYS, "fork falho -> ERR_SYS");
     CHECK(error.system_errno == EAGAIN, "erro de fork deve preservar EAGAIN após restaurar sinais");
     CHECK(
-        supervisor_dispatch(supervisor, &produce).status == MPMC_ERR_SYS, "segunda falha -> ERR_SYS"
+        supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_ERR_SYS,
+        "segunda falha -> ERR_SYS"
     );
     CHECK(g_fork_failures_left == 0, "as duas falhas injetadas foram consumidas");
 
     /* Nenhum registro inválido: reap não tem o que recolher e nada vira relatório. */
-    CHECK(supervisor_reap(supervisor, false).status == MPMC_OK, "reap sem filhos após fork falho");
+    CHECK(
+        supervisor_reap(supervisor, false, NULL).status == MPMC_OK,
+        "reap sem filhos após fork falho"
+    );
     CHECK(supervisor_report_count(supervisor) == 0u, "fork falho não gera relatório");
     CHECK(supervisor_take_notices(supervisor) == 0u, "fork falho não gera aviso de filho");
 
@@ -484,7 +490,9 @@ static void test_fork_failure(void) {
     );
 
     /* O supervisor segue utilizável e o id da operação não foi consumido. */
-    CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_OK, "dispatch após falhas");
+    CHECK(
+        supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_OK, "dispatch após falhas"
+    );
     CHECK(wait_for_reports(supervisor, 1u, 5000), "filho posterior recolhido");
     child_report_t report;
     CHECK(supervisor_report_get(supervisor, 0u, &report).status == MPMC_OK, "report_get");
@@ -494,7 +502,7 @@ static void test_fork_failure(void) {
         (unsigned long long)report.operation_id
     );
 
-    CHECK(supervisor_shutdown(supervisor).status == MPMC_OK, "shutdown");
+    CHECK(supervisor_shutdown(supervisor, NULL).status == MPMC_OK, "shutdown");
     supervisor_destroy(supervisor);
 }
 
@@ -509,14 +517,14 @@ static void test_signal_kill_is_not_fatal(void) {
     pid_t children[16];
 
     setenv("MPMC_TEST_WORKER_HANG", "1", 1);
-    CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_OK, "dispatch 1");
-    CHECK(supervisor_dispatch(supervisor, &consume).status == MPMC_OK, "dispatch 2");
+    CHECK(supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_OK, "dispatch 1");
+    CHECK(supervisor_dispatch(supervisor, &consume, NULL).status == MPMC_OK, "dispatch 2");
     unsetenv("MPMC_TEST_WORKER_HANG");
 
     int count = wait_for_children(children, 2);
     CHECK(count == 2, "dois jobs devem coexistir (pgrep viu %d)", count);
     if (count != 2) {
-        (void)supervisor_shutdown(supervisor);
+        (void)supervisor_shutdown(supervisor, NULL);
         supervisor_destroy(supervisor);
         return;
     }
@@ -552,10 +560,13 @@ static void test_signal_kill_is_not_fatal(void) {
     /* O terceiro filho também precisa ficar bloqueado; do contrário ele termina sozinho
      * (worker ainda não implementado) antes do SIGTERM do shutdown e o teste fica instável. */
     setenv("MPMC_TEST_WORKER_HANG", "1", 1);
-    CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_OK, "dispatch após filho morto");
+    CHECK(
+        supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_OK,
+        "dispatch após filho morto"
+    );
     unsetenv("MPMC_TEST_WORKER_HANG");
 
-    CHECK(supervisor_shutdown(supervisor).status == MPMC_OK, "shutdown");
+    CHECK(supervisor_shutdown(supervisor, NULL).status == MPMC_OK, "shutdown");
     CHECK(supervisor_report_count(supervisor) == 3u, "três relatórios ao final");
 
     char text[4096];
@@ -576,12 +587,14 @@ static void test_shutdown_reports(void) {
 
     setenv("MPMC_TEST_WORKER_HANG", "1", 1);
     for (int job = 0; job < 3; ++job) {
-        CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_OK, "dispatch %d", job);
+        CHECK(
+            supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_OK, "dispatch %d", job
+        );
     }
     unsetenv("MPMC_TEST_WORKER_HANG");
     CHECK(wait_for_children(children, 3) == 3, "três jobs simultâneos");
 
-    CHECK(supervisor_shutdown(supervisor).status == MPMC_OK, "shutdown com jobs bloqueados");
+    CHECK(supervisor_shutdown(supervisor, NULL).status == MPMC_OK, "shutdown com jobs bloqueados");
     CHECK(supervisor_report_count(supervisor) == 3u, "um relatório por filho");
     for (size_t index = 0u; index < supervisor_report_count(supervisor); ++index) {
         child_report_t report;
@@ -594,10 +607,10 @@ static void test_shutdown_reports(void) {
     }
     CHECK(list_children(children, 16) == 0, "nenhum filho (nem zumbi) após shutdown");
 
-    CHECK(supervisor_shutdown(supervisor).status == MPMC_OK, "shutdown idempotente");
+    CHECK(supervisor_shutdown(supervisor, NULL).status == MPMC_OK, "shutdown idempotente");
     CHECK(supervisor_report_count(supervisor) == 3u, "relatórios não duplicam");
     CHECK(
-        supervisor_dispatch(supervisor, &produce).status == MPMC_ERR_SHUTDOWN,
+        supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_ERR_SHUTDOWN,
         "dispatch após shutdown"
     );
     supervisor_destroy(supervisor);
@@ -612,15 +625,16 @@ static void test_fork_failure_with_active_job(void) {
     pid_t children[16];
 
     setenv("MPMC_TEST_WORKER_HANG", "1", 1);
-    CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_OK, "dispatch ativo");
+    CHECK(supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_OK, "dispatch ativo");
     g_fork_failures_left = 1;
     CHECK(
-        supervisor_dispatch(supervisor, &produce).status == MPMC_ERR_SYS, "fork falho com job ativo"
+        supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_ERR_SYS,
+        "fork falho com job ativo"
     );
     unsetenv("MPMC_TEST_WORKER_HANG");
 
     CHECK(wait_for_children(children, 1) == 1, "job ativo não é afetado pela falha");
-    CHECK(supervisor_shutdown(supervisor).status == MPMC_OK, "shutdown");
+    CHECK(supervisor_shutdown(supervisor, NULL).status == MPMC_OK, "shutdown");
     CHECK(supervisor_report_count(supervisor) == 1u, "somente o job realmente criado");
     supervisor_destroy(supervisor);
 }

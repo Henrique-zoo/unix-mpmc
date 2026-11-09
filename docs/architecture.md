@@ -72,6 +72,24 @@ REPL (que apenas marca uma flag) e o filho o ignoraria, travando o `waitpid()` b
 descritor de leitura/escrita do self-pipe é movido para fora de 0..2, para não colidir com
 `stdin` quando o processo é iniciado com descritores padrão fechados.
 
+O shutdown impede novos trabalhos, envia `SIGTERM` e concede um prazo comum de
+dois segundos aos filhos. A espera usa `CLOCK_MONOTONIC` e `poll()` no self-pipe,
+recolhendo filhos sem bloquear a cada despertar. Ao vencer o prazo, envia `SIGKILL`
+aos restantes e os recolhe. Um tratador temporário de `SIGCHLD` permite executar
+esse fluxo fora do REPL; ação e máscara de sinais são restauradas ao sair.
+Erros antecipam a tentativa de encerramento forçado, preservando o primeiro erro.
+Se o envio de `SIGKILL` falhar, a função retorna após coleta não bloqueante e o
+chamador deve resolver a falha e repetir o shutdown antes de destruir os recursos.
+
+As operações de despacho, shutdown, coleta e drenagem recebem um
+`supervisor_shutdown_reporter_t` opcional. Cada falha reportável é comunicada uma
+vez, no ponto de origem, enquanto o retorno preserva o primeiro erro cronológico.
+Diagnósticos incluem a operação, o resultado com errno e, conforme o discriminante,
+PID/sinal, PID de coleta/relatório ou os eventos do descritor. Reporter e callback
+nulos desabilitam somente os diagnósticos; não alteram o resultado da operação.
+A callback pode copiar o registro temporário e é executada fora dos tratadores.
+ESRCH ao sinalizar, EINTR repetido e vencimento do prazo são condições esperadas.
+
 ## Resultados dos filhos para o supervisor
 
 Nenhum resultado depende do heap do filho. Erro e cancelamento chegam pelo estado de término

@@ -357,20 +357,30 @@ static void test_controlled_report_presentation(void) {
     command_t produce = make_command(COMMAND_PRODUCE);
     command_t consume = make_command(COMMAND_CONSUME);
 
-    CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_OK, "despacho do PID 4101");
-    CHECK(supervisor_dispatch(supervisor, &consume).status == MPMC_OK, "despacho do PID 4102");
-    CHECK(supervisor_dispatch(supervisor, &produce).status == MPMC_OK, "despacho do PID 4103");
+    CHECK(
+        supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_OK, "despacho do PID 4101"
+    );
+    CHECK(
+        supervisor_dispatch(supervisor, &consume, NULL).status == MPMC_OK, "despacho do PID 4102"
+    );
+    CHECK(
+        supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_OK, "despacho do PID 4103"
+    );
     CHECK(g_fixture.fork_calls == FIXTURE_CHILDREN, "três PIDs simulados");
 
     /*
      * 4101 ainda não está pronto. 4102 e 4103 terminam primeiro.
      * A compactação interna do vetor não deve afetar a identidade dos relatórios.
      */
-    CHECK(supervisor_reap(supervisor, false).status == MPMC_OK, "primeira coleta não bloqueante");
+    CHECK(
+        supervisor_reap(supervisor, false, NULL).status == MPMC_OK, "primeira coleta não bloqueante"
+    );
     CHECK(supervisor_report_count(supervisor) == 2u, "dois relatórios na primeira coleta");
 
     g_fixture.children[0].ready = true;
-    CHECK(supervisor_reap(supervisor, false).status == MPMC_OK, "segunda coleta não bloqueante");
+    CHECK(
+        supervisor_reap(supervisor, false, NULL).status == MPMC_OK, "segunda coleta não bloqueante"
+    );
     CHECK(supervisor_report_count(supervisor) == FIXTURE_CHILDREN, "todos os filhos recolhidos");
 
     child_report_t report;
@@ -427,7 +437,9 @@ static void test_controlled_report_presentation(void) {
     CHECK(!g_fixture.bad_wait_options, "reap utilizou WNOHANG nos cenários não bloqueantes");
 
     /* O relatório final deve ser impresso após o encerramento do supervisor. */
-    CHECK(supervisor_shutdown(supervisor).status == MPMC_OK, "shutdown sem filhos ativos");
+    const size_t polls_before_shutdown = g_fixture.poll_calls;
+    CHECK(supervisor_shutdown(supervisor, NULL).status == MPMC_OK, "shutdown sem filhos ativos");
+    CHECK(g_fixture.poll_calls > polls_before_shutdown, "shutdown processou eventos IPC pendentes");
     CHECK(supervisor_report_count(supervisor) == FIXTURE_CHILDREN, "relatórios preservados");
 
     /* Relatório após a primeira falha do relógio total. */
@@ -472,7 +484,6 @@ static void test_controlled_report_presentation(void) {
     CHECK(!g_fixture.bad_clock_id, "todas as medições usaram CLOCK_MONOTONIC");
     CHECK(!g_fixture.clock_overrun, "quantidade de leituras do relógio dentro da fixture");
     CHECK(g_fixture.clock_index == FIXTURE_CLOCKS, "nove chamadas de relógio consumidas");
-    CHECK(g_fixture.poll_calls == 6u, "eventos IPC consultados nos pontos esperados");
     CHECK(!g_fixture.bad_ipc_context, "contexto IPC fictício preservado");
 
     /* Todos os filhos simulados foram recolhidos; nenhum sinal é enviado a PIDs fictícios. */
