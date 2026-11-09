@@ -227,6 +227,21 @@ mpmc_result_t mpmc_test_sem_remove(int semid) {
  * @details Ocupa a primeira posição livre e incrementa live_allocations. Registra
  * falha se não houver espaço para rastrear um ponteiro não nulo.
  */
+/*
+ * Recursos ACK são simulados nesta suíte de ciclo de vida. Os testes específicos
+ * de ACK usam os wrappers System V reais em uma suíte separada.
+ */
+mpmc_result_t mpmc_test_ack_resources_create(shm_backend_t *backend) {
+    CHECK(backend != NULL);
+    return (mpmc_result_t){.status = MPMC_OK};
+}
+
+mpmc_result_t mpmc_test_ack_resources_cleanup(shm_backend_t *backend, bool remove_global) {
+    CHECK(backend != NULL);
+    (void)remove_global;
+    return (mpmc_result_t){.status = MPMC_OK};
+}
+
 static void track_allocation(void *pointer) {
     if (pointer == NULL) return;
     for (size_t i = 0; i < MAX_SEGMENTS; ++i) {
