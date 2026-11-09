@@ -159,6 +159,19 @@ static void test_workers_have_no_paradigm_branches(void) {
     }
 }
 
+/*
+ * Volumes do cenário. O total em trânsito antes do primeiro consumo é kDirected +
+ * kStriped = 20 mensagens: os produtores usam envio bloqueante e este teste roda
+ * também no macOS, onde o kernel limita as mensagens em trânsito no sistema todo
+ * (da ordem de 40) e as filas a 2 KiB. Volumes maiores travariam os produtores.
+ */
+enum {
+    kDirected = 8,  /* produtor A: mensagens à fila 2 */
+    kStriped = 12,  /* produtor B: em rodízio nas filas 1..3 */
+    kPerQueueB = 4, /* kStriped / 3 */
+    kHead = 3,      /* itens conferidos diretamente pela fachada */
+};
+
 typedef struct {
     int codes[8];
     size_t code_count;
@@ -245,10 +258,10 @@ static outcome_t run_scenario(ipc_mode_t mode) {
     live = context;
 
     /* Produtor A: 20 mensagens à fila 2. Produtor B: 30 mensagens em rodízio 1..3. */
-    kids[0] = spawn_producer(context, 2u, 20u, PRODUCER_ACK_NONE, 1u);
+    kids[0] = spawn_producer(context, 2u, kDirected, PRODUCER_ACK_NONE, 1u);
     pid_t producer_a = kids[0];
     outcome.codes[outcome.code_count++] = reap(0u, context);
-    kids[0] = spawn_producer(context, 0u, 30u, PRODUCER_ACK_NONE, 2u);
+    kids[0] = spawn_producer(context, 0u, kStriped, PRODUCER_ACK_NONE, 2u);
     pid_t producer_b = kids[0];
     outcome.codes[outcome.code_count++] = reap(0u, context);
 
@@ -259,9 +272,9 @@ static outcome_t run_scenario(ipc_mode_t mode) {
         && check_head(context, 2u, producer_a, 1u, directed_first, 3u);
 
     /* O restante é consumido por workers: 7 + 27 + 10. */
-    kids[0] = spawn_consumer(context, 1u, 7u, CONSUMER_BLOCKING);
-    kids[1] = spawn_consumer(context, 2u, 27u, CONSUMER_BLOCKING);
-    kids[2] = spawn_consumer(context, 3u, 10u, CONSUMER_BLOCKING);
+    kids[0] = spawn_consumer(context, 1u, kPerQueueB - kHead, CONSUMER_BLOCKING);
+    kids[1] = spawn_consumer(context, 2u, kDirected + kPerQueueB - kHead, CONSUMER_BLOCKING);
+    kids[2] = spawn_consumer(context, 3u, kPerQueueB, CONSUMER_BLOCKING);
     for (size_t slot = 0u; slot < 3u; ++slot) {
         outcome.codes[outcome.code_count++] = reap(slot, context);
     }
@@ -282,11 +295,26 @@ static outcome_t run_scenario(ipc_mode_t mode) {
     return outcome;
 }
 
+static void print_outcome(const char *name, const outcome_t *outcome) {
+    fprintf(stderr, "  [%s] metadata_ok=%d códigos=[", name, (int)outcome->metadata_ok);
+    for (size_t index = 0u; index < outcome->code_count; ++index) {
+        fprintf(stderr, "%s%d", index == 0u ? "" : " ", outcome->codes[index]);
+    }
+    fprintf(
+        stderr,
+        "] consumidos=[%llu %llu %llu]\n",
+        (unsigned long long)outcome->consumed[0],
+        (unsigned long long)outcome->consumed[1],
+        (unsigned long long)outcome->consumed[2]
+    );
+}
+
 static void test_same_worker_code_same_outcome(void) {
+    const unsigned before = failures;
     outcome_t shm = run_scenario(IPC_SHARED_MEMORY);
     outcome_t msg = run_scenario(IPC_MESSAGE_QUEUE);
     const int expected_codes[6] = {0, 0, 0, 0, 0, 100 + (int)MPMC_ERR_WOULD_BLOCK};
-    const uint64_t expected_consumed[3] = {10u, 30u, 10u};
+    const uint64_t expected_consumed[3] = {kPerQueueB, kDirected + kPerQueueB, kPerQueueB};
 
     for (size_t mode_index = 0u; mode_index < 2u; ++mode_index) {
         const outcome_t *outcome = mode_index == 0u ? &shm : &msg;
@@ -299,6 +327,10 @@ static void test_same_worker_code_same_outcome(void) {
     CHECK(shm.code_count == msg.code_count);
     CHECK(memcmp(shm.codes, msg.codes, sizeof(shm.codes)) == 0);
     CHECK(memcmp(shm.consumed, msg.consumed, sizeof(shm.consumed)) == 0);
+    if (failures != before) {
+        print_outcome("shm", &shm);
+        print_outcome("msg", &msg);
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -525,61 +557,86 @@ static long read_long(const char *path) {
     return value;
 }
 
-/** @brief Linhas de dados de uma tabela /proc/sysvipc; -1 se indisponível (não Linux). */
-static long count_table(const char *path) {
-    FILE *file = fopen(path, "r");
-    if (file == NULL) return -1;
-    long lines = -1; /* a primeira linha é o cabeçalho */
-    int ch;
-    while ((ch = fgetc(file)) != EOF) {
-        if (ch == '\n') ++lines;
+/**
+ * @brief Conta os objetos System V de um tipo existentes no sistema.
+ * @param kind 'm' (memória compartilhada), 's' (semáforos) ou 'q' (filas).
+ * @return Quantidade, ou -1 se não foi possível contar.
+ * @details No Linux lê /proc/sysvipc/{shm,sem,msg}. Nos demais sistemas (macOS) conta
+ * as linhas de `ipcs`, que listam cada objeto com o tipo (m, s ou q) na primeira coluna.
+ */
+static long count_objects(char kind) {
+    const char *table = kind == 'm' ? "/proc/sysvipc/shm"
+        : kind == 's'               ? "/proc/sysvipc/sem"
+                                    : "/proc/sysvipc/msg";
+    FILE *file = fopen(table, "r");
+    if (file != NULL) {
+        long lines = -1; /* a primeira linha é o cabeçalho */
+        int ch;
+        while ((ch = fgetc(file)) != EOF) {
+            if (ch == '\n') ++lines;
+        }
+        fclose(file);
+        return lines;
     }
-    fclose(file);
-    return lines;
+    char command[32];
+    snprintf(command, sizeof(command), "ipcs -%c 2>/dev/null", kind);
+    file = popen(command, "r");
+    if (file == NULL) return -1;
+    long objects = 0;
+    char line[256];
+    bool any_output = false;
+    while (fgets(line, sizeof(line), file) != NULL) {
+        any_output = true;
+        if (line[0] == kind && line[1] == ' ') ++objects;
+    }
+    return pclose(file) == 0 && any_output ? objects : -1;
 }
 
+/**
+ * @brief Força uma falha parcial real de ipc_init() e confere o rollback.
+ * @details Pede mais estruturas do que o kernel permite, de modo que a criação falha
+ * depois de vários recursos já criados. O limite é lido do /proc quando existe; sem ele,
+ * escala-se o pedido (128, 1024, 8192, 40000) até o kernel recusar, destruindo o que for
+ * aceito no caminho. Os valores baixos bastam no macOS (shmmni 32, msgmni 40).
+ */
 static void test_partial_init_rolls_back(ipc_mode_t mode) {
     const bool shm = mode == IPC_SHARED_MEMORY;
     const long limit = read_long(shm ? "/proc/sys/kernel/shmmni" : "/proc/sys/kernel/msgmni");
-    /* Sem /proc (macOS) os limites são pequenos; um valor alto basta para esgotá-los. */
-    size_t producers = limit > 0 ? (size_t)limit + 8u : 100000u;
-    if (producers > 60000u) {
-        printf(
-            "  [%s] limite do kernel alto demais (%zu); rollback real dispensado\n",
-            mode_name(mode),
-            producers
-        );
-        return;
-    }
-    const long shm_before = count_table("/proc/sysvipc/shm");
-    const long sem_before = count_table("/proc/sysvipc/sem");
-    const long msg_before = count_table("/proc/sysvipc/msg");
+    const size_t ladder[] = {128u, 1024u, 8192u, 40000u};
+    const size_t known[] = {limit > 0 ? (size_t)limit + 8u : 0u};
+    const size_t *candidates = limit > 0 ? known : ladder;
+    const size_t candidate_count = limit > 0 ? 1u : sizeof(ladder) / sizeof(ladder[0]);
 
-    ipc_context_t *context = (ipc_context_t *)0x1;
-    mpmc_result_t result = ipc_init(&context, producers, mode);
-    if (result.status == MPMC_OK) {
-        printf(
-            "  [%s] o kernel aceitou %zu estruturas; rollback real dispensado\n",
-            mode_name(mode),
-            producers
-        );
-        ipc_destroy(context);
+    for (size_t index = 0u; index < candidate_count; ++index) {
+        const size_t producers = candidates[index];
+        if (producers > 60000u) break;
+        const long shm_before = count_objects('m');
+        const long sem_before = count_objects('s');
+        const long msq_before = count_objects('q');
+
+        ipc_context_t *context = (ipc_context_t *)0x1;
+        mpmc_result_t result = ipc_init(&context, producers, mode);
+        if (result.status == MPMC_OK) {
+            ipc_destroy(context); /* o kernel aceitou; tenta um pedido maior */
+            continue;
+        }
+        /* A falha acontece depois de muitos recursos já criados. */
+        CHECK(result.status == MPMC_ERR_SYS || result.status == MPMC_ERR_SHUTDOWN);
+        CHECK(result.system_errno != 0);
+        CHECK(context == NULL);
+        if (shm_before >= 0 && sem_before >= 0 && msq_before >= 0) {
+            CHECK(count_objects('m') == shm_before);
+            CHECK(count_objects('s') == sem_before);
+            CHECK(count_objects('q') == msq_before);
+        } else {
+            printf(
+                "  [%s] não foi possível contar objetos IPC; remanescentes não verificados\n",
+                mode_name(mode)
+            );
+        }
         return;
     }
-    /* A falha parcial acontece depois de muitos recursos já criados. */
-    CHECK(result.status == MPMC_ERR_SYS || result.status == MPMC_ERR_SHUTDOWN);
-    CHECK(result.system_errno != 0);
-    CHECK(context == NULL);
-    if (shm_before >= 0) {
-        CHECK(count_table("/proc/sysvipc/shm") == shm_before);
-        CHECK(count_table("/proc/sysvipc/sem") == sem_before);
-        CHECK(count_table("/proc/sysvipc/msg") == msg_before);
-    } else {
-        printf(
-            "  [%s] sem /proc/sysvipc: contagem de objetos remanescentes não verificada\n",
-            mode_name(mode)
-        );
-    }
+    printf("  [%s] o kernel aceitou todos os pedidos; rollback real dispensado\n", mode_name(mode));
 }
 
 int main(void) {
