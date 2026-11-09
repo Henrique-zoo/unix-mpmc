@@ -407,7 +407,12 @@ Um tipo recebido diferente de 1/2 ou corpo de tamanho diferente de `sizeof(messa
 nesta ordem:
 
 1. se o tipo recebido era 2, envia `{operation_id}` a `Q_ack` com `mtype = operation_id`;
-2. envia `{producer_id, count = 1}` a `Q_evt` (um evento por mensagem retirada, com ou sem ACK).
+2. envia `{producer_id, count}` a `Q_evt` (um evento por mensagem retirada, com ou sem ACK).
+   Com `blocking=true`, o envio espera se `Q_evt` estiver cheia. Com `blocking=false`,
+   nunca espera: sem espaço, o consumo é acumulado no processo consumidor e vai como
+   `count` maior no próximo evento do índice, ou em `ipc_worker_close()` (que pode
+   aguardar o supervisor drenar `Q_evt`, já fora de qualquer consumo). Assim `consome i n 2`
+   não fica preso por causa do supervisor e nenhuma retirada deixa de ser contada.
 
 O ACK precede o evento estatístico intencionalmente: se `Q_evt` estiver cheia, o
 consumidor pode aguardar o supervisor depois de já ter publicado a confirmação, evitando
@@ -451,7 +456,8 @@ espera por algo que outro ator sempre libera:
 |---|---|---|
 | Produtor `ack=1` | `ack_wait` (consome os próprios ACKs) e `nanosleep` de 1 ms depois de drenar. Nunca em `msgsnd` bloqueante de `D_i` | Consumidores, ao retirar e confirmar |
 | Produtor sem ACK | `msgsnd` bloqueante em `D_i` cheia (backpressure) | Consumidores, ao retirar |
-| Consumidor | `msgrcv` em `D_i` vazia; `msgsnd` em `Q_evt` ou `Q_ack` cheias, depois da retirada | Supervisor drena `Q_evt` em `poll_events`; o produtor dono drena `Q_ack` (envio, `ack_wait`, `ack_end`); o supervisor descarta `Q_ack` sem dono (`ack_abandon`) |
+| Consumidor bloqueante | `msgrcv` em `D_i` vazia; `msgsnd` em `Q_evt` ou `Q_ack` cheias, depois da retirada | Supervisor drena `Q_evt` em `poll_events`; o produtor dono drena `Q_ack` (envio, `ack_wait`, `ack_end`); o supervisor descarta `Q_ack` sem dono (`ack_abandon`) |
+| Consumidor sem espera | Nunca no consumo: `D_i` vazia retorna `ENOMSG`; `Q_evt`/`Q_ack` cheias usam `IPC_NOWAIT` e o consumo/ACK fica devido no processo, entregue no próximo `receive` ou, com espera, ao fechar o filho (único ponto de espera) | O produtor dono drena `Q_ack` e o supervisor drena `Q_evt` |
 | Supervisor | Nunca em fila: só `IPC_NOWAIT` e `waitpid(WNOHANG)` | — |
 
 Como o produtor com ACK nunca bloqueia no kernel sem drenar os próprios ACKs, e como o

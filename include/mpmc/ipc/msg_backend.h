@@ -109,12 +109,22 @@ mpmc_result_t msg_backend_send(
  * message_t.
  * @note Depois da retirada, o envio do evento e do ACK repete EINTR (não
  * devolve MPMC_ERR_INTERRUPTED), para reduzir a janela em que uma mensagem é
- * retirada sem ser contada. Esse envio pode bloquear se a fila de controle
- * estiver cheia; o bloqueio termina porque o produtor dono drena seus ACKs
- * (send/ack_wait/ack_end), o supervisor drena os eventos
+ * retirada sem ser contada. Com blocking=true, esse envio pode bloquear se a fila
+ * de controle estiver cheia. Com blocking=false, o evento estatístico nunca espera:
+ * se Q_evt estiver cheia, o consumo fica acumulado no processo e é somado ao próximo
+ * evento do mesmo índice ou entregue em msg_backend_worker_close(). O ACK também nunca
+ * espera com blocking=false: se Q_ack estiver cheia, ele fica devido localmente (a
+ * mensagem já saiu da fila e não pode ser devolvida) e é reenviado, sem espera, no início
+ * do próximo receive deste processo, ou com espera em msg_backend_worker_close(). Assim,
+ * o retorno do consumo sem espera não depende do produtor drenar Q_ack, mas o produtor
+ * só recebe esse ACK quando o consumidor voltar a chamar receive ou fechar.
+ * Com blocking=true, o ACK e o evento esperam; o bloqueio termina porque o produtor
+ * dono drena seus ACKs (send/ack_wait/ack_end), o supervisor drena os eventos
  * (msg_backend_poll_events()) e descarta os ACKs de operações abandonadas
  * (msg_backend_ack_abandon()). O ACK é publicado antes do evento para que uma
  * Q_evt cheia não retenha a confirmação de uma mensagem já retirada.
+ * @note Se acumular o ACK falhar por falta de memória, retorna MPMC_ERR_SYS depois da
+ * retirada (mesma janela já descrita acima: a mensagem não é contada nem devolvida).
  */
 mpmc_result_t msg_backend_receive(
     msg_backend_t *backend,
@@ -243,8 +253,14 @@ mpmc_result_t msg_backend_consumed_count(
 /**
  * @brief Libera somente o estado local do processo filho.
  * @param backend Backend herdado pelo fork().
- * @details Nunca remove filas de dados/controle globais via IPC_RMID. Libera
- * também os registros de ACK e a lista de operações abandonadas herdados.
+ * @details Nunca remove filas de dados/controle globais via IPC_RMID. Antes de
+ * liberar, entrega a Q_evt os consumos acumulados por receives sem espera,
+ * aguardando se ela estiver cheia (o supervisor a drena em poll_events); antes disso,
+ * entrega com espera os ACKs que um receive sem espera não conseguiu publicar. Falhas
+ * dessas entregas, como EIDRM depois do destroy, são ignoradas. Libera também os
+ * registros de ACK e a lista de operações abandonadas herdados.
+ * @note O acumulado é local ao processo e herdado por fork(); só o filho que
+ * consumiu deve chamar esta função com consumos pendentes.
  */
 void msg_backend_worker_close(msg_backend_t *backend);
 
