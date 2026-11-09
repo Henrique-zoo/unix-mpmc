@@ -372,7 +372,16 @@ static mpmc_result_t ack_waiter_release(
     uint64_t operation_id,
     mpmc_result_t first
 ) {
-    mpmc_result_t result = ack_lock(backend);
+    /*
+     * A interrupção de semop() não adquire o mutex.
+     * Repetimos a aquisição para garantir a limpeza do waiter.
+     */
+    mpmc_result_t result;
+
+    do {
+        result = ack_lock(backend);
+    } while (result.status == MPMC_ERR_INTERRUPTED);
+
     if (result.status != MPMC_OK) {
         return result;
     }
