@@ -32,6 +32,7 @@ não é suficiente para provar correção concorrente.
 | U18 | `shm_operations` | FIFO, metadados, isolamento, totais, interrupção de esperas reais, concorrência e falhas de aquisição/publicação; envio em estrutura cheia que bloqueia só o remetente e retoma após consumo; recepção bloqueante retomada somente por dado da própria estrutura (processos filhos coordenados por eventos); backend com 1024 estruturas independentes e índice 1025 inválido |
 | U19 | `shm_stress` | Estresse do backend SHM real (`test_shm_stress`): 4 rodadas criam/destroem backends com 1..4 estruturas cheias; 6 produtores e 2 consumidores por estrutura; 30375 verificações de identidade única, sem perda nem duplicação, destino/remetente corretos, FIFO por (consumidor, produtor) e totais exatos, sem filhos remanescentes; backend espectador preservado |
 | U20 | `msg_stress` | Estresse do backend MSG real (`test_msg_stress`): argumentos e índices inválidos; 3 rodadas criam/destroem backends com 1..3 filas cheias (limite do kernel via `IPC_NOWAIT`); 4 produtores e 2 consumidores por fila; identidade única, sem perda nem duplicação, destino/remetente/metadados corretos, FIFO por (consumidor, produtor), totais exatos por `poll_events`, sem filhos remanescentes; backend espectador preservado |
+| U21 | `supervisor`/shutdown | Filhos reais sincronizados por pipes, saída após SIGTERM, filhos que ignoram SIGTERM, prazo comum e SIGKILL, preservação de sinais, EINTR sem reinício do prazo, erros de relógio/poll/sinalização e shutdown repetido |
 
 ## Testes de integração (repetir para modos 1 e 2)
 
@@ -122,6 +123,35 @@ fixas para as estruturas de 1 a `p`, sem depender da ordem em que os filhos são
 ou de visibilidade do heap privado dos filhos. As contagens são valores injetados pela
 fixture: isso não valida a consolidação real dos backends nem a drenagem de eventos, que
 permanecem fora deste teste e no escopo da issue #21.
+
+`test_supervisor_shutdown` usa filhos reais e uma fachada IPC substituta, sem
+criar objetos System V nem depender de pgrep ou DEBUG. Pipes confirmam a configuração
+dos sinais antes de cada despacho voltar. Um cenário executa a espera real de dois
+segundos para dois filhos que ignoram SIGTERM; outro avança um relógio controlado
+e injeta EINTR, comprovando que a espera seguinte usa apenas os 800 ms restantes.
+Também injeta falhas de relógio, poll(), eventos inválidos no pipe e kill(), verifica
+restauração de SIGCHLD e de sua máscara, bloqueio de novos trabalhos e repetição
+segura após falha no SIGKILL. Um filho externo aos registros do supervisor continua
+vivo, e a limpeza final encerra e recolhe somente filhos próprios do teste.
+Um watchdog com alarm() limita travamentos da suíte. Esses testes comprovam a
+coordenação de processos da #52; as esperas reais de dados/espaço/ACK permanecem
+na integração de #20/#26.
+
+A mesma suíte copia os diagnósticos do reporter e altera errno na callback para
+verificar preservação de causas. Cobre falhas simultâneas em vários filhos, erros
+de espera seguidos de falhas na restauração de ação/máscara, callback nula,
+user_data nulo e ausência de diagnósticos duplicados. Os contextos discriminados
+são verificados para PID/sinal, PID de coleta e bits de poll(), distinguindo
+falhas de read()/EOF no self-pipe e retornos do backend IPC. ESRCH, EINTR e timeout
+não geram diagnósticos de falha.
+
+Um filho que termina normalmente é observado por SIGCHLD bloqueado e sigwait(),
+com ação capturável instalada antes do fork() para manter a compatibilidade com
+macOS. O teste também cobre ECHILD após coleta externa, estado inesperado do filho,
+falha de fork() com outro filho ativo e falhas de inicialização antes/depois da
+criação do self-pipe. Confere que os descritores parciais foram fechados e que
+nenhum contexto IPC não adquirido foi destruído. A fachada é substituída;
+esses cenários não comprovam o rollback interno dos backends System V.
 
 Os testes de resultados verificam `status` e `system_errno` separadamente: sucesso e
 validação sem causa de sistema usam zero; falhas preservam a causa original mesmo após
