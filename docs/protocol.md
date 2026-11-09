@@ -401,7 +401,8 @@ espera por algo que outro ator sempre libera:
 |---|---|---|
 | Produtor `ack=1` | `ack_wait` (consome os próprios ACKs) e `nanosleep` de 1 ms depois de drenar. Nunca em `msgsnd` bloqueante de `D_i` | Consumidores, ao retirar e confirmar |
 | Produtor sem ACK | `msgsnd` bloqueante em `D_i` cheia (backpressure) | Consumidores, ao retirar |
-| Consumidor | `msgrcv` em `D_i` vazia; `msgsnd` em `Q_evt` ou `Q_ack` cheias, depois da retirada | Supervisor drena `Q_evt` em `poll_events`; o produtor dono drena `Q_ack` (envio, `ack_wait`, `ack_end`); o supervisor descarta `Q_ack` sem dono (`ack_abandon`) |
+| Consumidor bloqueante | `msgrcv` em `D_i` vazia; `msgsnd` em `Q_evt` ou `Q_ack` cheias, depois da retirada | Supervisor drena `Q_evt` em `poll_events`; o produtor dono drena `Q_ack` (envio, `ack_wait`, `ack_end`); o supervisor descarta `Q_ack` sem dono (`ack_abandon`) |
+| Consumidor sem espera | Nunca no consumo: `D_i` vazia retorna `ENOMSG`; `Q_evt`/`Q_ack` cheias usam `IPC_NOWAIT` e o consumo/ACK fica devido no processo, entregue no próximo `receive` ou, com espera, ao fechar o filho (único ponto de espera) | O produtor dono drena `Q_ack` e o supervisor drena `Q_evt` |
 | Supervisor | Nunca em fila: só `IPC_NOWAIT` e `waitpid(WNOHANG)` | — |
 
 Como o produtor com ACK nunca bloqueia no kernel sem drenar os próprios ACKs, e como o

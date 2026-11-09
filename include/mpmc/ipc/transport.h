@@ -211,7 +211,9 @@ mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message
  *   errno em system_errno; corpo de tamanho incompatível também retorna este estado, com
  *   system_errno zero.
  * @details A contagem pertence ao backend. No modo 2, ele também sinaliza o produtor
- * quando a operação pediu ACK; o worker não duplica a confirmação. No modo 1,
+ * quando a operação pediu ACK; o worker não duplica a confirmação. Com blocking=false,
+ * nem a contagem nem o ACK esperam por fila de controle cheia: o que não couber fica
+ * devido no processo e é entregue no próximo ipc_receive() ou em ipc_worker_close(). No modo 1,
  * blocking=false ainda pode aguardar o mutex; a retirada não emite ACK nesta etapa.
  * @warning No modo 1, falha de publicação ocorre depois da retirada e da contagem,
  * podendo deixar out preenchido; a operação não é desfeita e o contexto torna-se

@@ -16,6 +16,13 @@ typedef struct {
     unsigned received;
 } ack_registration_t;
 
+/* ACKs de mensagens já retiradas que o consumidor sem espera não conseguiu publicar
+ * porque Q_ack estava cheia. Um registro por operation_id, com a quantidade devida. */
+typedef struct {
+    uint64_t operation_id;
+    uint64_t count;
+} pending_ack_t;
+
 struct msg_backend {
     int *data_queues;
     size_t producer_count;
@@ -31,6 +38,11 @@ struct msg_backend {
     uint64_t *abandoned;
     size_t abandoned_count;
     size_t abandoned_capacity;
+    /* ACKs que o filho não conseguiu publicar sem esperar (Q_ack cheia). Local ao
+     * processo; reenviados antes do próximo receive ou ao fechar o filho. */
+    pending_ack_t *pending_acks;
+    size_t pending_ack_count;
+    size_t pending_ack_capacity;
 };
 
 typedef struct {
@@ -147,6 +159,73 @@ static mpmc_result_t msg_backend_send_retry(
             return result;
         }
     }
+}
+
+/**
+ * @brief Acumula localmente um ACK que não coube em Q_ack sem espera.
+ * @details A mensagem já saiu da fila de dados; guardar o ACK devido é o que impede
+ * que o produtor espere para sempre por ele.
+ */
+static mpmc_result_t msg_backend_defer_ack(msg_backend_t *backend, uint64_t operation_id) {
+    for (size_t index = 0u; index < backend->pending_ack_count; ++index) {
+        if (backend->pending_acks[index].operation_id == operation_id) {
+            ++backend->pending_acks[index].count;
+            return (mpmc_result_t){.status = MPMC_OK};
+        }
+    }
+    if (backend->pending_ack_count == backend->pending_ack_capacity) {
+        size_t capacity =
+            backend->pending_ack_capacity == 0u ? 8u : backend->pending_ack_capacity * 2u;
+        if (capacity < backend->pending_ack_capacity
+            || capacity > SIZE_MAX / sizeof(*backend->pending_acks)) {
+            return (mpmc_result_t){.status = MPMC_ERR_SYS};
+        }
+        pending_ack_t *grown = realloc(backend->pending_acks, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+        }
+        backend->pending_acks = grown;
+        backend->pending_ack_capacity = capacity;
+    }
+    backend->pending_acks[backend->pending_ack_count++] =
+        (pending_ack_t){.operation_id = operation_id, .count = 1u};
+    return (mpmc_result_t){.status = MPMC_OK};
+}
+
+/**
+ * @brief Entrega os ACKs acumulados.
+ * @param wait false: para na primeira Q_ack cheia e devolve MPMC_OK, mantendo o resto;
+ * true: aguarda espaço (usado só ao fechar o filho).
+ */
+static mpmc_result_t msg_backend_flush_acks(msg_backend_t *backend, bool wait) {
+    mpmc_result_t outcome = {.status = MPMC_OK};
+    bool full = false;
+    for (size_t index = 0u; index < backend->pending_ack_count && !full; ++index) {
+        pending_ack_t *entry = &backend->pending_acks[index];
+        while (entry->count > 0u) {
+            ack_event_t ack = {.operation_id = entry->operation_id};
+            mpmc_result_t result = msg_backend_send_retry(
+                backend->ack_queue, (long)entry->operation_id, &ack, sizeof(ack), !wait
+            );
+            if (result.status == MPMC_OK) {
+                --entry->count;
+                continue;
+            }
+            if (result.status != MPMC_ERR_WOULD_BLOCK) {
+                outcome = result;
+            }
+            full = true;
+            break;
+        }
+    }
+    size_t kept = 0u;
+    for (size_t index = 0u; index < backend->pending_ack_count; ++index) {
+        if (backend->pending_acks[index].count != 0u) {
+            backend->pending_acks[kept++] = backend->pending_acks[index];
+        }
+    }
+    backend->pending_ack_count = kept;
+    return outcome;
 }
 
 static mpmc_result_t msg_backend_remove_created(msg_backend_t *backend) {
@@ -284,6 +363,15 @@ mpmc_result_t msg_backend_receive(
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
+    /* ACKs devidos por retiradas anteriores sem espera: tenta entregá-los sem esperar,
+     * antes de qualquer retirada nova, para que não fiquem retidos neste processo. */
+    if (backend->pending_ack_count != 0u) {
+        mpmc_result_t flushed = msg_backend_flush_acks(backend, false);
+        if (flushed.status != MPMC_OK) {
+            return flushed;
+        }
+    }
+
     ssize_t received = 0;
     long type = 0;
     mpmc_result_t result = sysv_msg_receive_typed(
@@ -301,9 +389,16 @@ mpmc_result_t msg_backend_receive(
 
     if (type == 2) {
         ack_event_t ack = {.operation_id = out->operation_id};
+        /* Com espera, o consumidor aguarda o produtor drenar Q_ack. Sem espera, ele não
+         * pode ficar preso aqui: a mensagem já saiu da fila, então, se Q_ack estiver
+         * cheia, o ACK fica devido localmente e segue no próximo receive ou ao fechar o
+         * filho (msg_backend_worker_close). */
         result = msg_backend_send_retry(
-            backend->ack_queue, (long)out->operation_id, &ack, sizeof(ack), false
+            backend->ack_queue, (long)out->operation_id, &ack, sizeof(ack), !blocking
         );
+        if (result.status == MPMC_ERR_WOULD_BLOCK && !blocking) {
+            result = msg_backend_defer_ack(backend, out->operation_id);
+        }
         if (result.status != MPMC_OK) {
             return result;
         }
@@ -501,6 +596,7 @@ void msg_backend_worker_close(msg_backend_t *backend) {
     /* Entrega os consumos acumulados por receives sem espera. Este é o único ponto em que
      * o filho pode aguardar Q_evt, e já fora de qualquer consumo; erros (por exemplo
      * EIDRM depois do destroy do supervisor) não têm a quem ser reportados. */
+    (void)msg_backend_flush_acks(backend, true);
     for (size_t index = 0u; index < backend->producer_count; ++index) {
         if (backend->pending_events[index] != 0u) {
             consumption_event_t event = {
@@ -513,6 +609,7 @@ void msg_backend_worker_close(msg_backend_t *backend) {
     free(backend->consumed_counts);
     free(backend->registrations);
     free(backend->abandoned);
+    free(backend->pending_acks);
     free(backend);
 }
 
@@ -526,5 +623,6 @@ void msg_backend_destroy(msg_backend_t *backend) {
     free(backend->consumed_counts);
     free(backend->registrations);
     free(backend->abandoned);
+    free(backend->pending_acks);
     free(backend);
 }
