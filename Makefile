@@ -165,6 +165,22 @@ $(UNIT_DIR)/test_message_metadata: tests/unit/test_message_metadata.c src/worker
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+$(UNIT_DIR)/test_producer: tests/unit/test_producer.c $(WORKERS_DIR)/producer.c \
+		$(WORKERS_DIR)/producer_routing.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Dclock_gettime=mpmc_test_clock_gettime $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/test_consumer: tests/unit/test_consumer.c $(WORKERS_DIR)/consumer.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/test_consumer_integration: tests/unit/test_consumer_integration.c \
+		$(WORKERS_DIR)/consumer.c src/ipc/transport.c src/ipc/msg_backend.c \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_producer_routing: tests/unit/test_producer_routing.c \
 		$(WORKERS_DIR)/producer_routing.c $(WORKERS_DIR)/producer.c
 	@mkdir -p $(dir $@)
@@ -227,7 +243,8 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
 		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_operations $(UNIT_DIR)/test_shm_stress $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
 		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_msg_stress $(UNIT_DIR)/test_isolation \
-		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_transport_contract \
+		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_consumer \
+		$(UNIT_DIR)/test_consumer_integration $(UNIT_DIR)/test_transport_contract \
 		$(UNIT_DIR)/test_transport $(UNIT_DIR)/test_protocol_properties \
 		$(UNIT_DIR)/test_supervisor_report $(UNIT_DIR)/test_supervisor_shutdown
 	@$(UNIT_DIR)/test_command
@@ -244,6 +261,8 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 	@$(UNIT_DIR)/test_shm_ring
 	@$(UNIT_DIR)/test_message_metadata
 	@$(UNIT_DIR)/test_producer
+	@$(UNIT_DIR)/test_consumer
+	@$(UNIT_DIR)/test_consumer_integration
 	@$(UNIT_DIR)/test_msg_backend
 	@$(UNIT_DIR)/test_msg_stress
 	@$(UNIT_DIR)/test_isolation
