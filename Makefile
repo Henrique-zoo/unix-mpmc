@@ -199,6 +199,9 @@ $(UNIT_DIR)/msg_backend_for_test.o: src/ipc/msg_backend.c \
 		-Dsysv_msg_create=mpmc_test_msg_create \
 		-Dsysv_msg_remove=mpmc_test_msg_remove \
 		-Dsysv_msg_send=mpmc_test_msg_send \
+		-Dsysv_msg_receive=mpmc_test_msg_receive \
+		-Dsysv_msg_receive_typed=mpmc_test_msg_receive_typed \
+		-Dnanosleep=mpmc_test_nanosleep \
 		-c $< -o $@
 
 $(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c \
