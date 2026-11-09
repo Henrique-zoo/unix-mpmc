@@ -1,10 +1,12 @@
 #include "mpmc/ipc/msg_backend.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <time.h>
 
 #include "mpmc/ipc/msg.h"
 
@@ -33,6 +35,79 @@ typedef struct {
 typedef struct {
     uint64_t operation_id;
 } ack_event_t;
+
+static ack_registration_t *msg_backend_find_registration(
+    msg_backend_t *backend,
+    uint64_t operation_id
+) {
+    for (size_t index = 0u; index < backend->registration_count; ++index) {
+        if (backend->registrations[index].operation_id == operation_id) {
+            return &backend->registrations[index];
+        }
+    }
+    return NULL;
+}
+
+static mpmc_result_t msg_backend_ack_receive(
+    msg_backend_t *backend,
+    ack_registration_t *registration,
+    bool nowait,
+    bool account,
+    bool *out_received
+) {
+    ack_event_t ack;
+    ssize_t received = 0;
+    mpmc_result_t result = sysv_msg_receive(
+        backend->ack_queue,
+        (long)registration->operation_id,
+        &ack,
+        sizeof(ack),
+        nowait,
+        &received
+    );
+    if (result.status != MPMC_OK) {
+        return result;
+    }
+    if ((size_t)received != sizeof(ack) || ack.operation_id != registration->operation_id
+        || (account && registration->received >= registration->expected)) {
+        return (mpmc_result_t){.status = MPMC_ERR_STATE};
+    }
+    if (account) {
+        ++registration->received;
+    }
+    *out_received = true;
+    return (mpmc_result_t){.status = MPMC_OK};
+}
+
+static mpmc_result_t msg_backend_ack_drain(
+    msg_backend_t *backend,
+    ack_registration_t *registration,
+    bool account
+) {
+    for (;;) {
+        bool received = false;
+        mpmc_result_t result =
+            msg_backend_ack_receive(backend, registration, true, account, &received);
+        if (result.status == MPMC_ERR_WOULD_BLOCK) {
+            return (mpmc_result_t){.status = MPMC_OK};
+        }
+        if (result.status != MPMC_OK) {
+            return result;
+        }
+    }
+}
+
+static mpmc_result_t msg_backend_ack_backoff(void) {
+    const struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000};
+    if (nanosleep(&delay, NULL) == 0) {
+        return (mpmc_result_t){.status = MPMC_OK};
+    }
+    int sleep_errno = errno;
+    return (mpmc_result_t){
+        .status = sleep_errno == EINTR ? MPMC_ERR_INTERRUPTED : MPMC_ERR_SYS,
+        .system_errno = sleep_errno,
+    };
+}
 
 static mpmc_result_t msg_backend_send_retry(
     int msqid,
@@ -133,16 +208,42 @@ mpmc_result_t msg_backend_send(
         || producer_id > backend->producer_count) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
-    long type = 1;
-    for (size_t index = 0u; index < backend->registration_count; ++index) {
-        if (backend->registrations[index].operation_id == message->operation_id) {
-            type = 2;
-            break;
+    ack_registration_t *registration =
+        message->operation_id == 0u ? NULL
+                                    : msg_backend_find_registration(backend, message->operation_id);
+    if (registration == NULL) {
+        return sysv_msg_send(
+            backend->data_queues[producer_id - 1u], 1, message, sizeof(*message), false
+        );
+    }
+
+    if (registration->received >= registration->expected) {
+        return (mpmc_result_t){.status = MPMC_ERR_STATE};
+    }
+    for (;;) {
+        mpmc_result_t result = sysv_msg_send(
+            backend->data_queues[producer_id - 1u],
+            2,
+            message,
+            sizeof(*message),
+            true
+        );
+        if (result.status == MPMC_OK) {
+            return result;
+        }
+        if (result.status != MPMC_ERR_WOULD_BLOCK) {
+            return result;
+        }
+
+        result = msg_backend_ack_drain(backend, registration, true);
+        if (result.status != MPMC_OK) {
+            return result;
+        }
+        result = msg_backend_ack_backoff();
+        if (result.status != MPMC_OK) {
+            return result;
         }
     }
-    return sysv_msg_send(
-        backend->data_queues[producer_id - 1u], type, message, sizeof(*message), false
-    );
 }
 
 mpmc_result_t msg_backend_receive(
@@ -193,13 +294,12 @@ mpmc_result_t msg_backend_ack_begin(
     uint64_t operation_id,
     unsigned expected
 ) {
-    if (backend == NULL || operation_id == 0u || expected == 0u || expected > 1024u) {
+    if (backend == NULL || operation_id == 0u || operation_id > (uint64_t)LONG_MAX
+        || expected == 0u || expected > 1024u) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
-    for (size_t index = 0u; index < backend->registration_count; ++index) {
-        if (backend->registrations[index].operation_id == operation_id) {
-            return (mpmc_result_t){.status = MPMC_ERR_STATE};
-        }
+    if (msg_backend_find_registration(backend, operation_id) != NULL) {
+        return (mpmc_result_t){.status = MPMC_ERR_STATE};
     }
     if (backend->registration_count == backend->registration_capacity) {
         size_t capacity =
@@ -228,29 +328,17 @@ mpmc_result_t msg_backend_ack_wait(msg_backend_t *backend, uint64_t operation_id
     if (backend == NULL || operation_id == 0u) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
-    ack_registration_t *registration = NULL;
-    for (size_t index = 0u; index < backend->registration_count; ++index) {
-        if (backend->registrations[index].operation_id == operation_id) {
-            registration = &backend->registrations[index];
-            break;
-        }
-    }
+    ack_registration_t *registration = msg_backend_find_registration(backend, operation_id);
     if (registration == NULL) {
         return (mpmc_result_t){.status = MPMC_ERR_STATE};
     }
     while (registration->received < registration->expected) {
-        ack_event_t ack;
-        ssize_t received = 0;
-        mpmc_result_t result = sysv_msg_receive(
-            backend->ack_queue, (long)operation_id, &ack, sizeof(ack), false, &received
-        );
+        bool received = false;
+        mpmc_result_t result =
+            msg_backend_ack_receive(backend, registration, false, true, &received);
         if (result.status != MPMC_OK) {
             return result;
         }
-        if ((size_t)received != sizeof(ack) || ack.operation_id != operation_id) {
-            return (mpmc_result_t){.status = MPMC_ERR_STATE};
-        }
-        ++registration->received;
     }
     return (mpmc_result_t){.status = MPMC_OK};
 }
@@ -259,13 +347,18 @@ mpmc_result_t msg_backend_ack_end(msg_backend_t *backend, uint64_t operation_id)
     if (backend == NULL || operation_id == 0u) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
+    ack_registration_t *registration = msg_backend_find_registration(backend, operation_id);
+    if (registration == NULL) {
+        return (mpmc_result_t){.status = MPMC_OK};
+    }
+    mpmc_result_t result = msg_backend_ack_drain(backend, registration, false);
     for (size_t index = 0u; index < backend->registration_count; ++index) {
         if (backend->registrations[index].operation_id == operation_id) {
             backend->registrations[index] = backend->registrations[--backend->registration_count];
-            return (mpmc_result_t){.status = MPMC_OK};
+            break;
         }
     }
-    return (mpmc_result_t){.status = MPMC_OK};
+    return result;
 }
 
 mpmc_result_t msg_backend_poll_events(msg_backend_t *backend) {
