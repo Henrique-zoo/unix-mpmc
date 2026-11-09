@@ -22,6 +22,9 @@ struct msg_backend {
     int event_queue;
     int ack_queue;
     uint64_t *consumed_counts;
+    /* Eventos de consumo que o filho não conseguiu publicar sem esperar (Q_evt cheia).
+     * Local ao processo; somados ao próximo evento do mesmo índice ou ao fechar o filho. */
+    uint64_t *pending_events;
     ack_registration_t *registrations;
     size_t registration_count;
     size_t registration_capacity;
@@ -179,10 +182,13 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
 
     backend->data_queues = malloc(producer_count * sizeof(*backend->data_queues));
     backend->consumed_counts = calloc(producer_count, sizeof(*backend->consumed_counts));
-    if (backend->data_queues == NULL || backend->consumed_counts == NULL) {
+    backend->pending_events = calloc(producer_count, sizeof(*backend->pending_events));
+    if (backend->data_queues == NULL || backend->consumed_counts == NULL
+        || backend->pending_events == NULL) {
         int allocation_errno = errno;
         free(backend->data_queues);
         free(backend->consumed_counts);
+        free(backend->pending_events);
         free(backend);
         return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = allocation_errno};
     }
@@ -195,6 +201,7 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
         mpmc_result_t result = sysv_msg_create(&backend->data_queues[index]);
         if (result.status != MPMC_OK) {
             msg_backend_remove_created(backend);
+            free(backend->pending_events);
             free(backend->consumed_counts);
             free(backend->data_queues);
             free(backend);
@@ -204,6 +211,7 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
     mpmc_result_t result = sysv_msg_create(&backend->event_queue);
     if (result.status != MPMC_OK) {
         msg_backend_remove_created(backend);
+        free(backend->pending_events);
         free(backend->consumed_counts);
         free(backend->data_queues);
         free(backend);
@@ -212,6 +220,7 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
     result = sysv_msg_create(&backend->ack_queue);
     if (result.status != MPMC_OK) {
         msg_backend_remove_created(backend);
+        free(backend->pending_events);
         free(backend->consumed_counts);
         free(backend->data_queues);
         free(backend);
@@ -306,9 +315,29 @@ mpmc_result_t msg_backend_receive(
      * pela confirmação. A ordem inversa acoplaria os canais de controle e poderia
      * deixar ack_wait() parado enquanto o consumidor aguarda o supervisor.
      */
-    consumption_event_t event = {.producer_id = producer_id, .count = 1u};
-    result = msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), false);
-    if (result.status != MPMC_OK) {
+    uint64_t *pending = &backend->pending_events[producer_id - 1u];
+    consumption_event_t event = {.producer_id = producer_id, .count = 1u + *pending};
+    if (blocking) {
+        result = msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), false);
+        if (result.status != MPMC_OK) {
+            return result;
+        }
+        *pending = 0u;
+        return (mpmc_result_t){.status = MPMC_OK};
+    }
+
+    /*
+     * Sem espera: a mensagem já saiu da fila de dados, então a retirada não pode ser
+     * desfeita nem o consumidor pode ficar preso em Q_evt cheia (o supervisor pode
+     * demorar a drená-la). Se não houver espaço, o consumo fica acumulado localmente e
+     * segue junto com o próximo evento deste índice ou em msg_backend_worker_close().
+     */
+    result = msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), true);
+    if (result.status == MPMC_OK) {
+        *pending = 0u;
+    } else if (result.status == MPMC_ERR_WOULD_BLOCK) {
+        ++*pending;
+    } else {
         return result;
     }
     return (mpmc_result_t){.status = MPMC_OK};
@@ -469,7 +498,18 @@ void msg_backend_worker_close(msg_backend_t *backend) {
     if (backend == NULL) {
         return;
     }
+    /* Entrega os consumos acumulados por receives sem espera. Este é o único ponto em que
+     * o filho pode aguardar Q_evt, e já fora de qualquer consumo; erros (por exemplo
+     * EIDRM depois do destroy do supervisor) não têm a quem ser reportados. */
+    for (size_t index = 0u; index < backend->producer_count; ++index) {
+        if (backend->pending_events[index] != 0u) {
+            consumption_event_t event = {
+                .producer_id = index + 1u, .count = backend->pending_events[index]};
+            (void)msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), false);
+        }
+    }
     free(backend->data_queues);
+    free(backend->pending_events);
     free(backend->consumed_counts);
     free(backend->registrations);
     free(backend->abandoned);
@@ -482,6 +522,7 @@ void msg_backend_destroy(msg_backend_t *backend) {
     }
     msg_backend_remove_created(backend);
     free(backend->data_queues);
+    free(backend->pending_events);
     free(backend->consumed_counts);
     free(backend->registrations);
     free(backend->abandoned);
