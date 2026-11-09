@@ -1,15 +1,17 @@
 /**
  * @file test_consumer_acceptance.c
- * @brief Critérios de aceite do consumo bloqueante e não bloqueante, nos backends reais.
+ * @brief Critérios de aceite do consumo bloqueante e não bloqueante, nos
+ * backends reais.
  * @ingroup tests
- * @details Cada caso corresponde a um critério de aceite, com processos distintos:
- * (1) o consumo bloqueante permanece aguardando e completa quando os itens surgem;
- * (2) o consumo não bloqueante retorna imediatamente e conta o parcial corretamente,
- *     inclusive com a fila de confirmações (Q_ack) saturada no modo 2;
- * (3) cada mensagem é consumida no máximo uma vez (coberto em test_consumer_concurrency);
- * (4) consumidores concorrentes e consumo parcial não alteram a correlação de ACK dos
- *     produtores (modo 2; o ACK do modo 1 pertence à issue #11).
- * Todo o teste roda sob um alarme de segurança: uma regressão vira falha, não travamento.
+ * @details Cada caso corresponde a um critério de aceite, com processos
+ * distintos: (1) o consumo bloqueante permanece aguardando e completa quando os
+ * itens surgem; (2) o consumo não bloqueante retorna imediatamente e conta o
+ * parcial corretamente, inclusive com a fila de confirmações (Q_ack) saturada
+ * no modo 2; (3) cada mensagem é consumida no máximo uma vez (coberto em
+ * test_consumer_concurrency); (4) consumidores concorrentes e consumo parcial
+ * não alteram a correlação de ACK dos produtores (modo 2; o ACK do modo 1
+ * pertence à issue #11). Todo o teste roda sob um alarme de segurança: uma
+ * regressão vira falha, não travamento.
  */
 #include <errno.h>
 #include <poll.h>
@@ -34,7 +36,10 @@ static int current_mode;
 static void check(bool condition, const char *description, int line) {
     if (!condition) {
         fprintf(
-            stderr, "consumer acceptance failed [mode %d, line %d]: %s\n", current_mode, line,
+            stderr,
+            "consumer acceptance failed [mode %d, line %d]: %s\n",
+            current_mode,
+            line,
             description
         );
         ++failures;
@@ -87,7 +92,8 @@ static bool read_report(int fd, report_t *report, int timeout_ms) {
     return read(fd, report, sizeof(*report)) == (ssize_t)sizeof(*report);
 }
 
-/* Critério 1 ------------------------------------------------------------------------ */
+/* Critério 1
+ * ------------------------------------------------------------------------ */
 static void test_blocking_waits_then_completes(ipc_context_t *context) {
     int fds[2];
     CHECK(pipe(fds) == 0, "pipe");
@@ -123,7 +129,8 @@ static void test_blocking_waits_then_completes(ipc_context_t *context) {
     close(fds[0]);
 }
 
-/* Critério 2 ------------------------------------------------------------------------ */
+/* Critério 2
+ * ------------------------------------------------------------------------ */
 static void test_nonblocking_partial_count(ipc_context_t *context) {
     consumer_job_t job = {
         .producer_id = 1u,
@@ -163,7 +170,8 @@ static void test_nonblocking_partial_count(ipc_context_t *context) {
     CHECK(result.status == MPMC_OK && out.consumed_count == 5u, "5 of 5: complete");
 }
 
-/* Critério 4 (modo 2) ----------------------------------------------------------------- */
+/* Critério 4 (modo 2)
+ * ----------------------------------------------------------------- */
 static void test_ack_correlation_with_partial_and_concurrent(ipc_context_t *context) {
     enum { PER = 100, FIRST_OP = 1000 };
     pid_t producers[2];
@@ -182,7 +190,8 @@ static void test_ack_correlation_with_partial_and_concurrent(ipc_context_t *cont
     }
     sleep_ms(WAIT_MS);
 
-    /* Consumo parcial; o operation_id do consumidor coincide com o de OUTRO produtor. */
+    /* Consumo parcial; o operation_id do consumidor coincide com o de OUTRO
+     * produtor. */
     for (size_t index = 1u; index <= 2u; ++index) {
         consumer_job_t job = {
             .producer_id = index,
@@ -231,12 +240,14 @@ static void test_ack_correlation_with_partial_and_concurrent(ipc_context_t *cont
     );
 }
 
-/* Critério 2 sob saturação de Q_ack (modo 2) ------------------------------------------ */
+/* Critério 2 sob saturação de Q_ack (modo 2)
+ * ------------------------------------------ */
 /*
- * O "produtor" é este processo: registra as operações mas só drena os ACKs no fim. Cada
- * rodada envia um lote pequeno, que um filho consome sem espera. Depois de ~3000 ACKs
- * Q_ack lota (mesmo nos limites padrão mais folgados); o consumo sem espera deve seguir
- * retornando na hora, e nenhum ACK pode se perder.
+ * O "produtor" é este processo: registra as operações mas só drena os ACKs no
+ * fim. Cada rodada envia um lote pequeno, que um filho consome sem espera.
+ * Depois de ~3000 ACKs Q_ack lota (mesmo nos limites padrão mais folgados); o
+ * consumo sem espera deve seguir retornando na hora, e nenhum ACK pode se
+ * perder.
  */
 static void test_nonblocking_with_full_ack_queue(ipc_context_t *context) {
     enum { BATCH = 32, ROUNDS = 96, OPS = 3, ROUNDS_PER_OP = ROUNDS / OPS };
@@ -274,7 +285,8 @@ static void test_nonblocking_with_full_ack_queue(ipc_context_t *context) {
             mpmc_result_t result = consumer_run(context, &job, &out);
             report_t report = {.consumed = out.consumed_count, .status = (int)result.status};
             if (write(fds[1], &report, sizeof(report)) != (ssize_t)sizeof(report)) _exit(2);
-            /* O fechamento entrega os ACKs devidos, aguardando se Q_ack ainda estiver cheia. */
+            /* O fechamento entrega os ACKs devidos, aguardando se Q_ack ainda estiver
+             * cheia. */
             ipc_worker_close(context);
             _exit(0);
         }
@@ -303,7 +315,8 @@ static void test_nonblocking_with_full_ack_queue(ipc_context_t *context) {
         return;
     }
 
-    /* Drenar como produtor dono: todo ACK devido tem de chegar (nenhum perdido). */
+    /* Drenar como produtor dono: todo ACK devido tem de chegar (nenhum perdido).
+     */
     for (uint64_t op = 1u; op <= OPS; ++op) {
         CHECK(
             ipc_ack_wait(context, 500u + op).status == MPMC_OK,
@@ -311,8 +324,8 @@ static void test_nonblocking_with_full_ack_queue(ipc_context_t *context) {
         );
         CHECK(ipc_ack_end(context, 500u + op).status == MPMC_OK, "ack_end");
     }
-    /* No fechamento os filhos também entregam os eventos de consumo acumulados; como
-     * supervisor, este processo drena Q_evt enquanto os recolhe. */
+    /* No fechamento os filhos também entregam os eventos de consumo acumulados;
+     * como supervisor, este processo drena Q_evt enquanto os recolhe. */
     unsigned closed_ok = 0u;
     unsigned reaped = 0u;
     const double deadline = monotonic_seconds() + 30.0;
@@ -333,9 +346,7 @@ static void test_nonblocking_with_full_ack_queue(ipc_context_t *context) {
     (void)ipc_poll_events(context);
     uint64_t total = 0u;
     CHECK(ipc_consumed_count(context, 1u, &total).status == MPMC_OK, "total");
-    CHECK(
-        total == before + (uint64_t)BATCH * ROUNDS, "backend total grows by everything consumed"
-    );
+    CHECK(total == before + (uint64_t)BATCH * ROUNDS, "backend total grows by everything consumed");
 }
 
 int main(void) {

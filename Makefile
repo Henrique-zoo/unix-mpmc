@@ -245,7 +245,7 @@ $(UNIT_DIR)/test_consumer_integration: tests/unit/test_consumer_integration.c \
 $(UNIT_DIR)/test_consumer_concurrency: tests/unit/test_consumer_concurrency.c \
 		$(WORKERS_DIR)/consumer.c $(WORKERS_DIR)/producer.c $(WORKERS_DIR)/producer_routing.c \
 		src/ipc/transport.c src/ipc/msg_backend.c \
-		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
 		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
@@ -253,7 +253,7 @@ $(UNIT_DIR)/test_consumer_concurrency: tests/unit/test_consumer_concurrency.c \
 $(UNIT_DIR)/test_consumer_acceptance: tests/unit/test_consumer_acceptance.c \
 		$(WORKERS_DIR)/consumer.c $(WORKERS_DIR)/producer.c $(WORKERS_DIR)/producer_routing.c \
 		src/ipc/transport.c src/ipc/msg_backend.c \
-		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
 		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
