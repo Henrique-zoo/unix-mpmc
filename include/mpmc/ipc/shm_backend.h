@@ -338,6 +338,25 @@ mpmc_result_t shm_backend_consumed_count(
 );
 
 /**
+ * @brief Copia o total final após todos os workers terem sido recolhidos.
+ * @param backend Backend ainda associado no processo proprietário.
+ * @param producer_id Estrutura lógica 1..p.
+ * @param out_count Destino da contagem final.
+ * @pre Não existem workers vivos nem novos despachos neste contexto.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados:
+ * - MPMC_OK: total copiado; system_errno zero.
+ * - MPMC_ERR_INVALID_ARG: backend ou saída nulo; system_errno zero.
+ * - MPMC_ERR_INVALID_INDEX: índice fora de 1..p; system_errno zero.
+ * @details A quiescência permite ler sem adquirir o mutex que um worker
+ * encerrado abruptamente pode ter deixado adquirido.
+ */
+mpmc_result_t shm_backend_final_count(
+    shm_backend_t *backend,
+    size_t producer_id,
+    uint64_t *out_count
+);
+
+/**
  * @brief Desanexa mapeamentos herdados pelo processo filho.
  * @param backend Instância herdada após fork(); NULL é permitido.
  * @param reporter Destino dos diagnósticos de liberação; pode ser NULL.

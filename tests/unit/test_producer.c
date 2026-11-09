@@ -63,13 +63,15 @@ static int test_minimum_message_count(void);
 static int test_failure_points(void);
 static int test_metadata_failure_points(void);
 static int test_timestamp_taken_per_send(void);
+static int test_reported_progress(void);
 
 int main(void) {
     if (test_striped_ack_flow() != 0 || test_fixed_destination_without_ack() != 0
         || test_cleanup_after_send_error() != 0 || test_ack_failures() != 0
         || test_validation() != 0 || test_ack_arguments_and_contexts() != 0
         || test_minimum_message_count() != 0 || test_failure_points() != 0
-        || test_metadata_failure_points() != 0 || test_timestamp_taken_per_send() != 0) {
+        || test_metadata_failure_points() != 0 || test_timestamp_taken_per_send() != 0
+        || test_reported_progress() != 0) {
         return 1;
     }
     if (check(destroy_calls == 0u, "producer must never call ipc_destroy (supervisor owns IPC)")) {
@@ -680,4 +682,32 @@ static void reset_mocks(size_t producer_count) {
     clock_calls = 0u;
     fail_clock_call = 0u;
     clock_id_always_realtime = true;
+}
+
+/** @brief Preserva o progresso de produção mesmo quando o trabalho não conclui. */
+static int test_reported_progress(void) {
+    struct ipc_context context = {.producer_count = 1};
+    producer_job_t job = {
+        .producer_id = 1, .message_count = 5, .ack_mode = PRODUCER_ACK_WAIT, .operation_id = 400};
+    producer_result_t progress;
+    reset_mocks(1);
+    fail_send_call = 3;
+    send_result = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EIO};
+    mpmc_result_t result = producer_run_with_result(&context, &job, &progress);
+    if (check(
+            result.status == MPMC_ERR_SYS && progress.produced_count == 2,
+            "failed third send reports two successful sends"
+        )
+        || check(
+            progress.error.status == result.status && progress.error.system_errno == EIO,
+            "progress preserves primary cause"
+        ))
+        return 1;
+    reset_mocks(1);
+    ack_wait_result = (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR};
+    result = producer_run_with_result(&context, &job, &progress);
+    return check(
+        result.status == MPMC_ERR_INTERRUPTED && progress.produced_count == 5,
+        "full production does not imply successful ACK completion"
+    );
 }

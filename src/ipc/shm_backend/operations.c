@@ -179,3 +179,17 @@ mpmc_result_t shm_backend_consumed_count(
     *out_count = count;
     return (mpmc_result_t){.status = MPMC_OK};
 }
+
+/** @details A propriedade exclusiva do pai após waitpid() substitui o mutex. */
+mpmc_result_t shm_backend_final_count(
+    shm_backend_t *backend,
+    size_t producer_id,
+    uint64_t *out_count
+) {
+    if (backend == nullptr || out_count == nullptr)
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    if (producer_id == 0 || producer_id > backend->producer_count)
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX};
+    *out_count = backend->segments[producer_id - 1].ring->consumed_total;
+    return (mpmc_result_t){.status = MPMC_OK};
+}

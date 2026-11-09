@@ -12,6 +12,7 @@ struct ipc_context {
     size_t producer_count;
     msg_backend_t *message_backend;
     shm_backend_t *shared_backend;
+    bool quiescent;
 };
 
 /**
@@ -71,11 +72,16 @@ mpmc_result_t ipc_init(ipc_context_t **out, size_t producer_count, ipc_mode_t mo
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
+void ipc_quiesce(ipc_context_t *context) {
+    if (context != nullptr) context->quiescent = true;
+}
+
 size_t ipc_producer_count(const ipc_context_t *context) {
     return context == NULL ? 0u : context->producer_count;
 }
 
 mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message_t *message) {
+    if (context != nullptr && context->quiescent) return local_error(MPMC_ERR_SHUTDOWN);
     if (context == NULL || message == NULL) return local_error(MPMC_ERR_INVALID_ARG);
     if (!logical_index_valid(context, producer_id)) return local_error(MPMC_ERR_INVALID_INDEX);
     return context->mode == IPC_MESSAGE_QUEUE
@@ -89,6 +95,7 @@ mpmc_result_t ipc_receive(
     message_t *out,
     bool blocking
 ) {
+    if (context != nullptr && context->quiescent) return local_error(MPMC_ERR_SHUTDOWN);
     if (context == NULL || out == NULL) return local_error(MPMC_ERR_INVALID_ARG);
     if (!logical_index_valid(context, producer_id)) return local_error(MPMC_ERR_INVALID_INDEX);
     return context->mode == IPC_MESSAGE_QUEUE
@@ -97,6 +104,7 @@ mpmc_result_t ipc_receive(
 }
 
 mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsigned expected) {
+    if (context != nullptr && context->quiescent) return local_error(MPMC_ERR_SHUTDOWN);
     if (context == NULL || !operation_id_valid(operation_id) || expected < MPMC_MIN_MESSAGES
         || expected > MPMC_MAX_MESSAGES) {
         return local_error(MPMC_ERR_INVALID_ARG);
@@ -107,6 +115,7 @@ mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsig
 }
 
 mpmc_result_t ipc_ack_wait(ipc_context_t *context, uint64_t operation_id) {
+    if (context != nullptr && context->quiescent) return local_error(MPMC_ERR_SHUTDOWN);
     if (context == NULL || !operation_id_valid(operation_id)) {
         return local_error(MPMC_ERR_INVALID_ARG);
     }
@@ -116,6 +125,7 @@ mpmc_result_t ipc_ack_wait(ipc_context_t *context, uint64_t operation_id) {
 }
 
 mpmc_result_t ipc_ack_end(ipc_context_t *context, uint64_t operation_id) {
+    if (context != nullptr && context->quiescent) return local_error(MPMC_ERR_SHUTDOWN);
     if (context == NULL || !operation_id_valid(operation_id)) {
         return local_error(MPMC_ERR_INVALID_ARG);
     }
@@ -148,6 +158,8 @@ mpmc_result_t ipc_consumed_count(ipc_context_t *context, size_t producer_id, uin
     if (context->mode == IPC_MESSAGE_QUEUE) {
         return msg_backend_consumed_count(context->message_backend, producer_id, out_count);
     }
+    if (context->quiescent)
+        return shm_backend_final_count(context->shared_backend, producer_id, out_count);
     return shm_backend_consumed_count(context->shared_backend, producer_id, out_count);
 }
 

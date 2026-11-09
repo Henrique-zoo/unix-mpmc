@@ -40,6 +40,7 @@ typedef enum {
     SUPERVISOR_UNBLOCK_SIGCHLD,     /**< Falha ao desbloquear SIGCHLD. */
     SUPERVISOR_RESTORE_SIGCHLD,     /**< Falha ao restaurar a ação de SIGCHLD. */
     SUPERVISOR_RESTORE_SIGNAL_MASK, /**< Falha ao restaurar a máscara de sinais. */
+    SUPERVISOR_READ_WORKER_RESULT,  /**< Falha ao receber o resultado estruturado do filho. */
     SUPERVISOR_ABANDON_ACK,         /**< Falha ao descartar ACKs de um produtor que não concluiu. */
 } supervisor_shutdown_operation_t;
 
@@ -183,8 +184,8 @@ mpmc_result_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_m
  *   falha interna propagada pelo shutdown, esse campo é zero.
  * @details Cada comando de trabalho recebe um operation_id não nulo antes de
  * fork(); o pai registra PID, tipo e identidade da operação sem executar o
- * trabalho. Até a implementação dos módulos workers/IPC, o filho reporta que
- * a operação não está disponível e termina com erro.
+ * trabalho. O filho executa producer_run_with_result() ou consumer_run(),
+ * fecha seu contexto local e transmite o resultado por um pipe próprio.
  * @note COMMAND_SHUTDOWN delega a supervisor_shutdown(), inclusive em chamadas
  * repetidas. Novos trabalhos continuam recusados após início do encerramento.
  */

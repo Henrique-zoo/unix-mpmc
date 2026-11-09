@@ -1476,3 +1476,11 @@ int main(void) {
     );
     return g_failures == 0u ? 0 : 1;
 }
+
+mpmc_result_t shm_backend_final_count(
+    shm_backend_t *backend,
+    size_t producer_id,
+    uint64_t *out_count
+) {
+    return shm_backend_consumed_count(backend, producer_id, out_count);
+}

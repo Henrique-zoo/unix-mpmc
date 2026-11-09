@@ -63,6 +63,29 @@ mpmc_status_t producer_message_next(
     const producer_job_t *job
 );
 
+/** @brief Progresso e resultado de um trabalho produtor. */
+typedef struct {
+    unsigned produced_count; /**< Envios concluídos antes do retorno. */
+    mpmc_result_t error;     /**< Resultado completo, inclusive da espera por ACK. */
+} producer_result_t;
+
+/**
+ * @brief Executa produção e informa progresso inclusive em erro ou cancelamento.
+ * @param transport Contexto IPC herdado e inicializado.
+ * @param job Trabalho validado, com identidade única.
+ * @param out Resultado obrigatório; preenchido inclusive em falha.
+ * @return Estrutura mpmc_result_t com os mesmos estados de producer_run().
+ * - MPMC_ERR_INVALID_ARG: out nulo, com system_errno zero.
+ * @details produced_count aumenta somente após ipc_send() retornar sucesso.
+ * O total pode estar completo mesmo se a espera de consumo falhar. O resultado
+ * não transforma esse caso em conclusão bem-sucedida.
+ */
+mpmc_result_t producer_run_with_result(
+    ipc_context_t *transport,
+    const producer_job_t *job,
+    producer_result_t *out
+);
+
 /**
  * @brief Produz as mensagens de um trabalho a partir do processo filho.
  * @param transport Contexto IPC herdado via fork(), pronto para envio.

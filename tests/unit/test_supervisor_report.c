@@ -1,3 +1,5 @@
+#include "mpmc/workers/consumer.h"
+#include "mpmc/workers/producer.h"
 /**
  * @file test_supervisor_report.c
  * @brief Valida a apresentação dos relatórios do supervisor com dados controlados.
@@ -527,4 +529,33 @@ int main(void) {
 
     printf("%u verificações, %u falhas\n", g_checks, g_failures);
     return g_failures == 0u ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+/** @brief Entradas não executadas: os filhos são controlados pela fixture de fork. */
+mpmc_result_t mpmc_test_producer_run(
+    ipc_context_t *context,
+    const producer_job_t *job,
+    producer_result_t *out
+) {
+    (void)context;
+    (void)job;
+    *out = (producer_result_t){.error = {.status = MPMC_ERR_STATE}};
+    return out->error;
+}
+mpmc_result_t mpmc_test_consumer_run(
+    ipc_context_t *context,
+    const consumer_job_t *job,
+    consumer_result_t *out
+) {
+    (void)context;
+    (void)job;
+    *out = (consumer_result_t){.error = {.status = MPMC_ERR_STATE}};
+    return out->error;
+}
+void mpmc_test_worker_close(ipc_context_t *context) {
+    (void)context;
+}
+
+void mpmc_test_quiesce(ipc_context_t *context) {
+    (void)context;
 }

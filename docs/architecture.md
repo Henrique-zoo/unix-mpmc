@@ -92,14 +92,19 @@ ESRCH ao sinalizar, EINTR repetido e vencimento do prazo são condições espera
 
 ## Resultados dos filhos para o supervisor
 
-Nenhum resultado depende do heap do filho. Erro e cancelamento chegam pelo estado de término
-coletado com `waitpid()` (código de saída ou sinal, em `child_report_t`): código zero significa
-trabalho concluído por completo; código diferente de zero, falha ou consumo parcial; sinal,
-cancelamento (`shutdown` envia `SIGTERM`) ou morte. A quantidade consumida chega por estrutura
-lógica, pelo backend: eventos consolidados por `ipc_poll_events()` no modo 2 e contador em memória
-compartilhada no modo 1, lidos com `ipc_consumed_count()`. A quantidade de um único trabalho
-consumidor existe só em `consumer_result_t`, no filho, e é apresentada por ele; levá-la ao
-supervisor exigiria um canal novo, a ser acordado em #16.
+Cada despacho cria um pipe próprio antes de fork(). O filho fecha descritores de
+leitura herdados, executa o worker real e fecha somente seu contexto IPC local.
+O resultado contém identidade do trabalho, quantidade solicitada, progresso e causa
+de erro. O registro cabe nos 512 bytes mínimos de PIPE_BUF e é escrito atomicamente.
+A leitura no pai é não bloqueante e acumula leituras parciais. Identidade e tipo são
+conferidos antes da apresentação; EOF sem resultado é permitido para filhos mortos
+por sinal. O pipe é fechado ao recolher o filho. O self-pipe acorda o controle após
+publicar um resultado, e a coleta drena novamente o resultado depois de waitpid().
+
+O estado de término continua vindo de waitpid(), nunca do heap do filho. Tempos usam
+CLOCK_MONOTONIC. Totais por estrutura vêm do backend: contador SHM ou eventos MSG
+consolidados por ipc_poll_events(). O consumidor informa progresso mesmo em consumo
+parcial; o produtor também conserva a quantidade enviada se a espera de ACK falhar.
 
 ## Interface pública versus backends
 
@@ -277,11 +282,16 @@ Consulte @ref ipc_protocol e @ref testing_plan.
   em `ipc_worker_close`/`ipc_destroy` e completar a integração da aplicação. Os dados
   e as contagens do modo 1 já são exercitados com IPC real; o ACK SHM já é emitido no recebimento real, com testes de lotes concorrentes e striped.
 - #17: o núcleo de producer_run() e o roteamento já existem e possuem testes com
-  transporte substituto. Falta ligar a chamada ao ponto de entrada do filho no supervisor
-  e comprovar a execução integrada, incluindo os ACKs reais dos dois backends.
+  transporte substituto. O ponto de entrada do filho executa os workers reais; a suíte pelo stdin
+  comprova ACKs, striped, saturação e consumo parcial nos dois backends.
 - #20: integrar o encerramento coordenado após falhas fatais de IPC, incluindo a
   comunicação do erro do worker ao supervisor, a suspensão de novas operações e
   leituras de totais no contexto comprometido e a coleta de todos os filhos antes
   da remoção dos recursos. A #10 garante aquisição atômica sem reservas parciais;
   recuperação após término de um worker com reutilização do contexto está fora
   desse contrato.
+
+Após recolher todos os filhos, o supervisor marca o contexto como quiescente. A
+fachada recusa novos envios/recebimentos/esperas e lê os totais SHM sem mutex:
+um filho encerrado pode ter deixado o mutex adquirido. A pré-condição é a ausência
+comprovada de workers vivos; durante a execução a consulta continua sincronizada.

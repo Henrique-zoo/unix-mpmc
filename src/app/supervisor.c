@@ -25,6 +25,8 @@
 #include <unistd.h>
 
 #include "job_outcome.h"
+#include "mpmc/workers/consumer.h"
+#include "mpmc/workers/producer.h"
 
 /** @brief Capacidade da fila de eventos de resultado pendentes de apresentação. */
 #define SUPERVISOR_MAX_PENDING_OUTCOMES 32u
@@ -35,6 +37,10 @@ typedef struct {
     command_kind_t kind;     /**< Tipo de trabalho executado pelo filho. */
     uint64_t operation_id;   /**< Identidade única atribuída antes de fork(). */
     struct timespec started; /**< Instante CLOCK_MONOTONIC capturado antes de fork(). */
+    int result_fd;           /**< Leitura não bloqueante do resultado deste filho. */
+    size_t result_bytes;     /**< Bytes recebidos do registro atômico. */
+    job_outcome_t outcome;   /**< Resultado transmitido pelo filho. */
+    bool outcome_received;   /**< Resultado validado e apresentado. */
 } child_record_t;
 
 /** @brief Estado privado mantido exclusivamente pelo processo supervisor. */
@@ -84,6 +90,18 @@ static mpmc_result_t wait_children_until(
 static void record_shutdown_error(
     mpmc_result_t *first,
     const supervisor_shutdown_error_t *error,
+    const supervisor_shutdown_reporter_t *reporter
+);
+
+static mpmc_result_t open_result_pipe(int descriptors[2]);
+static void run_worker(
+    supervisor_t *supervisor,
+    const command_t *command,
+    uint64_t operation_id,
+    int result_fd
+);
+static mpmc_result_t drain_worker_results(
+    supervisor_t *supervisor,
     const supervisor_shutdown_reporter_t *reporter
 );
 
@@ -460,6 +478,7 @@ mpmc_result_t supervisor_poll_events(
         }
 
         if (read_errno == EAGAIN || read_errno == EWOULDBLOCK) {
+            result = drain_worker_results(supervisor, reporter);
             const supervisor_shutdown_error_t error = {
                 .operation = SUPERVISOR_POLL_IPC_EVENTS,
                 .result = ipc_poll_events(supervisor->ipc),
@@ -547,6 +566,10 @@ mpmc_result_t supervisor_dispatch(
         };
     }
 
+    int result_pipe[2];
+    error = open_result_pipe(result_pipe);
+    if (error.status != MPMC_OK) return error;
+
     sigset_t block_set;
     sigset_t old_set;
 
@@ -556,10 +579,10 @@ mpmc_result_t supervisor_dispatch(
     sigaddset(&block_set, SIGTERM);
 
     if (sigprocmask(SIG_BLOCK, &block_set, &old_set) == -1) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
+        int saved_errno = errno;
+        (void)close(result_pipe[0]);
+        (void)close(result_pipe[1]);
+        return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = saved_errno};
     }
 
     const uint64_t operation_id = supervisor->next_operation_id;
@@ -567,6 +590,8 @@ mpmc_result_t supervisor_dispatch(
 
     if (child == -1) {
         int fork_error = errno;
+        (void)close(result_pipe[0]);
+        (void)close(result_pipe[1]);
 
         (void)sigprocmask(SIG_SETMASK, &old_set, nullptr);
 
@@ -577,7 +602,13 @@ mpmc_result_t supervisor_dispatch(
     }
 
     if (child == 0) {
-        close_event_pipe(supervisor);
+        (void)close(result_pipe[0]);
+        (void)close(supervisor->event_pipe[0]);
+        for (size_t index = 0; index < supervisor->child_count; ++index) {
+            if (supervisor->children[index].result_fd >= 0) {
+                (void)close(supervisor->children[index].result_fd);
+            }
+        }
 
         if (!reset_child_signals() || sigprocmask(SIG_SETMASK, &old_set, nullptr) == -1) {
             _exit(EXIT_FAILURE);
@@ -592,21 +623,17 @@ mpmc_result_t supervisor_dispatch(
         }
 #endif
 
-        (void)dprintf(
-            STDERR_FILENO,
-            "mpmc: operação %" PRIu64 " (%s) recebida; execução de workers/IPC "
-            "ainda não está implementada.\n",
-            operation_id,
-            command->kind == COMMAND_PRODUCE ? "produz" : "consome"
-        );
-        _exit(EXIT_FAILURE);
+        run_worker(supervisor, command, operation_id, result_pipe[1]);
     }
+
+    (void)close(result_pipe[1]);
 
     supervisor->children[supervisor->child_count++] = (child_record_t){
         .pid = child,
         .kind = command->kind,
         .operation_id = operation_id,
         .started = started,
+        .result_fd = result_pipe[0],
     };
 
     supervisor->next_operation_id = operation_id == UINT64_MAX ? 0u : operation_id + 1u;
@@ -627,6 +654,9 @@ mpmc_result_t supervisor_dispatch(
  * @param index Índice válido do registro a remover.
  */
 static void remove_child(supervisor_t *supervisor, size_t index) {
+    if (supervisor->children[index].result_fd >= 0) {
+        (void)close(supervisor->children[index].result_fd);
+    }
     supervisor->children[index] = supervisor->children[supervisor->child_count - 1];
     --supervisor->child_count;
 }
@@ -811,6 +841,8 @@ mpmc_result_t supervisor_reap(
             continue;
         }
 
+        mpmc_result_t worker_error = drain_worker_results(supervisor, reporter);
+        if (result.status == MPMC_OK) result = worker_error;
         child_record_t finished = supervisor->children[index];
         child_end_t end = CHILD_END_LOST;
         int end_value = 0;
@@ -896,7 +928,10 @@ mpmc_result_t supervisor_shutdown(
 
     mpmc_result_t result = supervisor_reap(supervisor, false, reporter);
 
-    if (supervisor->child_count == 0) return result;
+    if (supervisor->child_count == 0) {
+        ipc_quiesce(supervisor->ipc);
+        return result;
+    }
 
     struct timespec deadline = {};
 
@@ -929,6 +964,8 @@ mpmc_result_t supervisor_shutdown(
 
         if (result.status == MPMC_OK) result = reap_error;
     }
+
+    if (supervisor->child_count == 0) ipc_quiesce(supervisor->ipc);
 
     return result;
 }
@@ -1381,4 +1418,124 @@ static void record_shutdown_error(
     if (reporter != nullptr && reporter->on_error != nullptr) {
         reporter->on_error(error, reporter->user_data);
     }
+}
+
+/** @brief Prepara o canal de um filho; só a leitura é não bloqueante. */
+static mpmc_result_t open_result_pipe(int descriptors[2]) {
+    if (pipe(descriptors) == -1) {
+        return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+    }
+    mpmc_result_t result = set_nonblocking_cloexec(descriptors[0]);
+    if (result.status == MPMC_OK && fcntl(descriptors[1], F_SETFD, FD_CLOEXEC) == -1) {
+        result = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+    }
+    if (result.status != MPMC_OK) {
+        (void)close(descriptors[0]);
+        (void)close(descriptors[1]);
+    }
+    return result;
+}
+
+/** @brief Executa um único trabalho e transmite valores, nunca ponteiros do heap. */
+static void run_worker(
+    supervisor_t *supervisor,
+    const command_t *command,
+    uint64_t operation_id,
+    int result_fd
+) {
+    job_outcome_t outcome = {
+        .command = command->kind,
+        .operation_id = operation_id,
+        .producer_id = command->producer_id,
+        .requested = command->message_count,
+    };
+    if (command->kind == COMMAND_PRODUCE) {
+        const producer_job_t job = {
+            .producer_id = command->producer_id,
+            .message_count = command->message_count,
+            .ack_mode = (producer_ack_mode_t)command->ack_mode,
+            .operation_id = operation_id,
+        };
+        producer_result_t progress;
+        outcome.error = producer_run_with_result(supervisor->ipc, &job, &progress);
+        outcome.effective = progress.produced_count;
+    } else {
+        const consumer_job_t job = {
+            .producer_id = command->producer_id,
+            .message_count = command->message_count,
+            .ack_mode = (consumer_ack_mode_t)command->ack_mode,
+            .operation_id = operation_id,
+        };
+        consumer_result_t progress;
+        outcome.error = consumer_run(supervisor->ipc, &job, &progress);
+        outcome.effective = progress.consumed_count;
+    }
+    outcome.kind = outcome.error.status == MPMC_OK     ? JOB_OUTCOME_COMPLETED
+        : outcome.error.status == MPMC_ERR_WOULD_BLOCK ? JOB_OUTCOME_PARTIAL
+        : outcome.error.status == MPMC_ERR_INTERRUPTED || outcome.error.status == MPMC_ERR_SHUTDOWN
+        ? JOB_OUTCOME_CANCELLED
+        : JOB_OUTCOME_KERNEL_ERROR;
+
+    ipc_worker_close(supervisor->ipc);
+    static_assert(sizeof(outcome) <= 512, "resultado deve caber em PIPE_BUF mínimo");
+    ssize_t sent;
+    do {
+        sent = write(result_fd, &outcome, sizeof outcome);
+    } while (sent == -1 && errno == EINTR);
+    unsigned char wake = 1;
+    (void)write(supervisor->event_pipe[1], &wake, 1);
+    (void)close(result_fd);
+    (void)close(supervisor->event_pipe[1]);
+    _exit(outcome.error.status == MPMC_OK && sent == sizeof outcome ? EXIT_SUCCESS : EXIT_FAILURE);
+}
+
+/** @brief Drena canais próprios e apresenta resultados sem aguardar o fim dos filhos. */
+static mpmc_result_t drain_worker_results(
+    supervisor_t *supervisor,
+    const supervisor_shutdown_reporter_t *reporter
+) {
+    mpmc_result_t result = {.status = MPMC_OK};
+    for (size_t index = 0; index < supervisor->child_count; ++index) {
+        child_record_t *child = &supervisor->children[index];
+        if (child->result_fd < 0 || child->outcome_received) continue;
+        while (child->result_bytes < sizeof child->outcome) {
+            unsigned char *destination = (unsigned char *)&child->outcome;
+            ssize_t count = read(
+                child->result_fd,
+                destination + child->result_bytes,
+                sizeof child->outcome - child->result_bytes
+            );
+            if (count > 0) {
+                child->result_bytes += (size_t)count;
+                continue;
+            }
+            if (count < 0 && errno == EINTR) continue;
+            if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+            if (count < 0 || child->result_bytes != 0) {
+                supervisor_shutdown_error_t error = {
+                    .operation = SUPERVISOR_READ_WORKER_RESULT,
+                    .result = {.status = MPMC_ERR_SYS, .system_errno = count < 0 ? errno : 0},
+                    .child_pid = child->pid,
+                };
+                record_shutdown_error(&result, &error, reporter);
+            }
+            (void)close(child->result_fd);
+            child->result_fd = -1;
+            break;
+        }
+        if (child->result_bytes == sizeof child->outcome) {
+            child->outcome_received = true;
+            if (child->outcome.operation_id != child->operation_id
+                || child->outcome.command != child->kind) {
+                result = (mpmc_result_t){.status = MPMC_ERR_STATE};
+                continue;
+            }
+            char text[512];
+            if (job_outcome_format(&child->outcome, text, sizeof text) >= 0) {
+                fprintf(stderr, "mpmc: %s\n", text);
+                ++supervisor->notice_count;
+            }
+        }
+    }
+    return result;
 }

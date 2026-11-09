@@ -42,11 +42,18 @@ mpmc_status_t producer_message_next(
     return MPMC_OK;
 }
 
-mpmc_result_t producer_run(ipc_context_t *transport, const producer_job_t *job) {
+mpmc_result_t producer_run_with_result(
+    ipc_context_t *transport,
+    const producer_job_t *job,
+    producer_result_t *out
+) {
+    if (out == nullptr) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+
+    *out = (producer_result_t){.error = {.status = MPMC_ERR_INVALID_ARG}};
     if (transport == NULL || job == NULL || job->operation_id == 0u
         || job->message_count < MPMC_MIN_MESSAGES || job->message_count > MPMC_MAX_MESSAGES
         || (job->ack_mode != PRODUCER_ACK_WAIT && job->ack_mode != PRODUCER_ACK_NONE)) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return out->error;
     }
 
     size_t producer_count = ipc_producer_count(transport);
@@ -54,13 +61,15 @@ mpmc_result_t producer_run(ipc_context_t *transport, const producer_job_t *job) 
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
     if (job->producer_id > producer_count) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX};
+        out->error = (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX};
+        return out->error;
     }
 
     bool ack_started = false;
     if (job->ack_mode == PRODUCER_ACK_WAIT) {
         mpmc_result_t result = ipc_ack_begin(transport, job->operation_id, job->message_count);
         if (result.status != MPMC_OK) {
+            out->error = result;
             return result;
         }
         ack_started = true;
@@ -91,6 +100,7 @@ mpmc_result_t producer_run(ipc_context_t *transport, const producer_job_t *job) 
         if (result.status != MPMC_OK) {
             break;
         }
+        ++out->produced_count;
     }
 
     if (result.status == MPMC_OK && ack_started) {
@@ -103,5 +113,12 @@ mpmc_result_t producer_run(ipc_context_t *transport, const producer_job_t *job) 
             result = end_result;
         }
     }
+    out->error = result;
     return result;
+}
+
+/** @details Mantém a interface simples para chamadores que não consultam progresso. */
+mpmc_result_t producer_run(ipc_context_t *transport, const producer_job_t *job) {
+    producer_result_t result;
+    return producer_run_with_result(transport, job, &result);
 }
