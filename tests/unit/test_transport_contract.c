@@ -106,10 +106,9 @@ static void test_lifecycle(ipc_mode_t mode) {
     CHECK_RESULT(ipc_poll_events(context), MPMC_OK, 0);
 
     uint64_t count = 77u;
-    mpmc_status_t invalid_index =
-        mode == IPC_SHARED_MEMORY ? MPMC_ERR_INVALID_INDEX : MPMC_ERR_INVALID_ARG;
-    CHECK_RESULT(ipc_consumed_count(context, 0u, &count), invalid_index, 0);
-    CHECK_RESULT(ipc_consumed_count(context, 3u, &count), invalid_index, 0);
+    /* A fachada converte o índice inválido do mesmo modo nos dois paradigmas. */
+    CHECK_RESULT(ipc_consumed_count(context, 0u, &count), MPMC_ERR_INVALID_INDEX, 0);
+    CHECK_RESULT(ipc_consumed_count(context, 3u, &count), MPMC_ERR_INVALID_INDEX, 0);
     CHECK_RESULT(ipc_consumed_count(context, 1u, NULL), MPMC_ERR_INVALID_ARG, 0);
     CHECK(count == 77u);
 
@@ -135,11 +134,11 @@ static void test_queue_statuses(ipc_context_t *context) {
     message_t message = {.sender_pid = getpid(), .sequence = 1u, .operation_id = 5u};
     message_t received = {0};
 
-    CHECK_RESULT(ipc_send(context, 0u, &message), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(ipc_send(context, 3u, &message), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(ipc_send(context, 0u, &message), MPMC_ERR_INVALID_INDEX, 0);
+    CHECK_RESULT(ipc_send(context, 3u, &message), MPMC_ERR_INVALID_INDEX, 0);
     CHECK_RESULT(ipc_send(context, 1u, NULL), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(ipc_receive(context, 0u, &received, false), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(ipc_receive(context, 3u, &received, false), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(ipc_receive(context, 0u, &received, false), MPMC_ERR_INVALID_INDEX, 0);
+    CHECK_RESULT(ipc_receive(context, 3u, &received, false), MPMC_ERR_INVALID_INDEX, 0);
     CHECK_RESULT(ipc_receive(context, 1u, NULL, false), MPMC_ERR_INVALID_ARG, 0);
     CHECK_RESULT(ipc_receive(context, 1u, &received, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
 

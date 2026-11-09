@@ -16,8 +16,14 @@
  * As operações que podem falhar retornam mpmc_result_t. `system_errno` carrega o errno
  * da chamada de sistema que falhou, capturado no ponto da falha, e é zero para erros
  * que não vêm do sistema (argumento inválido, violação de estado). Os resultados do
- * backend são propagados sem alteração. Índice lógico fora de 1..p retorna
- * MPMC_ERR_INVALID_INDEX no backend SHM e MPMC_ERR_INVALID_ARG no backend MSG atual.
+ * backend são propagados sem alteração. As rejeições locais, porém, são decididas pela
+ * própria fachada antes do despacho e são idênticas nos dois modos: ponteiro nulo,
+ * operation_id zero ou maior que LONG_MAX e expected fora de 1..1024 retornam
+ * MPMC_ERR_INVALID_ARG; índice lógico fora de 1..p retorna MPMC_ERR_INVALID_INDEX
+ * (system_errno zero em todos). O código do chamador nunca depende do paradigma para
+ * interpretar um erro de argumento. O system_errno das falhas de sistema continua sendo
+ * o da syscall de cada backend (por exemplo, EAGAIN no modo 1 e ENOMSG no modo 2 para
+ * "estrutura vazia"); é diagnóstico e não deve ser usado para decidir o fluxo.
  * Falhas de argumentos rejeitados pelo kernel preservam errno, mesmo quando
  * classificadas como MPMC_ERR_INVALID_ARG; EIDRM resulta em MPMC_ERR_SHUTDOWN.
  * MPMC_ERR_NO_SPACE permanece reservado para a tabela de ACK da issue #11.
@@ -157,10 +163,10 @@ size_t ipc_producer_count(const ipc_context_t *context);
  * @param message Mensagem lógica; a implementação não altera o objeto passado.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: mensagem inserida; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: context/message nulo ou índice lógico inválido no modo 2,
- *   com system_errno zero; ou argumento rejeitado por semop()/msgsnd(), com errno preservado.
- * - MPMC_ERR_INVALID_INDEX: índice lógico inválido no modo 1, com system_errno zero;
- *   ou semop() retornou EFBIG, preservado em system_errno.
+ * - MPMC_ERR_INVALID_ARG: context/message nulo, com system_errno zero; ou argumento
+ *   rejeitado por semop()/msgsnd(), com errno preservado.
+ * - MPMC_ERR_INVALID_INDEX: índice lógico fora de 1..p (decidido pela fachada, nos dois
+ *   modos), com system_errno zero; ou semop() retornou EFBIG, preservado em system_errno.
  * - MPMC_ERR_INTERRUPTED: espera interrompida por sinal, nada foi inserido;
  *   system_errno é EINTR.
  * - MPMC_ERR_SHUTDOWN: semop()/msgsnd() retornou EIDRM, preservado em system_errno.
@@ -191,11 +197,10 @@ mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: mensagem retirada e contada; no modo 2, confirmação publicada se
  *   solicitada. system_errno é zero. ACKs do modo 1 ainda são pendentes.
- * - MPMC_ERR_INVALID_ARG: context/out nulo ou índice lógico inválido no modo 2,
- *   com system_errno zero; ou argumento rejeitado por semop()/msgrcv()/msgsnd(), com errno
- * preservado.
- * - MPMC_ERR_INVALID_INDEX: índice lógico inválido no modo 1, com system_errno zero;
- *   ou semop() retornou EFBIG, preservado em system_errno.
+ * - MPMC_ERR_INVALID_ARG: context/out nulo, com system_errno zero; ou argumento
+ *   rejeitado por semop()/msgrcv()/msgsnd(), com errno preservado.
+ * - MPMC_ERR_INVALID_INDEX: índice lógico fora de 1..p (decidido pela fachada, nos dois
+ *   modos), com system_errno zero; ou semop() retornou EFBIG, preservado em system_errno.
  * - MPMC_ERR_WOULD_BLOCK: blocking=false e estrutura vazia; system_errno é EAGAIN
  *   no modo 1 e ENOMSG no modo 2.
  * - MPMC_ERR_INTERRUPTED: espera interrompida por sinal, nada foi retirado; system_errno
@@ -232,8 +237,8 @@ mpmc_result_t ipc_receive(
  * total do trabalho, e não o de uma estrutura.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: operação registrada; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: context nulo, operation_id zero ou expected fora de 1..1024;
- *   system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: context nulo, operation_id zero ou maior que LONG_MAX, ou
+ *   expected fora de 1..1024 (decidido pela fachada, nos dois modos); system_errno é zero.
  * - MPMC_ERR_STATE: operation_id já registrada (modo 2) ou stub do modo 1 (pendente: #11).
  * - MPMC_ERR_SYS: falha de alocação do registro; system_errno preserva o errno de
  *   realloc(); o estouro do tamanho do registro retorna este estado com system_errno zero.
@@ -250,7 +255,8 @@ mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsig
  * @param operation_id Operação previamente registrada com ipc_ack_begin().
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: as `expected` confirmações da operação chegaram; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: context nulo ou operation_id zero, com system_errno zero;
+ * - MPMC_ERR_INVALID_ARG: context nulo ou operation_id zero ou maior que LONG_MAX, com
+ *   system_errno zero;
  *   ou msgrcv() retornou EINVAL/EFAULT, preservado em system_errno (modo 2).
  * - MPMC_ERR_STATE: operação não registrada, ou ACK inconsistente (modo 2), ou stub do
  *   modo 1 (pendente: #11).
@@ -272,7 +278,8 @@ mpmc_result_t ipc_ack_wait(ipc_context_t *context, uint64_t operation_id);
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: estado local liberado; no modo 2, também quando a operação é desconhecida
  *   ou já foi encerrada (a chamada é idempotente); system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: context nulo ou operation_id zero; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: context nulo ou operation_id zero ou maior que LONG_MAX;
+ *   system_errno é zero.
  * - MPMC_ERR_STATE: stub do modo 1 (pendente: #11).
  * @note Chamar ao final do trabalho, mesmo quando o envio/espera falhar, desde que
  * ipc_ack_begin() tenha retornado MPMC_OK. No modo 2, drena sem bloquear os ACKs da
@@ -288,8 +295,8 @@ mpmc_result_t ipc_ack_end(ipc_context_t *context, uint64_t operation_id);
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: no modo 2, operação registrada como abandonada e ACKs pendentes descartados;
  *   no modo 1, nada a fazer; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: context nulo, ou operation_id zero ou maior que LONG_MAX (modo 2),
- *   com system_errno zero.
+ * - MPMC_ERR_INVALID_ARG: context nulo, ou operation_id zero ou maior que LONG_MAX
+ *   (decidido pela fachada, nos dois modos), com system_errno zero.
  * - MPMC_ERR_SYS: falha de alocação ou de msgrcv(), com errno preservado (modo 2).
  * - MPMC_ERR_SHUTDOWN: msgrcv() retornou EIDRM, preservado em system_errno (modo 2).
  * @details O supervisor a chama ao recolher um produtor que não terminou com sucesso.
@@ -326,10 +333,10 @@ mpmc_result_t ipc_poll_events(ipc_context_t *context);
  * @param out_count Recebe contador acumulado desde ipc_init(); só é escrito em sucesso.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: total escrito em out_count; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: context/out_count nulo ou índice lógico inválido no modo 2,
- *   com system_errno zero; ou semop() rejeitou um argumento, com errno preservado (modo 1).
- * - MPMC_ERR_INVALID_INDEX: índice lógico inválido no modo 1, com system_errno zero;
- *   ou semop() retornou EFBIG, preservado em system_errno.
+ * - MPMC_ERR_INVALID_ARG: context/out_count nulo, com system_errno zero; ou semop()
+ *   rejeitou um argumento, com errno preservado (modo 1).
+ * - MPMC_ERR_INVALID_INDEX: índice lógico fora de 1..p (decidido pela fachada, nos dois
+ *   modos), com system_errno zero; ou semop() retornou EFBIG, preservado em system_errno.
  * - MPMC_ERR_INTERRUPTED: aquisição do mutex interrompida em semop(); system_errno
  *   contém EINTR (modo 1).
  * - MPMC_ERR_SHUTDOWN: semop() retornou EIDRM, preservado em system_errno (modo 1).
