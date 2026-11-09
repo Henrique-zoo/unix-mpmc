@@ -193,6 +193,12 @@ $(UNIT_DIR)/test_transport: tests/unit/test_transport.c $(UNIT_DIR)/transport_fo
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+$(UNIT_DIR)/test_msg_stress: tests/unit/test_msg_stress.c src/ipc/msg_backend.c src/ipc/msg.c \
+		src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/unit/test_msg_stress.c src/ipc/msg.c src/error.c \
+		$(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_isolation: tests/unit/test_isolation.c src/app/command.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
@@ -200,7 +206,7 @@ $(UNIT_DIR)/test_isolation: tests/unit/test_isolation.c src/app/command.c src/er
 unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
 		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
 		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_operations $(UNIT_DIR)/test_shm_stress $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
-		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation \
+		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_msg_stress $(UNIT_DIR)/test_isolation \
 		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_transport_contract \
 		$(UNIT_DIR)/test_transport $(UNIT_DIR)/test_protocol_properties \
 		$(UNIT_DIR)/test_supervisor_report
@@ -218,6 +224,7 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 	@$(UNIT_DIR)/test_message_metadata
 	@$(UNIT_DIR)/test_producer
 	@$(UNIT_DIR)/test_msg_backend
+	@$(UNIT_DIR)/test_msg_stress
 	@$(UNIT_DIR)/test_isolation
 	@$(UNIT_DIR)/test_producer_routing
 	@$(UNIT_DIR)/test_transport_contract

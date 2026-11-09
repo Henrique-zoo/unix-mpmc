@@ -31,6 +31,7 @@ não é suficiente para provar correção concorrente.
 | U17 | `shm_backend` | Criação/SETVAL de cada conjunto, rollback por etapa, IDs independentes e falhas de remoção de semáforos |
 | U18 | `shm_operations` | FIFO, metadados, isolamento, totais, interrupção de esperas reais, concorrência e falhas de aquisição/publicação; envio em estrutura cheia que bloqueia só o remetente e retoma após consumo; recepção bloqueante retomada somente por dado da própria estrutura (processos filhos coordenados por eventos); backend com 1024 estruturas independentes e índice 1025 inválido |
 | U19 | `shm_stress` | Estresse do backend SHM real (`test_shm_stress`): 4 rodadas criam/destroem backends com 1..4 estruturas cheias; 6 produtores e 2 consumidores por estrutura; 30375 verificações de identidade única, sem perda nem duplicação, destino/remetente corretos, FIFO por (consumidor, produtor) e totais exatos, sem filhos remanescentes; backend espectador preservado |
+| U20 | `msg_stress` | Estresse do backend MSG real (`test_msg_stress`): argumentos e índices inválidos; 3 rodadas criam/destroem backends com 1..3 filas cheias (limite do kernel via `IPC_NOWAIT`); 4 produtores e 2 consumidores por fila; identidade única, sem perda nem duplicação, destino/remetente/metadados corretos, FIFO por (consumidor, produtor), totais exatos por `poll_events`, sem filhos remanescentes; backend espectador preservado |
 
 ## Testes de integração (repetir para modos 1 e 2)
 
@@ -193,6 +194,29 @@ backend espectador criado antes das rodadas continua íntegro no fim.
 **Limitações:** esta etapa não comprova o protocolo de ACK nem shutdown durante esperas reais;
 ACK concorrente, interrupção durante dados/espaço/ACK, falhas parciais e shutdown completo
 continuam na issue 26.
+
+`test_msg_stress` (U20, issue 57) exercita o backend MSG real sem ACK, supervisor, workers finais
+ou REPL, na mesma estrutura de `test_shm_stress`. Em cada uma de três rodadas (1, 2 e 3 filas) o
+pai cria o backend e enche cada fila de dados com `IPC_NOWAIT` até o kernel recusar (a capacidade
+vem do kernel, não de uma constante) antes de criar os filhos; quatro produtores enviam 100
+mensagens cada, bloqueando em filas cheias, e dois consumidores por fila retiram exatamente a cota
+de cada uma, o que comprova que o envio bloqueado retoma após o consumo. A identidade é
+`(operation_id, sequence)` e `sent_at` carrega valores fixos para conferir os metadados. O pai
+confere, sem supor ordem global entre produtores, que cada identidade chega uma única vez, na
+fila e do remetente corretos, que a ordem de cada consumidor respeita FIFO por produtor, que
+`consumed_count` iguala o total enviado e que as filas terminam vazias. Enquanto espera os
+consumidores, o pai drena a fila de eventos a cada despertar de `poll()`, como o supervisor faz no
+REPL, de modo que os consumidores nunca bloqueiam no canal de estatísticas e os eventos são
+recebidos sem depender de entrada do usuário. Um teste de argumentos cobre índices 0 e p+1, ponteiros
+nulos e `producer_count` zero, e a recepção não bloqueante em fila vazia retorna
+`MPMC_ERR_WOULD_BLOCK` sem esperar. Um teste de timeout força dois travamentos reais (filho bloqueado em fila vazia): um morre pelo
+`alarm(1)` do próprio filho (SIGALRM) e o outro pelo tratador do `alarm(1)` do pai (SIGKILL), e a
+fila do teste é removida em seguida. Volume e padrão de envio são fixos (sem `sleep()`); o pai usa
+`alarm(30)` por rodada e os filhos `alarm(20)`, morrendo por SIGALRM se travarem. Os filhos fecham
+só o estado local, o pai recolhe todos (sem zumbis) e remove apenas as filas que criou, o que se
+confere por `msgctl`; um backend espectador criado antes das rodadas continua íntegro no fim.
+**Limitações:** esta etapa não cobre ACK, consumo parcial de workers, striped, matriz de comandos
+pelo `stdin` nem shutdown durante esperas reais, que continuam integralmente na issue 25.
 
 Dois cenários adicionais usam processos filhos de teste, sem ACK, workers finais, supervisor
 ou REPL. Cada filho avisa o pai por pipe imediatamente antes de uma única operação bloqueante,
