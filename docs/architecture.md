@@ -221,6 +221,39 @@ O fluxo, os papéis dos tipos e um exemplo completo estão em
 7. `EINTR`: decidir explicitamente entre repetir operação (normal) e abortar por
    encerramento solicitado (shutdown), sem loops infinitos.
 
+## Apresentação de resultados de trabalhos
+
+Cada trabalho (`produz`/`consome`) pode terminar de cinco formas, descritas por
+`job_outcome_t` no helper privado `src/app/job_outcome.{h,c}`: concluído, parcial,
+cancelado, erro de kernel e falha ao criar o filho. O texto vai para `stderr` em uma
+única linha `mpmc: <diagnóstico>`, o prompt `>> ` permanece em `stdout`, e o REPL
+continua aceitando o próximo comando depois de qualquer erro recuperável.
+
+| Resultado | Texto |
+|---|---|
+| Concluído | `operação N (consome, estrutura I) concluída: 5 de 5 mensagens consumidas.` |
+| Parcial | `operação N (consome, estrutura I) não foi concluída: apenas 3 de 5 mensagens consumidas.` |
+| Cancelado | `operação N (produz, estrutura I) cancelada antes de terminar: 2 de 8 mensagens produzidas.` |
+| Erro de kernel | `operação N (produz, estrutura I) falhou após 4 de 10 mensagens produzidas: <causa>` |
+| Falha ao criar o filho | `comando (produz, estrutura I): não foi possível criar o processo filho: <causa>` |
+
+- O índice é `estrutura I` ou `todas as estruturas` em `produz 0`. Na falha ao criar o
+  filho ainda não há identificador de operação (ele só é consumido quando o `fork()`
+  funciona), por isso o texto usa `comando` em vez de `operação N`.
+- `system_errno` só é interpretado quando `status != MPMC_OK` e o valor está em
+  `1..4095`; fora disso o texto traz apenas a categoria, sem `Success` ou
+  `Unknown error`.
+- Parcial, cancelado, erro e falha de criação nunca são apresentados como conclusão. Um
+  evento "concluído" com quantidade efetiva diferente da solicitada é tratado como
+  parcial.
+- Eventos concorrentes, e os avisos de término de filhos, não têm ordem global
+  garantida; cada um ocupa uma linha inteira. Cada linha conta como aviso para o
+  redesenho do prompt em terminais, e eventos pendentes são apresentados no `shutdown`.
+- Os eventos são enfileirados pelo supervisor (`supervisor_queue_outcome()`, declarada
+  apenas no cabeçalho privado, com capacidade finita) e apresentados em
+  `supervisor_reap()`. A propagação dos resultados reais dos workers até essa fila
+  pertence às issues #22 e #25.
+
 ## Decisões a revisar quando houver implementação
 
 - Layout binário e capacidade de cada segmento de 2048 bytes.
