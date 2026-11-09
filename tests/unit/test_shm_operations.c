@@ -17,6 +17,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "mpmc/config.h"
 #include "mpmc/ipc/sem.h"
 #include "shm_backend_internal.h"
 
@@ -73,6 +74,15 @@ static void on_child(int signal_number);
 static void arm_timeout(unsigned seconds);
 static bool read_message(int fd, message_t *message);
 static void run_child(unsigned role, int read_fd, int write_fd);
+static bool spawn_blocked(
+    unsigned slot,
+    bool sending,
+    size_t structure,
+    const message_t *message,
+    int ready[2],
+    int result[2]
+);
+static bool read_ready(int fd);
 static void collect_children(void);
 
 /**
@@ -329,6 +339,242 @@ static void test_concurrent_workers(void) {
     destroy_backend();
 }
 
+/**
+ * @brief Cria o pipe de prontidão e o de resultado usados por spawn_blocked().
+ * @return true se ambos foram criados; false após fechar o que havia sido aberto.
+ */
+static bool open_event_pipes(int ready[2], int result[2]) {
+    int rc = pipe(ready);
+    CHECK(rc == 0);
+    if (rc != 0) return false;
+    rc = pipe(result);
+    CHECK(rc == 0);
+    if (rc != 0) {
+        close(ready[0]);
+        close(ready[1]);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * @brief Envio em estrutura cheia bloqueia só o remetente e retoma após um consumo.
+ * @details O filho avisa por pipe antes de chamar shm_backend_send(). Com a estrutura 1
+ * cheia (EMPTY == 0), o envio só pode concluir depois que o pai consome uma mensagem;
+ * enquanto isso a estrutura 2 deve operar normalmente. Nenhuma espera depende de tempo:
+ * apenas de eventos de pipe, SIGCHLD e do alarm() de segurança.
+ */
+static void test_full_queue_blocks_only_its_sender(void) {
+    if (!create_backend()) return;
+    unsigned capacity = owned_backend->segments[0].ring->capacity;
+    int semid = owned_backend->segments[0].semid;
+    message_t out;
+    CHECK_RESULT(shm_backend_receive(owned_backend, 1, &out, false), MPMC_ERR_WOULD_BLOCK, EAGAIN);
+    for (unsigned i = 1; i <= capacity; ++i) {
+        message_t message = sample_message(i, 11);
+        CHECK_RESULT(shm_backend_send(owned_backend, 1, &message), MPMC_OK, 0);
+    }
+    CHECK(owned_backend->segments[0].ring->count == capacity);
+    CHECK(semctl(semid, SHM_SEM_EMPTY, GETVAL) == 0);
+    CHECK(semctl(semid, SHM_SEM_FULL, GETVAL) == (int)capacity);
+
+    int ready[2], result[2];
+    if (!open_event_pipes(ready, result)) return;
+    message_t late = sample_message(1000, 11);
+    if (!spawn_blocked(0, true, 1, &late, ready, result)) {
+        close(ready[0]);
+        close(result[0]);
+        cleanup();
+        return;
+    }
+    bool started = read_ready(ready[0]);
+    CHECK(started);
+    close(ready[0]);
+    close(result[0]);
+    if (!started) {
+        cleanup();
+        return;
+    }
+
+    /* Com a estrutura 1 cheia, a 2 não é afetada: ciclo completo sem bloqueio. */
+    CHECK_RESULT(shm_backend_receive(owned_backend, 2, &out, false), MPMC_ERR_WOULD_BLOCK, EAGAIN);
+    for (unsigned i = 1; i <= capacity; ++i) {
+        message_t message = sample_message(i, 22);
+        CHECK_RESULT(shm_backend_send(owned_backend, 2, &message), MPMC_OK, 0);
+    }
+    for (unsigned i = 1; i <= capacity; ++i) {
+        message_t expected = sample_message(i, 22);
+        CHECK_RESULT(shm_backend_receive(owned_backend, 2, &out, false), MPMC_OK, 0);
+        CHECK(same_message(&out, &expected));
+    }
+    CHECK_RESULT(shm_backend_receive(owned_backend, 2, &out, false), MPMC_ERR_WOULD_BLOCK, EAGAIN);
+    CHECK(owned_backend->segments[0].ring->count == capacity);
+    CHECK(semctl(semid, SHM_SEM_EMPTY, GETVAL) == 0);
+
+    /* Um consumo na estrutura 1 libera uma vaga e o envio pendente conclui. */
+    message_t first = sample_message(1, 11);
+    CHECK_RESULT(shm_backend_receive(owned_backend, 1, &out, false), MPMC_OK, 0);
+    CHECK(same_message(&out, &first));
+    collect_children();
+    if (owned_backend == NULL) return;
+
+    for (unsigned i = 2; i <= capacity; ++i) {
+        message_t expected = sample_message(i, 11);
+        CHECK_RESULT(shm_backend_receive(owned_backend, 1, &out, false), MPMC_OK, 0);
+        CHECK(same_message(&out, &expected));
+    }
+    message_t expected_late = sample_message(1000, 11);
+    CHECK_RESULT(shm_backend_receive(owned_backend, 1, &out, false), MPMC_OK, 0);
+    CHECK(same_message(&out, &expected_late));
+    CHECK_RESULT(shm_backend_receive(owned_backend, 1, &out, false), MPMC_ERR_WOULD_BLOCK, EAGAIN);
+
+    uint64_t count = 0;
+    CHECK_RESULT(shm_backend_consumed_count(owned_backend, 1, &count), MPMC_OK, 0);
+    CHECK(count == capacity + 1u);
+    CHECK_RESULT(shm_backend_consumed_count(owned_backend, 2, &count), MPMC_OK, 0);
+    CHECK(count == capacity);
+    CHECK(semctl(semid, SHM_SEM_MUTEX, GETVAL) == 1);
+    CHECK(semctl(semid, SHM_SEM_EMPTY, GETVAL) == (int)capacity);
+    CHECK(semctl(semid, SHM_SEM_FULL, GETVAL) == 0);
+    destroy_backend();
+}
+
+/**
+ * @brief Recepção bloqueante em estrutura vazia só retoma com dado da própria estrutura.
+ * @details O pai envia primeiro à estrutura 1 e só depois à 2; o filho, bloqueado na 2,
+ * deve receber exatamente a mensagem da 2, com todos os metadados, e a da 1 permanece.
+ */
+static void test_blocking_receive_resumes_on_own_structure(void) {
+    if (!create_backend()) return;
+    int ready[2], result[2];
+    if (!open_event_pipes(ready, result)) return;
+    if (!spawn_blocked(0, false, 2, NULL, ready, result)) {
+        close(ready[0]);
+        close(result[0]);
+        cleanup();
+        return;
+    }
+    bool started = read_ready(ready[0]);
+    CHECK(started);
+    close(ready[0]);
+    if (!started) {
+        close(result[0]);
+        cleanup();
+        return;
+    }
+
+    message_t other = sample_message(5, 1);
+    message_t wanted = sample_message(6, 2);
+    CHECK_RESULT(shm_backend_send(owned_backend, 1, &other), MPMC_OK, 0);
+    CHECK_RESULT(shm_backend_send(owned_backend, 2, &wanted), MPMC_OK, 0);
+
+    message_t received;
+    bool got = read_message(result[0], &received);
+    CHECK(got);
+    close(result[0]);
+    collect_children();
+    if (owned_backend == NULL) return;
+    CHECK(got && same_message(&received, &wanted));
+
+    message_t out;
+    CHECK_RESULT(shm_backend_receive(owned_backend, 2, &out, false), MPMC_ERR_WOULD_BLOCK, EAGAIN);
+    CHECK_RESULT(shm_backend_receive(owned_backend, 1, &out, false), MPMC_OK, 0);
+    CHECK(same_message(&out, &other));
+    uint64_t count = 0;
+    CHECK_RESULT(shm_backend_consumed_count(owned_backend, 1, &count), MPMC_OK, 0);
+    CHECK(count == 1);
+    CHECK_RESULT(shm_backend_consumed_count(owned_backend, 2, &count), MPMC_OK, 0);
+    CHECK(count == 1);
+    destroy_backend();
+}
+
+/**
+ * @brief Backend com o máximo documentado de estruturas: índices 1..p independentes.
+ * @details shm_backend_create() só rejeita zero; o limite superior é validado na camada
+ * de argumentos do programa, portanto aqui não se espera erro para p + 1 na criação. Com
+ * MPMC_MAX_PRODUCERS estruturas, cada índice recebe uma mensagem própria; as retiradas
+ * devolvem a mensagem do mesmo índice e o índice p + 1 é inválido. Se o sistema operacional
+ * esgotar seus limites System V (ENOSPC/ENOMEM/EMFILE), o cenário é dispensado com aviso,
+ * sem contar como sucesso nem como falha; qualquer outra falha é registrada.
+ */
+static void test_maximum_structure_count(void) {
+    cleanup();
+    apply_calls = change_calls = fail_apply_call = fail_change_call = 0;
+    arm_timeout(10);
+    mpmc_result_t created = shm_backend_create(&owned_backend, MPMC_MAX_PRODUCERS, NULL);
+    if (created.status == MPMC_ERR_SYS
+        && (created.system_errno == ENOSPC || created.system_errno == ENOMEM
+            || created.system_errno == EMFILE)) {
+        fprintf(
+            stderr,
+            "AVISO: limite System V do sistema impede %u estruturas (errno %d); cenário "
+            "dispensado\n",
+            MPMC_MAX_PRODUCERS,
+            created.system_errno
+        );
+        return;
+    }
+    CHECK(created.status == MPMC_OK && created.system_errno == 0);
+    if (created.status != MPMC_OK) return;
+    CHECK(owned_backend->producer_count == MPMC_MAX_PRODUCERS);
+
+    /* Cada estrutura possui segmento e conjunto de semáforos próprios. */
+    bool distinct = true;
+    for (size_t a = 0; a < MPMC_MAX_PRODUCERS && distinct; ++a) {
+        for (size_t b = a + 1; b < MPMC_MAX_PRODUCERS; ++b) {
+            if (owned_backend->segments[a].shmid == owned_backend->segments[b].shmid
+                || owned_backend->segments[a].semid == owned_backend->segments[b].semid) {
+                distinct = false;
+                break;
+            }
+        }
+    }
+    CHECK(distinct);
+
+    for (size_t id = 1; id <= MPMC_MAX_PRODUCERS; ++id) {
+        message_t message = sample_message((unsigned)id, id);
+        CHECK_RESULT(shm_backend_send(owned_backend, id, &message), MPMC_OK, 0);
+    }
+    for (size_t id = MPMC_MAX_PRODUCERS; id >= 1; --id) {
+        message_t out, expected = sample_message((unsigned)id, id);
+        uint64_t count = UINT64_MAX;
+        CHECK(owned_backend->segments[id - 1].ring->count == 1);
+        CHECK_RESULT(shm_backend_receive(owned_backend, id, &out, false), MPMC_OK, 0);
+        CHECK(same_message(&out, &expected));
+        CHECK_RESULT(
+            shm_backend_receive(owned_backend, id, &out, false), MPMC_ERR_WOULD_BLOCK, EAGAIN
+        );
+        CHECK_RESULT(shm_backend_consumed_count(owned_backend, id, &count), MPMC_OK, 0);
+        CHECK(count == 1);
+    }
+
+    const size_t first_shmid = (size_t)owned_backend->segments[0].shmid;
+    const size_t last_semid = (size_t)owned_backend->segments[MPMC_MAX_PRODUCERS - 1].semid;
+    message_t message = sample_message(1, 1), out = message;
+    uint64_t count = UINT64_MAX;
+    CHECK_RESULT(
+        shm_backend_send(owned_backend, MPMC_MAX_PRODUCERS + 1u, &message),
+        MPMC_ERR_INVALID_INDEX,
+        0
+    );
+    CHECK_RESULT(
+        shm_backend_receive(owned_backend, MPMC_MAX_PRODUCERS + 1u, &out, false),
+        MPMC_ERR_INVALID_INDEX,
+        0
+    );
+    CHECK_RESULT(
+        shm_backend_consumed_count(owned_backend, MPMC_MAX_PRODUCERS + 1u, &count),
+        MPMC_ERR_INVALID_INDEX,
+        0
+    );
+    CHECK(same_message(&message, &out) && count == UINT64_MAX);
+
+    destroy_backend();
+    struct shmid_ds info;
+    CHECK(shmctl((int)first_shmid, IPC_STAT, &info) == -1);
+    CHECK(semctl((int)last_semid, SHM_SEM_MUTEX, GETVAL) == -1);
+}
+
 /** @brief Confere destruição dos segmentos e conjuntos reais após uso do backend. */
 static void test_owned_resources_removed(void) {
     if (!create_backend()) return;
@@ -350,6 +596,9 @@ int main(void) {
     test_interruption_and_mutex();
     test_error_propagation();
     test_concurrent_workers();
+    test_full_queue_blocks_only_its_sender();
+    test_blocking_receive_resumes_on_own_structure();
+    test_maximum_structure_count();
     test_owned_resources_removed();
     finish();
     printf("%u verificações de operações SHM, %u falhas\n", checks, failures);
@@ -512,6 +761,58 @@ static void run_child(unsigned role, int read_fd, int write_fd) {
     close(write_fd);
     if (shm_backend_worker_close(owned_backend, NULL).status != MPMC_OK) ok = false;
     _exit(ok ? EXIT_SUCCESS : EXIT_FAILURE);
+}
+
+/** @brief Espera um byte de prontidão do filho; abandona a espera se o prazo vencer. */
+static bool read_ready(int fd) {
+    unsigned char byte;
+    ssize_t received;
+    do {
+        received = read(fd, &byte, 1);
+    } while (received < 0 && errno == EINTR && !alarm_seen);
+    return received == 1;
+}
+
+/**
+ * @brief Cria um filho que sinaliza prontidão e executa uma única operação bloqueante.
+ * @details O filho escreve um byte em ready imediatamente antes de chamar
+ * shm_backend_send() ou shm_backend_receive(bloqueante). No caso de recepção, a
+ * mensagem recebida é escrita em result. O filho fecha somente seu estado local.
+ * @return true se o fork funcionou; o pai fecha as pontas de escrita dos dois pipes.
+ */
+static bool spawn_blocked(
+    unsigned slot,
+    bool sending,
+    size_t structure,
+    const message_t *message,
+    int ready[2],
+    int result[2]
+) {
+    pid_t child = fork();
+    CHECK(child >= 0);
+    if (child < 0) return false;
+    if (child == 0) {
+        close(ready[0]);
+        close(result[0]);
+        arm_timeout(10);
+        unsigned char byte = 1;
+        bool ok = write(ready[1], &byte, 1) == 1;
+        close(ready[1]);
+        if (ok && sending) {
+            ok = shm_backend_send(owned_backend, structure, message).status == MPMC_OK;
+        } else if (ok) {
+            message_t out;
+            ok = shm_backend_receive(owned_backend, structure, &out, true).status == MPMC_OK
+                && write(result[1], &out, sizeof out) == (ssize_t)sizeof out;
+        }
+        close(result[1]);
+        if (shm_backend_worker_close(owned_backend, NULL).status != MPMC_OK) ok = false;
+        _exit(ok ? EXIT_SUCCESS : EXIT_FAILURE);
+    }
+    children[slot] = child;
+    close(ready[1]);
+    close(result[1]);
+    return true;
 }
 
 /**

@@ -29,7 +29,7 @@ não é suficiente para provar correção concorrente.
 | U15 | `protocol` | Propriedades determinísticas (`test_protocol_properties`): textos de status distintos e formatação com `errno`/truncamento; composição de metadados, chave `(operation_id, sender_pid, sequence)` sem colisões (e, em `test_supervisor`, `operation_id` único e consecutivo para 20 trabalhos despachados) entre operações intercaladas; sequência por processo com filhos reais sincronizados por pipes (sem zumbis); distribuição *striped* `1 + ((k-1) % p)` exaustiva para `p` 1..40, `n` 1..130 e limites até 1024; capacidade de 63 mensagens, alinhamento e área de guarda do segmento de 2048 bytes |
 | U16 | `supervisor`/relatório | Fixture controlada (`test_supervisor_report`): três filhos simulados com saída normal, término por sinal e falha; associação por PID, `operation_id` e tipo sem assumir ordem de coleta; durações monotônicas com virada de segundo, regressão e falha do relógio; duração total do processo principal com e sem relógio; contagens controladas para estruturas 1..p; substituição de `fork()`, `waitpid()`, relógio e fachada IPC, sem criar filhos reais ou recursos System V |
 | U17 | `shm_backend` | Criação/SETVAL de cada conjunto, rollback por etapa, IDs independentes e falhas de remoção de semáforos |
-| U18 | `shm_operations` | FIFO, metadados, isolamento, totais, interrupção de esperas reais, concorrência e falhas de aquisição/publicação |
+| U18 | `shm_operations` | FIFO, metadados, isolamento, totais, interrupção de esperas reais, concorrência e falhas de aquisição/publicação; envio em estrutura cheia que bloqueia só o remetente e retoma após consumo; recepção bloqueante retomada somente por dado da própria estrutura (processos filhos coordenados por eventos); backend com 1024 estruturas independentes e índice 1025 inválido |
 
 ## Testes de integração (repetir para modos 1 e 2)
 
@@ -176,6 +176,32 @@ metadados, isolamento entre estruturas e totais independentes. Interrompe com
 e preservação das saídas. Dois produtores e dois consumidores exercitam a mesma
 estrutura, com 128 identidades conferidas sem perda ou duplicação. Um pipe leva as
 observações ao pai; sua ordem não é usada como evidência da ordem de retirada.
+
+Dois cenários adicionais usam processos filhos de teste, sem ACK, workers finais, supervisor
+ou REPL. Cada filho avisa o pai por pipe imediatamente antes de uma única operação bloqueante,
+de modo que a coordenação depende de eventos, SIGCHLD e do `alarm(10)` de segurança, nunca de
+`sleep()` ou de consultas periódicas. No primeiro, a estrutura 1 está cheia (63 mensagens,
+`EMPTY == 0`) e um filho tenta enviar mais uma; enquanto ele espera, a estrutura 2 executa
+um ciclo completo de envio e retirada, mostrando que a espera é só do remetente. Um consumo
+na estrutura 1 libera uma vaga: o envio pendente conclui, a ordem FIFO e os metadados são
+conferidos (inclusive a mensagem tardia, ao final), o contador acumulado vale 64 e os três
+semáforos voltam aos valores de repouso. No segundo, um filho bloqueia ao receber da
+estrutura 2 vazia; o pai envia antes à estrutura 1 e depois à 2, e o filho deve obter
+exatamente a mensagem da 2, com todos os campos, enquanto a da 1 permanece. Recursos System V
+são criados e removidos apenas pelo pai, no backend do próprio teste.
+
+Um terceiro cenário cria o backend com `MPMC_MAX_PRODUCERS` (1024) estruturas, sem processos
+filhos: segmentos e conjuntos de semáforos distintos por índice, uma mensagem própria enviada a
+cada índice de 1 a 1024 e retirada do mesmo índice em ordem inversa, contador acumulado igual a
+1 em todos, e índice 1025 inválido em `send`, `receive` e `consumed_count` com saídas
+preservadas. `shm_backend_create()` só rejeita `producer_count == 0`; o limite superior é
+validado na camada de argumentos do programa, por isso o teste não espera erro de criação para
+1025. Se o sistema esgotar seus limites System V (ENOSPC/ENOMEM/EMFILE), o cenário é dispensado
+com aviso em stderr; qualquer outra falha conta como falha do teste.
+
+Alcance (#55, subtarefa de #25): valida o backend SHM real com processos de teste e mensagens
+sem confirmação. A matriz de comandos pelo stdin, os modos de ACK, o consumo parcial do worker
+e o striped integrados continuam exigidos em #25.
 
 Somente o objeto de operações do teste substitui `sysv_sem_apply`/`sysv_sem_change`:
 normalmente delega às primitivas reais, mas permite falhar uma aquisição ou publicação.
