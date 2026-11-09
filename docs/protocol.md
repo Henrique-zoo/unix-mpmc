@@ -351,8 +351,16 @@ Um tipo recebido diferente de 1/2 ou corpo de tamanho diferente de `sizeof(messa
 é violação de contrato (`MPMC_ERR_STATE`). Depois de retirar a mensagem, o consumidor,
 nesta ordem:
 
-1. envia `{producer_id, count = 1}` a `Q_evt` (um evento por mensagem retirada, com ou sem ACK);
-2. se o tipo recebido era 2, envia `{operation_id}` a `Q_ack` com `mtype = operation_id`.
+1. se o tipo recebido era 2, envia `{operation_id}` a `Q_ack` com `mtype = operation_id`;
+2. envia `{producer_id, count = 1}` a `Q_evt` (um evento por mensagem retirada, com ou sem ACK).
+
+O ACK precede o evento estatístico intencionalmente: se `Q_evt` estiver cheia, o
+consumidor pode aguardar o supervisor depois de já ter publicado a confirmação, evitando
+que `ack_wait()` dependa da mesma drenagem do evento para progredir. A janela entre a
+retirada e a publicação do ACK permanece não transacional; morte abrupta (especialmente
+`SIGKILL`) do consumidor nessa janela não pode ser recuperada por duas filas System V
+independentes. Cancelamentos normais e o caminho de encerramento devem, portanto, permitir
+que o envio do ACK conclua antes de terminar o consumidor.
 
 O tipo zero seleciona a primeira mensagem da fila, preservando FIFO entre dados com
 e sem ACK; filtrar apenas pelo tipo 1 ou 2 alteraria essa ordem. Os valores 1 e 2
