@@ -59,8 +59,11 @@ static void handle_termination_signal(int signal_number) {
  * - MPMC_OK: tratador instalado e ação anterior preservada em previous; system_errno é zero.
  * - MPMC_ERR_SYS: falha em sigaction(); system_errno contém o errno capturado nessa falha.
  */
-static mpmc_result_t
-install_signal_handler(int signal_number, void (*handler)(int), struct sigaction *previous) {
+static mpmc_result_t install_signal_handler(
+    int signal_number,
+    void (*handler)(int),
+    struct sigaction *previous
+) {
     struct sigaction action = {0};
     action.sa_handler = handler;
     sigemptyset(&action.sa_mask);
@@ -118,7 +121,7 @@ static mpmc_result_t check_foreground_stdin(void) {
  * processar eventos de controle associados ao supervisor.
  */
 static mpmc_result_t service_supervisor(supervisor_t *supervisor) {
-    return supervisor_reap(supervisor, false);
+    return supervisor_reap(supervisor, false, NULL);
 }
 
 /**
@@ -151,7 +154,7 @@ static void dispatch_line(supervisor_t *supervisor, char *line, bool *shutdown) 
         error = command_validate(&command, supervisor_producer_count(supervisor));
     }
     if (error.status == MPMC_OK) {
-        error = supervisor_dispatch(supervisor, &command);
+        error = supervisor_dispatch(supervisor, &command, NULL);
     }
 
     if (error.status != MPMC_OK) {
@@ -325,7 +328,7 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
     (void)sigaction(SIGINT, &previous_int, NULL);
     (void)sigaction(SIGCHLD, &previous_chld, NULL);
 
-    mpmc_result_t shutdown_error = supervisor_shutdown(supervisor);
+    mpmc_result_t shutdown_error = supervisor_shutdown(supervisor, NULL);
     if (result.status == MPMC_OK && shutdown_error.status != MPMC_OK) {
         result = shutdown_error;
     }

@@ -26,6 +26,13 @@ não é suficiente para provar correção concorrente.
 | U12 | `shm_ring` | Inicialização, capacidade de 63 mensagens, vazio/cheio, FIFO com voltas e mensagens pendentes, contagem acumulada e limites do segmento |
 | U13 | `shm_backend` | Inicialização de todos os cabeçalhos em áreas simuladas alinhadas, previamente preenchidas com bytes não nulos |
 | U14 | `transport` | Fachada com backends substitutos (`test_transport`): despacho de cada operação ao backend do modo, com os argumentos exatos; propagação de `status`/`system_errno` e dos dados de saída; contexto nulo, modo inválido, `p` zero e saída nula; falha de alocação e de criação do backend em `ipc_init()` sem vazar nem destruir o backend; `ipc_worker_close()` sem remover recursos globais e `ipc_destroy()` sem chamar o fechamento do filho |
+| U15 | `protocol` | Propriedades determinísticas (`test_protocol_properties`): textos de status distintos e formatação com `errno`/truncamento; composição de metadados, chave `(operation_id, sender_pid, sequence)` sem colisões (e, em `test_supervisor`, `operation_id` único e consecutivo para 20 trabalhos despachados) entre operações intercaladas; sequência por processo com filhos reais sincronizados por pipes (sem zumbis); distribuição *striped* `1 + ((k-1) % p)` exaustiva para `p` 1..40, `n` 1..130 e limites até 1024; capacidade de 63 mensagens, alinhamento e área de guarda do segmento de 2048 bytes |
+| U16 | `supervisor`/relatório | Fixture controlada (`test_supervisor_report`): três filhos simulados com saída normal, término por sinal e falha; associação por PID, `operation_id` e tipo sem assumir ordem de coleta; durações monotônicas com virada de segundo, regressão e falha do relógio; duração total do processo principal com e sem relógio; contagens controladas para estruturas 1..p; substituição de `fork()`, `waitpid()`, relógio e fachada IPC, sem criar filhos reais ou recursos System V |
+| U17 | `shm_backend` | Criação/SETVAL de cada conjunto, rollback por etapa, IDs independentes e falhas de remoção de semáforos |
+| U18 | `shm_operations` | FIFO, metadados, isolamento, totais, interrupção de esperas reais, concorrência e falhas de aquisição/publicação; envio em estrutura cheia que bloqueia só o remetente e retoma após consumo; recepção bloqueante retomada somente por dado da própria estrutura (processos filhos coordenados por eventos); backend com 1024 estruturas independentes e índice 1025 inválido |
+| U19 | `shm_stress` | Estresse do backend SHM real (`test_shm_stress`): 4 rodadas criam/destroem backends com 1..4 estruturas cheias; 6 produtores e 2 consumidores por estrutura; 30375 verificações de identidade única, sem perda nem duplicação, destino/remetente corretos, FIFO por (consumidor, produtor) e totais exatos, sem filhos remanescentes; backend espectador preservado |
+| U20 | `msg_stress` | Estresse do backend MSG real (`test_msg_stress`): argumentos e índices inválidos; 3 rodadas criam/destroem backends com 1..3 filas cheias (limite do kernel via `IPC_NOWAIT`); 4 produtores e 2 consumidores por fila; identidade única, sem perda nem duplicação, destino/remetente/metadados corretos, FIFO por (consumidor, produtor), totais exatos por `poll_events`, sem filhos remanescentes; backend espectador preservado |
+| U21 | `supervisor`/shutdown | Filhos reais sincronizados por pipes, saída após SIGTERM, filhos que ignoram SIGTERM, prazo comum e SIGKILL, preservação de sinais, EINTR sem reinício do prazo, erros de relógio/poll/sinalização e shutdown repetido |
 
 ## Testes de integração (repetir para modos 1 e 2)
 
@@ -108,6 +115,44 @@ O `shutdown` imprime em stdout o relatório final (`supervisor_print_report()`):
 filho recolhido (PID, operação, tipo, término e duração `S.mmm s`), a contagem de filhos e o
 tempo total de operação do `mpmc`. O formato é verificado nos testes unitário e de integração.
 
+A fixture `tests/unit/test_supervisor_report.c` (U16) compila um objeto dedicado de
+`supervisor.c`, substituindo `fork()`, `waitpid()`, `clock_gettime()` e as funções da
+fachada IPC por implementações controladas. Ela verifica estados de término, associação
+dos dados por processo, durações monotônicas não negativas, duração total e contagens
+fixas para as estruturas de 1 a `p`, sem depender da ordem em que os filhos são recolhidos
+ou de visibilidade do heap privado dos filhos. As contagens são valores injetados pela
+fixture: isso não valida a consolidação real dos backends nem a drenagem de eventos, que
+permanecem fora deste teste e no escopo da issue #21.
+
+`test_supervisor_shutdown` usa filhos reais e uma fachada IPC substituta, sem
+criar objetos System V nem depender de pgrep ou DEBUG. Pipes confirmam a configuração
+dos sinais antes de cada despacho voltar. Um cenário executa a espera real de dois
+segundos para dois filhos que ignoram SIGTERM; outro avança um relógio controlado
+e injeta EINTR, comprovando que a espera seguinte usa apenas os 800 ms restantes.
+Também injeta falhas de relógio, poll(), eventos inválidos no pipe e kill(), verifica
+restauração de SIGCHLD e de sua máscara, bloqueio de novos trabalhos e repetição
+segura após falha no SIGKILL. Um filho externo aos registros do supervisor continua
+vivo, e a limpeza final encerra e recolhe somente filhos próprios do teste.
+Um watchdog com alarm() limita travamentos da suíte. Esses testes comprovam a
+coordenação de processos da #52; as esperas reais de dados/espaço/ACK permanecem
+na integração de #20/#26.
+
+A mesma suíte copia os diagnósticos do reporter e altera errno na callback para
+verificar preservação de causas. Cobre falhas simultâneas em vários filhos, erros
+de espera seguidos de falhas na restauração de ação/máscara, callback nula,
+user_data nulo e ausência de diagnósticos duplicados. Os contextos discriminados
+são verificados para PID/sinal, PID de coleta e bits de poll(), distinguindo
+falhas de read()/EOF no self-pipe e retornos do backend IPC. ESRCH, EINTR e timeout
+não geram diagnósticos de falha.
+
+Um filho que termina normalmente é observado por SIGCHLD bloqueado e sigwait(),
+com ação capturável instalada antes do fork() para manter a compatibilidade com
+macOS. O teste também cobre ECHILD após coleta externa, estado inesperado do filho,
+falha de fork() com outro filho ativo e falhas de inicialização antes/depois da
+criação do self-pipe. Confere que os descritores parciais foram fechados e que
+nenhum contexto IPC não adquirido foi destruído. A fachada é substituída;
+esses cenários não comprovam o rollback interno dos backends System V.
+
 Os testes de resultados verificam `status` e `system_errno` separadamente: sucesso e
 validação sem causa de sistema usam zero; falhas preservam a causa original mesmo após
 limpeza ou mudança do `errno` corrente. São exercitados `EAGAIN`, `ENOMSG`, `EINTR`,
@@ -115,13 +160,14 @@ limpeza ou mudança do `errno` corrente. São exercitados `EAGAIN`, `ENOMSG`, `E
 consulta de capacidade, truncamento e diagnósticos com causa de sistema.
 
 Os testes de `sem` verificam valores e índices, espera por zero, P/V, IPC_NOWAIT,
-limites representáveis, preservação de errno e permissão de alteração sem leitura
-(0200). A interrupção real usa alarm() e sigaction() sem SA_RESTART. Um objeto de
-sem.c compilado com -Dsemop=mpmc_test_semop permite injetar EIDRM, EINVAL e EACCES
-sem alterar o objeto da aplicação. A remoção de um conjunto com filhos realmente
+vetores atômicos, limites representáveis, preservação de errno e permissão de alteração
+sem leitura (0200). A interrupção real usa alarm() e sigaction() sem SA_RESTART. Um objeto de
+sem.c compilado com -Dsemop=mpmc_test_semop permite injetar erros, inclusive EIDRM,
+E2BIG e EACCES, e comprovar que os argumentos chegam à chamada sem alterar o objeto
+da aplicação. A remoção de um conjunto com filhos realmente
 bloqueados ainda deve ser exercitada pelos testes de integração.
 
-Os testes de `shm` exercitam os quatro wrappers, verificam segmentos independentes de
+Os testes de `shm` exercitam os cinco wrappers, verificam segmentos independentes de
 2048 bytes com permissões 0600 via `IPC_STAT` e conferem a preservação dos parâmetros
 de saída em falhas. Um cenário com `fork()` verifica que o filho desassocia apenas
 seu vínculo, que o mapeamento do pai continua válido após `IPC_RMID` e que a última
@@ -129,17 +175,126 @@ desassociação destrói o segmento. O cleanup de segurança remove somente segm
 criados pelo teste; a coleta do filho usa `alarm(3)` e espera bloqueante por sinais
 para detectar travamentos, sem consultas periódicas.
 
+Nos wrappers, IDs negativos, tamanho zero de segmento, vetor de semáforos vazio/nulo
+e buffer nulo de `IPC_STAT` são rejeitados pelo kernel. Os testes conferem a categoria
+traduzida e o `errno` original, distinguindo essas falhas das rejeições locais de
+ponteiros usados em C, overflow do envelope ou estreitamento de tipos. Filas também
+exercitam tipos inválidos e o limite MSGMAX diretamente no kernel; uma recepção
+rejeitada localmente não remove a mensagem pendente.
+
 Os testes de `shm_backend` usam alocações e wrappers substituídos apenas no objeto
 de teste para injetar falhas de `malloc()`, `calloc()`, criação e associação em
-cada posição. Verificam rollback completo, tratamento do identificador zero,
-`destroy(NULL)`, liberação somente local pelo worker e continuidade após múltiplas
+cada posição. Os cenários existentes cobrem tratamento do identificador zero,
+liberação somente local pelo worker e continuidade após múltiplas
 falhas de cleanup. Uma callback copia os diagnósticos e altera `errno` para verificar
 que cada falha e o erro original da criação continuam preservados. Os testes também
-conferem que a limpeza libera o estado local uma única vez e não aloca diagnósticos.
+conferem as categorias traduzidas de argumento inválido e recurso removido, que a
+limpeza libera o estado local uma única vez e que não aloca diagnósticos.
 As áreas de dados simuladas usam `alignas(shm_ring_t)` no membro do vetor de bytes,
 garantindo o alinhamento também para cada elemento do vetor de segmentos. A criação
 é exercitada após preencher essas áreas com bytes não nulos e deve inicializar
 todos os cabeçalhos com índices, ocupação e total consumido zerados e capacidade 63.
+
+Os conjuntos simulados têm identificadores independentes dos segmentos, incluindo
+ID zero. A suíte verifica os valores iniciais MUTEX=1, EMPTY=capacity e FULL=0,
+injeta falha na criação e em cada SETVAL de cada entrada e confere o rollback dos
+recursos efetivamente criados. Os diagnósticos usam `resource_id`, distinguem
+segmento/conjunto e preservam o primeiro erro mesmo quando o cleanup também falha.
+Fechamento com NULL não aloca, não libera recursos e não chama o reporter.
+
+`test_shm_operations` usa segmentos e semáforos reais para FIFO após volta dos índices,
+metadados, isolamento entre estruturas e totais independentes. Interrompe com
+`alarm(1)` as esperas por itens, vagas e mutex; verifica ausência de reservas parciais
+e preservação das saídas. Dois produtores e dois consumidores exercitam a mesma
+estrutura, com 128 identidades conferidas sem perda ou duplicação. Um pipe leva as
+observações ao pai; sua ordem não é usada como evidência da ordem de retirada.
+
+`test_shm_stress` (U19, issue 56) exercita o backend SHM real sem ACK, supervisor, workers finais
+ou REPL. Em cada uma de quatro rodadas (1, 2, 3 e 4 estruturas) o pai cria o backend e enche todas
+as estruturas (63 mensagens, `EMPTY == 0`) antes de criar os filhos; seis produtores enviam 150
+mensagens cada, bloqueando em estruturas cheias, e dois consumidores por estrutura retiram
+exatamente a cota de cada uma. A identidade é `(operation_id, sequence)`; o pai confere, sem supor
+ordem global entre produtores, que cada identidade chega uma única vez, na estrutura e do remetente
+corretos, que a ordem de cada consumidor respeita FIFO por produtor, que `consumed_count` iguala o
+total enviado e que as estruturas terminam vazias. Volume e padrão de envio são fixos
+(reproduzíveis, sem `sleep()`). Pai usa `alarm(30)` por rodada (cancela as demais ao expirar);
+filhos usam `alarm(20)` e morrem por SIGALRM. Os filhos fecham só o estado local, o pai recolhe
+todos (sem zumbis) e remove apenas seus recursos, o que se confere por `shmctl`/`semctl`; um
+backend espectador criado antes das rodadas continua íntegro no fim.
+**Limitações:** esta etapa não comprova o protocolo de ACK nem shutdown durante esperas reais;
+ACK concorrente, interrupção durante dados/espaço/ACK, falhas parciais e shutdown completo
+continuam na issue 26.
+
+`test_msg_stress` (U20, issue 57) exercita o backend MSG real sem ACK, supervisor, workers finais
+ou REPL, na mesma estrutura de `test_shm_stress`. Em cada uma de três rodadas (1, 2 e 3 filas) o
+pai cria o backend e enche cada fila de dados com `IPC_NOWAIT` até o kernel recusar (a capacidade
+vem do kernel, não de uma constante) antes de criar os filhos; quatro produtores enviam 100
+mensagens cada, bloqueando em filas cheias, e dois consumidores por fila retiram exatamente a cota
+de cada uma, o que comprova que o envio bloqueado retoma após o consumo. A identidade é
+`(operation_id, sequence)` e `sent_at` carrega valores fixos para conferir os metadados. O pai
+confere, sem supor ordem global entre produtores, que cada identidade chega uma única vez, na
+fila e do remetente corretos, que a ordem de cada consumidor respeita FIFO por produtor, que
+`consumed_count` iguala o total enviado e que as filas terminam vazias. Enquanto espera os
+consumidores, o pai drena a fila de eventos a cada despertar de `poll()`, como o supervisor faz no
+REPL, de modo que os consumidores nunca bloqueiam no canal de estatísticas e os eventos são
+recebidos sem depender de entrada do usuário. Um teste de argumentos cobre índices 0 e p+1, ponteiros
+nulos e `producer_count` zero, e a recepção não bloqueante em fila vazia retorna
+`MPMC_ERR_WOULD_BLOCK` sem esperar. Um teste de timeout força dois travamentos reais (filho bloqueado em fila vazia): um morre pelo
+`alarm(1)` do próprio filho (SIGALRM) e o outro pelo tratador do `alarm(1)` do pai (SIGKILL), e a
+fila do teste é removida em seguida. Volume e padrão de envio são fixos (sem `sleep()`); o pai usa
+`alarm(30)` por rodada e os filhos `alarm(20)`, morrendo por SIGALRM se travarem. Os filhos fecham
+só o estado local, o pai recolhe todos (sem zumbis) e remove apenas as filas que criou, o que se
+confere por `msgctl`; um backend espectador criado antes das rodadas continua íntegro no fim.
+**Limitações:** esta etapa não cobre ACK, consumo parcial de workers, striped, matriz de comandos
+pelo `stdin` nem shutdown durante esperas reais, que continuam integralmente na issue 25.
+
+Dois cenários adicionais usam processos filhos de teste, sem ACK, workers finais, supervisor
+ou REPL. Cada filho avisa o pai por pipe imediatamente antes de uma única operação bloqueante,
+de modo que a coordenação depende de eventos, SIGCHLD e do `alarm(10)` de segurança, nunca de
+`sleep()` ou de consultas periódicas. No primeiro, a estrutura 1 está cheia (63 mensagens,
+`EMPTY == 0`) e um filho tenta enviar mais uma; enquanto ele espera, a estrutura 2 executa
+um ciclo completo de envio e retirada, mostrando que a espera é só do remetente. Um consumo
+na estrutura 1 libera uma vaga: o envio pendente conclui, a ordem FIFO e os metadados são
+conferidos (inclusive a mensagem tardia, ao final), o contador acumulado vale 64 e os três
+semáforos voltam aos valores de repouso. No segundo, um filho bloqueia ao receber da
+estrutura 2 vazia; o pai envia antes à estrutura 1 e depois à 2, e o filho deve obter
+exatamente a mensagem da 2, com todos os campos, enquanto a da 1 permanece. Recursos System V
+são criados e removidos apenas pelo pai, no backend do próprio teste.
+
+Um terceiro cenário cria o backend com `MPMC_MAX_PRODUCERS` (1024) estruturas, sem processos
+filhos: segmentos e conjuntos de semáforos distintos por índice, uma mensagem própria enviada a
+cada índice de 1 a 1024 e retirada do mesmo índice em ordem inversa, contador acumulado igual a
+1 em todos, e índice 1025 inválido em `send`, `receive` e `consumed_count` com saídas
+preservadas. `shm_backend_create()` só rejeita `producer_count == 0`; o limite superior é
+validado na camada de argumentos do programa, por isso o teste não espera erro de criação para
+1025. Se o sistema esgotar seus limites System V (ENOSPC/ENOMEM/EMFILE), o cenário é dispensado
+com aviso em stderr; qualquer outra falha conta como falha do teste.
+
+Alcance (#55, subtarefa de #25): valida o backend SHM real com processos de teste e mensagens
+sem confirmação. A matriz de comandos pelo stdin, os modos de ACK, o consumo parcial do worker
+e o striped integrados continuam exigidos em #25.
+
+Somente o objeto de operações do teste substitui `sysv_sem_apply`/`sysv_sem_change`:
+normalmente delega às primitivas reais, mas permite falhar uma aquisição ou publicação.
+Os cenários distinguem buffer/saída inalterados de uma alteração já executada antes
+de a publicação falhar, inclusive na leitura do contador. Após cada falha fatal
+injetada, o teste destrói o contexto; não tenta repetir a operação nem comprova
+recuperação dos contadores. Isso corresponde à obrigação de descarte descrita em
+@ref shm_operation_failures. Os testes de interrupção da aquisição e recepção vazia
+verificam que esses retornos não deixam reservas parciais nem alteram o buffer.
+A comunicação de falhas fatais ao supervisor e o shutdown coordenado continuam
+pendentes de integração na #20 e não são comprovados por esta suíte.
+O cleanup de segurança encerra/recolhe apenas os filhos próprios e remove apenas
+os recursos do contexto.
+Esses testes não comprovam o protocolo de ACK, que continua pendente.
+
+Para Linux e macOS, SIGALRM é instalado com `sigaction()` sem SA_RESTART e fica
+desbloqueado durante os cenários. A coleta usa `alarm()` e `sigwait()` com
+SIGCHLD/SIGALRM bloqueados, instalando antes do fork uma ação capturável de SIGCHLD.
+Isso evita depender de sinais ignorados, que o macOS descarta antes de `sigwait()`;
+veja a [documentação da Apple](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/sigwait.2.html).
+A suíte cancela alarmes, drena um SIGALRM eventualmente pendente e restaura ações e
+máscara originais. Não exige `sigtimedwait()`, indisponível no macOS.
 
 Os testes de `shm_ring` usam alocações locais com 2048 bytes úteis, sentinelas antes
 e depois do segmento e verificação dos 16 bytes reservados após a última mensagem.
@@ -147,7 +302,7 @@ Conferem a inicialização, ocupação máxima, transição para vazio, reutiliz
 com retorno dos índices ao início ainda com mensagens pendentes, buffers independentes
 e várias voltas com mais de 1024 consumos. Todos os campos das mensagens são
 conferidos sem comparar bytes de padding. As operações respeitam suas pré-condições;
-sincronização entre processos e compensação de reservas permanecem no escopo da #10.
+esses testes locais são complementados pela cobertura sincronizada de `shm_operations`.
 
 Os testes de filas verificam a recepção do mtype junto ao corpo, FIFO entre tipos
 intercalados e preservação das saídas em ENOMSG/E2BIG. O teste do backend de filas

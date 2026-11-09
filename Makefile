@@ -47,10 +47,47 @@ UNIT_DIR := $(BUILD_DIR)/unit
 SHM_BACKEND_DIR := src/ipc/shm_backend
 WORKERS_DIR := src/workers
 SHM_RING_OBJECT := $(BUILD_DIR)/ipc/shm_backend/shm_ring.o
+SHM_OPERATIONS_OBJECT := $(BUILD_DIR)/ipc/shm_backend/operations.o
 
 $(UNIT_DIR)/supervisor_for_test.o: src/app/supervisor.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Dfork=mpmc_test_fork -c $< -o $@
+
+# Fixture isolada do relatório: substitui processos, relógio e fachada IPC.
+$(UNIT_DIR)/supervisor_report_for_test.o: src/app/supervisor.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		-Dfork=mpmc_test_fork -Dwaitpid=mpmc_test_waitpid \
+		-Dclock_gettime=mpmc_test_clock_gettime \
+		-Dipc_init=mpmc_test_ipc_init -Dipc_destroy=mpmc_test_ipc_destroy \
+		-Dipc_poll_events=mpmc_test_ipc_poll_events \
+		-Dipc_consumed_count=mpmc_test_ipc_consumed_count \
+		-c $< -o $@
+
+$(UNIT_DIR)/test_supervisor_report: tests/unit/test_supervisor_report.c \
+		$(UNIT_DIR)/supervisor_report_for_test.o
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+# Filhos reais, IPC substituto e falhas controladas no prazo de shutdown.
+$(UNIT_DIR)/supervisor_shutdown_for_test.o: src/app/supervisor.c \
+		include/mpmc/app/supervisor.h Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		-Dfork=mpmc_shutdown_test_fork -Dkill=mpmc_shutdown_test_kill \
+		-Dclock_gettime=mpmc_shutdown_test_clock_gettime -Dpoll=mpmc_shutdown_test_poll \
+		'-Dsigaction(...)=mpmc_shutdown_test_sigaction(__VA_ARGS__)' \
+		-Dsigprocmask=mpmc_shutdown_test_sigprocmask -Dwaitpid=mpmc_shutdown_test_waitpid \
+		-Dread=mpmc_shutdown_test_read -Dpipe=mpmc_shutdown_test_pipe -Dclose=mpmc_shutdown_test_close \
+		-Dipc_init=mpmc_shutdown_test_ipc_init -Dipc_destroy=mpmc_shutdown_test_ipc_destroy \
+		-Dipc_poll_events=mpmc_shutdown_test_ipc_poll_events \
+		-Dipc_consumed_count=mpmc_shutdown_test_ipc_consumed_count \
+		-c $< -o $@
+
+$(UNIT_DIR)/test_supervisor_shutdown: tests/unit/test_supervisor_shutdown.c \
+		$(UNIT_DIR)/supervisor_shutdown_for_test.o
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
 $(UNIT_DIR)/test_command: tests/unit/test_command.c src/app/command.c src/error.c
 	@mkdir -p $(dir $@)
@@ -59,7 +96,7 @@ $(UNIT_DIR)/test_command: tests/unit/test_command.c src/app/command.c src/error.
 $(UNIT_DIR)/test_supervisor: tests/unit/test_supervisor.c \
 		$(UNIT_DIR)/supervisor_for_test.o src/app/command.c src/error.c \
 		src/ipc/transport.c src/ipc/msg_backend.c $(SHM_BACKEND_DIR)/lifecycle.c \
-		$(SHM_RING_OBJECT) src/ipc/msg.c src/ipc/shm.c
+		$(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -85,16 +122,37 @@ $(UNIT_DIR)/test_shm: tests/unit/test_shm.c src/ipc/shm.c
 
 $(UNIT_DIR)/shm_backend_for_test.o: $(SHM_BACKEND_DIR)/lifecycle.c \
 		$(SHM_BACKEND_DIR)/shm_backend_internal.h $(SHM_BACKEND_DIR)/shm_ring.h \
-		include/mpmc/ipc/shm_backend.h include/mpmc/message.h
+		include/mpmc/ipc/shm_backend.h include/mpmc/message.h Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) \
-		-Dmalloc=mpmc_test_malloc -Dcalloc=mpmc_test_calloc -Dfree=mpmc_test_free \
+		-Dmalloc=mpmc_test_shm_malloc -Dcalloc=mpmc_test_shm_calloc -Dfree=mpmc_test_shm_free \
 		-Dsysv_shm_create=mpmc_test_shm_create -Dsysv_shm_attach=mpmc_test_shm_attach \
 		-Dsysv_shm_detach=mpmc_test_shm_detach -Dsysv_shm_remove=mpmc_test_shm_remove \
+		-Dsysv_sem_create=mpmc_test_sem_create -Dsysv_sem_set=mpmc_test_sem_set \
+		-Dsysv_sem_remove=mpmc_test_sem_remove \
 		-c $< -o $@
 
 $(UNIT_DIR)/test_shm_backend: tests/unit/test_shm_backend.c \
 		$(UNIT_DIR)/shm_backend_for_test.o $(SHM_RING_OBJECT)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/shm_operations_for_test.o: $(SHM_BACKEND_DIR)/operations.c \
+		$(SHM_BACKEND_DIR)/shm_backend_internal.h $(SHM_BACKEND_DIR)/shm_ring.h \
+		include/mpmc/ipc/shm_backend.h include/mpmc/ipc/sem.h include/mpmc/error.h Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		-Dsysv_sem_apply=mpmc_test_sem_apply -Dsysv_sem_change=mpmc_test_sem_change \
+		-c $< -o $@
+
+$(UNIT_DIR)/test_shm_operations: tests/unit/test_shm_operations.c \
+		$(UNIT_DIR)/shm_operations_for_test.o $(SHM_BACKEND_DIR)/lifecycle.c \
+		$(SHM_RING_OBJECT) src/ipc/shm.c src/ipc/sem.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/test_shm_stress: tests/unit/test_shm_stress.c $(SHM_BACKEND_DIR)/lifecycle.c \
+		$(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) src/ipc/shm.c src/ipc/sem.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -121,13 +179,34 @@ $(UNIT_DIR)/test_producer_routing: tests/unit/test_producer_routing.c \
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(WORKERS_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
 
-$(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c src/ipc/msg_backend.c src/ipc/msg.c src/error.c
+$(UNIT_DIR)/test_protocol_properties: tests/unit/test_protocol_properties.c \
+		src/error.c $(WORKERS_DIR)/producer.c $(WORKERS_DIR)/producer_routing.c $(SHM_RING_OBJECT)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(WORKERS_DIR) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/msg_backend_for_test.o: src/ipc/msg_backend.c \
+		include/mpmc/ipc/msg_backend.h include/mpmc/ipc/msg.h \
+		include/mpmc/message.h include/mpmc/error.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		-Dsysv_msg_create=mpmc_test_msg_create \
+		-Dsysv_msg_remove=mpmc_test_msg_remove \
+		-Dsysv_msg_send=mpmc_test_msg_send \
+		-c $< -o $@
+
+$(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c \
+        $(UNIT_DIR)/msg_backend_for_test.o src/ipc/msg.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+$(UNIT_DIR)/test_producer: tests/unit/test_producer.c $(WORKERS_DIR)/producer.c \
+		$(WORKERS_DIR)/producer_routing.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Dclock_gettime=mpmc_test_clock_gettime $^ $(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_transport_contract: tests/unit/test_transport_contract.c \
 		src/ipc/transport.c src/ipc/msg_backend.c $(SHM_BACKEND_DIR)/lifecycle.c \
-		$(SHM_RING_OBJECT) src/ipc/msg.c src/ipc/shm.c src/error.c
+		$(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -143,33 +222,45 @@ $(UNIT_DIR)/test_transport: tests/unit/test_transport.c $(UNIT_DIR)/transport_fo
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+$(UNIT_DIR)/test_msg_stress: tests/unit/test_msg_stress.c src/ipc/msg_backend.c src/ipc/msg.c \
+		src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/unit/test_msg_stress.c src/ipc/msg.c src/error.c \
+		$(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_isolation: tests/unit/test_isolation.c src/app/command.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
 unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
 		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
-		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
-		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_isolation \
-		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_consumer \
-		$(UNIT_DIR)/test_transport_contract \
-		$(UNIT_DIR)/test_transport
+		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_operations $(UNIT_DIR)/test_shm_stress $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
+		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_msg_stress $(UNIT_DIR)/test_isolation \
+		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_transport_contract \
+		$(UNIT_DIR)/test_transport $(UNIT_DIR)/test_protocol_properties \
+		$(UNIT_DIR)/test_supervisor_report $(UNIT_DIR)/test_supervisor_shutdown
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
+	@$(UNIT_DIR)/test_supervisor_report
+	@$(UNIT_DIR)/test_supervisor_shutdown
 	@$(UNIT_DIR)/test_msg
 	@$(UNIT_DIR)/test_sem
 	@$(UNIT_DIR)/test_error
 	@$(UNIT_DIR)/test_shm
 	@$(UNIT_DIR)/test_shm_backend
+	@$(UNIT_DIR)/test_shm_operations
+	@$(UNIT_DIR)/test_shm_stress
 	@$(UNIT_DIR)/test_shm_ring
 	@$(UNIT_DIR)/test_message_metadata
 	@$(UNIT_DIR)/test_producer
 	@$(UNIT_DIR)/test_consumer
 	@$(UNIT_DIR)/test_msg_backend
+	@$(UNIT_DIR)/test_msg_stress
 	@$(UNIT_DIR)/test_isolation
 	@$(UNIT_DIR)/test_producer_routing
 	@$(UNIT_DIR)/test_transport_contract
 	@$(UNIT_DIR)/test_transport
+	@$(UNIT_DIR)/test_protocol_properties
 
 # Teste do REPL com pseudo-terminal (POSIX; não exige -lutil nem ferramentas externas).
 INTEGRATION_DIR := $(BUILD_DIR)/integration

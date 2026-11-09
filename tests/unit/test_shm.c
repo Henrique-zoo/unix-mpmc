@@ -277,17 +277,21 @@ cleanup:
  */
 static void test_invalid_arguments(void) {
     int shmid = -1;
-    CHECK_RESULT(sysv_shm_create(0, &shmid), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(sysv_shm_create(0, &shmid), MPMC_ERR_INVALID_ARG, EINVAL);
     CHECK(shmid == -1);
     CHECK_RESULT(sysv_shm_create(MPMC_SHM_SEGMENT_BYTES, NULL), MPMC_ERR_INVALID_ARG, 0);
 
     int sentinel;
     void *address = &sentinel;
-    CHECK_RESULT(sysv_shm_attach(-1, &address), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(sysv_shm_attach(-1, &address), MPMC_ERR_INVALID_ARG, EINVAL);
     CHECK(address == &sentinel);
     CHECK_RESULT(sysv_shm_attach(0, NULL), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(sysv_shm_detach(NULL), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(sysv_shm_remove(-1), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(sysv_shm_detach(NULL), MPMC_ERR_INVALID_ARG, EINVAL);
+    CHECK_RESULT(sysv_shm_remove(-1), MPMC_ERR_INVALID_ARG, EINVAL);
+
+    struct shmid_ds info = {.shm_segsz = 123};
+    CHECK_RESULT(sysv_shm_stat(-1, &info), MPMC_ERR_INVALID_ARG, EINVAL);
+    CHECK(info.shm_segsz == 123);
 }
 
 /**
@@ -302,8 +306,8 @@ static void test_create_system_error(void) {
     }
 
     errno = EACCES;
-    CHECK(result.status == MPMC_ERR_SYS);
-    CHECK(result.system_errno != 0);
+    CHECK(result.status == MPMC_ERR_INVALID_ARG);
+    CHECK(result.system_errno == EINVAL);
     CHECK(shmid == -1);
 }
 
@@ -322,14 +326,16 @@ static void test_segments_are_private_and_sized(void) {
     const int segments[] = {first, second};
     for (size_t index = 0; index < sizeof segments / sizeof segments[0]; ++index) {
         struct shmid_ds info;
-        int rc = shmctl(segments[index], IPC_STAT, &info);
-        CHECK(rc == 0);
-        if (rc == 0) {
+        mpmc_result_t stat_result = sysv_shm_stat(segments[index], &info);
+        CHECK(stat_result.status == MPMC_OK && stat_result.system_errno == 0);
+        if (stat_result.status == MPMC_OK) {
             CHECK(info.shm_segsz == 2048);
             CHECK((info.shm_perm.mode & 0777) == 0600);
             CHECK(info.shm_nattch == 0);
         }
     }
+
+    CHECK_RESULT(sysv_shm_stat(first, NULL), MPMC_ERR_INVALID_ARG, EFAULT);
 
     void *address = NULL;
     errno = EACCES;
@@ -338,7 +344,7 @@ static void test_segments_are_private_and_sized(void) {
     if (result.status == MPMC_OK) {
         CHECK_RESULT(sysv_shm_detach(address), MPMC_OK, 0);
         /* A segunda desassociação chega ao kernel, sem dereferenciar address. */
-        CHECK_RESULT(sysv_shm_detach(address), MPMC_ERR_SYS, EINVAL);
+        CHECK_RESULT(sysv_shm_detach(address), MPMC_ERR_INVALID_ARG, EINVAL);
         struct shmid_ds info;
         int rc = shmctl(first, IPC_STAT, &info);
         CHECK(rc == 0);
@@ -354,14 +360,18 @@ static void test_segments_are_private_and_sized(void) {
     address = &sentinel;
     result = sysv_shm_attach(first, &address);
     errno = EACCES;
-    CHECK(result.status == MPMC_ERR_SYS);
     CHECK(result.system_errno == EINVAL || result.system_errno == EIDRM);
+    CHECK(
+        result.status == (result.system_errno == EIDRM ? MPMC_ERR_SHUTDOWN : MPMC_ERR_INVALID_ARG)
+    );
     CHECK(address == &sentinel);
 
     result = sysv_shm_remove(first);
     errno = EACCES;
-    CHECK(result.status == MPMC_ERR_SYS);
     CHECK(result.system_errno == EINVAL || result.system_errno == EIDRM);
+    CHECK(
+        result.status == (result.system_errno == EIDRM ? MPMC_ERR_SHUTDOWN : MPMC_ERR_INVALID_ARG)
+    );
 
     remove_segment(second);
     check_removed(second);

@@ -7,21 +7,29 @@
  * A fachada existe (src/ipc/transport.c) e apenas despacha para o backend selecionado.
  * - Modo 2 (filas): todas as operações abaixo possuem implementação; os retornos
  *   documentados correspondem ao que msg_backend.c produz hoje.
- * - Modo 1 (memória compartilhada): somente ipc_init(), ipc_producer_count(),
- *   ipc_poll_events(), ipc_worker_close() e ipc_destroy() são reais. ipc_send(),
- *   ipc_receive() e as operações de ACK ainda são stubs que retornam MPMC_ERR_STATE
- *   (pendentes: #10 e #11), e ipc_consumed_count() devolve zero incondicionalmente
- *   (pendente: #10). Esses retornos não são contratos: serão substituídos.
+ * - Modo 1 (memória compartilhada): ciclo de vida, envio, recebimento e contagens
+ *   sincronizadas são reais. Somente as operações de ACK permanecem como stubs
+ *   que retornam MPMC_ERR_STATE (pendente: #11).
  * Itens marcados como "pendente" não podem ser verificados nesta revisão.
  *
  * @par Convenção de retorno
  * As operações que podem falhar retornam mpmc_result_t. `system_errno` carrega o errno
  * da chamada de sistema que falhou, capturado no ponto da falha, e é zero para erros
  * que não vêm do sistema (argumento inválido, violação de estado). Os resultados do
- * backend são propagados sem alteração. O índice lógico fora de 1..p é
- * MPMC_ERR_INVALID_ARG nesta fachada (MPMC_ERR_INVALID_INDEX pertence à validação de
- * comandos). Nenhuma operação desta fachada retorna MPMC_ERR_SHUTDOWN ou MPMC_ERR_NO_SPACE;
- * ambos estão reservados para #20 e #11.
+ * backend são propagados sem alteração. Índice lógico fora de 1..p retorna
+ * MPMC_ERR_INVALID_INDEX no backend SHM e MPMC_ERR_INVALID_ARG no backend MSG atual.
+ * Falhas de argumentos rejeitados pelo kernel preservam errno, mesmo quando
+ * classificadas como MPMC_ERR_INVALID_ARG; EIDRM resulta em MPMC_ERR_SHUTDOWN.
+ * MPMC_ERR_NO_SPACE permanece reservado para a tabela de ACK da issue #11.
+ *
+ * @par Falhas fatais no modo 1
+ * ipc_send(), ipc_receive() e ipc_consumed_count() seguem a política de
+ * @ref shm_operation_failures. Rejeições locais com system_errno zero, ausência
+ * de itens e interrupção da aquisição não invalidam o contexto por si mesmas.
+ * As demais falhas de semop() exigem suspender o uso de dados e estatísticas do
+ * contexto e encaminhar o encerramento coordenado ao supervisor. A fachada
+ * apenas propaga o resultado: não marca o contexto como inválido nem avisa outros
+ * processos. A integração do encerramento por falha fatal pertence à issue #20.
  *
  * @par Propriedade dos recursos
  * - O supervisor cria o contexto com ipc_init() e o remove uma única vez com
@@ -71,7 +79,7 @@
  *   o supervisor só distingue zero, diferente de zero e sinal.
  * - Quantidade efetiva consumida: por estrutura lógica, pelo backend. No modo 2, cada
  *   retirada publica um evento que ipc_poll_events() consolida no supervisor; no modo 1,
- *   o total fica em memória compartilhada (pendente: #10). O supervisor lê o resultado
+ *   o total fica em memória compartilhada. O supervisor lê o resultado
  *   com ipc_consumed_count(). O consumer_result_t de um trabalho existe só no filho, e o
  *   código de saída (8 bits) não comporta 1024; a quantidade por trabalho é apresentada
  *   pelo próprio filho. Levá-la ao supervisor exigiria um canal novo, a acordar em #16.
@@ -117,13 +125,18 @@ typedef struct ipc_context ipc_context_t;
  * - MPMC_ERR_INVALID_ARG: out nulo, producer_count zero ou mode diferente de 1/2;
  *   system_errno é zero.
  * - MPMC_ERR_SYS: falha de alocação ou de chamada de sistema (msgget(), shmget(),
- *   shmat()), com o errno capturado em system_errno; o estouro de tamanho do vetor de
+ *   shmat(), semget() ou semctl(SETVAL)), com o errno capturado em system_errno;
+ *   o estouro de tamanho do vetor de
  *   filas também retorna este estado, com system_errno zero.
- * @post Em qualquer falha exceto MPMC_ERR_INVALID_ARG, *out recebe NULL; em
- * MPMC_ERR_INVALID_ARG, *out não é modificado.
+ * - MPMC_ERR_SHUTDOWN: criação/associação SHM encontrou EIDRM em shmat() ou
+ *   semctl(SETVAL); system_errno preserva EIDRM.
+ * @note Uma rejeição de argumentos pelo kernel durante a inicialização SHM também
+ * retorna MPMC_ERR_INVALID_ARG, preservando o errno em system_errno.
+ * @post A validação local da fachada não modifica *out em erro. Depois dela,
+ * qualquer falha deixa *out igual a NULL, inclusive erro de argumento vindo do kernel.
  * @par Rollback
  * Em falha parcial, os recursos já criados são removidos antes do retorno: o backend de
- * filas remove as filas criadas e o de memória compartilhada executa seu destroy; a
+ * filas remove as filas criadas e o de memória compartilhada limpa as entradas visitadas; a
  * fachada libera a própria alocação. O chamador não deve chamar ipc_destroy() após falha.
  * @par Propriedade
  * O supervisor é o único proprietário; ipc_destroy() deve ser chamado uma vez.
@@ -144,15 +157,21 @@ size_t ipc_producer_count(const ipc_context_t *context);
  * @param message Mensagem lógica; a implementação não altera o objeto passado.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: mensagem inserida; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: context ou message nulo, ou producer_id fora de 1..p;
- *   system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: context/message nulo ou índice lógico inválido no modo 2,
+ *   com system_errno zero; ou argumento rejeitado por semop()/msgsnd(), com errno preservado.
+ * - MPMC_ERR_INVALID_INDEX: índice lógico inválido no modo 1, com system_errno zero;
+ *   ou semop() retornou EFBIG, preservado em system_errno.
  * - MPMC_ERR_INTERRUPTED: espera interrompida por sinal, nada foi inserido;
- *   system_errno é EINTR (modo 2).
- * - MPMC_ERR_SYS: falha de alocação ou de msgsnd(); system_errno preserva o errno (modo 2).
- * - MPMC_ERR_STATE: stub do modo 1, pendente em #10.
+ *   system_errno é EINTR.
+ * - MPMC_ERR_SHUTDOWN: semop()/msgsnd() retornou EIDRM, preservado em system_errno.
+ * - MPMC_ERR_SYS: falha de alocação ou outra falha em semop()/msgsnd();
+ *   system_errno preserva o errno capturado.
  * @details Pode bloquear aguardando espaço, inclusive quando o produtor não pediu ACK.
  * Envio != consumo: confirmações são independentes da conclusão desta função. Uma
  * mensagem já inserida não pode ser retirada pelo produtor se um envio posterior falhar.
+ * @warning No modo 1, falha da publicação final pode ocorrer após a inserção e
+ * torna o contexto inutilizável. Não repetir o envio; aplicar a política de
+ * @ref shm_operation_failures.
  * @pre Para solicitar confirmação, chamar ipc_ack_begin() para o
  * message->operation_id antes do primeiro envio. O backend consulta esse contexto
  * para determinar a política de ACK e preserva todos os campos da mensagem.
@@ -168,26 +187,40 @@ mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message
  * @param out Recebe a mensagem removida se retornar MPMC_OK.
  * @param blocking Se true, aguarda um item; se false, não espera.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
- * - MPMC_OK: mensagem retirada, contada e confirmada se a operação produtora pediu ACK;
- *   system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: context ou out nulo, ou producer_id fora de 1..p;
- *   system_errno é zero.
- * - MPMC_ERR_WOULD_BLOCK: blocking=false e estrutura vazia; system_errno é ENOMSG (modo 2).
+ * - MPMC_OK: mensagem retirada e contada; no modo 2, confirmação publicada se
+ *   solicitada. system_errno é zero. ACKs do modo 1 ainda são pendentes.
+ * - MPMC_ERR_INVALID_ARG: context/out nulo ou índice lógico inválido no modo 2,
+ *   com system_errno zero; ou argumento rejeitado por semop()/msgrcv()/msgsnd(), com errno
+ * preservado.
+ * - MPMC_ERR_INVALID_INDEX: índice lógico inválido no modo 1, com system_errno zero;
+ *   ou semop() retornou EFBIG, preservado em system_errno.
+ * - MPMC_ERR_WOULD_BLOCK: blocking=false e estrutura vazia; system_errno é EAGAIN
+ *   no modo 1 e ENOMSG no modo 2.
  * - MPMC_ERR_INTERRUPTED: espera interrompida por sinal, nada foi retirado; system_errno
- *   é EINTR (modo 2).
- * - MPMC_ERR_STATE: tipo de envelope inesperado (modo 2) ou stub do modo 1 (pendente: #10).
- * - MPMC_ERR_SYS: falha de alocação, de msgrcv() ou da publicação do evento/ACK, com o
+ *   é EINTR.
+ * - MPMC_ERR_SHUTDOWN: semop()/msgrcv()/msgsnd() retornou EIDRM, preservado em system_errno.
+ * - MPMC_ERR_STATE: tipo de envelope inesperado (modo 2).
+ * - MPMC_ERR_SYS: falha de alocação, de semop(), msgrcv() ou da publicação do evento/ACK, com o
  *   errno em system_errno; corpo de tamanho incompatível também retorna este estado, com
  *   system_errno zero.
- * @details O backend registra exatamente um consumo e sinaliza ao produtor quando a
- * operação pediu ACK. Não há ACK duplicado nem ACK feito pelo worker.
- * @warning MPMC_ERR_STATE e MPMC_ERR_SYS podem ocorrer depois de a mensagem sair da
- * fila: ela não é devolvida, out pode estar preenchido e o consumo pode não ter sido
- * contado nem confirmado. O chamador não deve contá-la como consumida nem repetir o ACK.
+ * @details A contagem pertence ao backend. No modo 2, ele também sinaliza o produtor
+ * quando a operação pediu ACK; o worker não duplica a confirmação. No modo 1,
+ * blocking=false ainda pode aguardar o mutex; a retirada não emite ACK nesta etapa.
+ * @warning No modo 1, falha de publicação ocorre depois da retirada e da contagem,
+ * podendo deixar out preenchido; a operação não é desfeita e o contexto torna-se
+ * inutilizável. Não repetir o recebimento; aplicar @ref shm_operation_failures.
+ * @warning No modo 2, MPMC_ERR_STATE e MPMC_ERR_SYS podem ocorrer depois de a
+ * mensagem sair da fila: ela não é devolvida, out pode estar preenchido e o consumo
+ * pode não ter sido contado nem confirmado. O chamador não deve contá-la como
+ * consumida nem repetir o ACK.
  * A recuperação dessa janela é pendente (ver docs/protocol.md).
  */
-mpmc_result_t
-ipc_receive(ipc_context_t *context, size_t producer_id, message_t *out, bool blocking);
+mpmc_result_t ipc_receive(
+    ipc_context_t *context,
+    size_t producer_id,
+    message_t *out,
+    bool blocking
+);
 
 /**
  * @brief Prepara o contexto de ACK de uma operação produtora.
@@ -215,12 +248,14 @@ mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsig
  * @param operation_id Operação previamente registrada com ipc_ack_begin().
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: as `expected` confirmações da operação chegaram; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: context nulo ou operation_id zero; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: context nulo ou operation_id zero, com system_errno zero;
+ *   ou msgrcv() retornou EINVAL/EFAULT, preservado em system_errno (modo 2).
  * - MPMC_ERR_STATE: operação não registrada, ou ACK inconsistente (modo 2), ou stub do
  *   modo 1 (pendente: #11).
  * - MPMC_ERR_INTERRUPTED: espera interrompida por sinal; system_errno é EINTR; as
  *   confirmações já contadas permanecem e ipc_ack_end() continua obrigatória (modo 2).
- * - MPMC_ERR_SYS: falha de msgrcv(); system_errno preserva o errno (modo 2).
+ * - MPMC_ERR_SHUTDOWN: msgrcv() retornou EIDRM, preservado em system_errno (modo 2).
+ * - MPMC_ERR_SYS: outra falha de msgrcv(); system_errno preserva o errno (modo 2).
  * @pre A operação já enviou as `expected` mensagens correspondentes.
  * @note ACKs recebidos antes desta chamada permanecem contabilizados.
  * @warning A garantia de ausência de deadlock por saturação do canal de confirmações
@@ -249,9 +284,11 @@ mpmc_result_t ipc_ack_end(ipc_context_t *context, uint64_t operation_id);
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: eventos pendentes consolidados; no modo 1 nada precisa ser feito;
  *   system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: context nulo; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: context nulo, com system_errno zero; ou msgrcv() retornou
+ *   EINVAL/EFAULT, preservado em system_errno (modo 2).
  * - MPMC_ERR_STATE: evento malformado ou de estrutura inexistente (modo 2).
- * - MPMC_ERR_SYS: falha de msgrcv(); system_errno preserva o errno (modo 2). EINTR é
+ * - MPMC_ERR_SHUTDOWN: msgrcv() retornou EIDRM, preservado em system_errno (modo 2).
+ * - MPMC_ERR_SYS: outra falha de msgrcv(); system_errno preserva o errno (modo 2). EINTR é
  *   repetido internamente e nunca retorna MPMC_ERR_INTERRUPTED.
  * @details No modo 2, drena sem bloquear a fila de eventos de consumo e atualiza os
  * contadores locais do supervisor. No modo 1, é uma operação vazia: os totais ficam em
@@ -267,11 +304,20 @@ mpmc_result_t ipc_poll_events(ipc_context_t *context);
  * @param out_count Recebe contador acumulado desde ipc_init(); só é escrito em sucesso.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: total escrito em out_count; system_errno é zero.
- * - MPMC_ERR_INVALID_ARG: context ou out_count nulo, ou producer_id fora de 1..p;
- *   system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: context/out_count nulo ou índice lógico inválido no modo 2,
+ *   com system_errno zero; ou semop() rejeitou um argumento, com errno preservado (modo 1).
+ * - MPMC_ERR_INVALID_INDEX: índice lógico inválido no modo 1, com system_errno zero;
+ *   ou semop() retornou EFBIG, preservado em system_errno.
+ * - MPMC_ERR_INTERRUPTED: aquisição do mutex interrompida em semop(); system_errno
+ *   contém EINTR (modo 1).
+ * - MPMC_ERR_SHUTDOWN: semop() retornou EIDRM, preservado em system_errno (modo 1).
+ * - MPMC_ERR_SYS: outra falha de semop(); system_errno preserva o errno (modo 1).
  * @pre No modo 2, chamar ipc_poll_events() antes de obter números finais.
- * @warning No modo 1, o valor devolvido é sempre zero enquanto a contagem real não for
- * implementada (pendente: #10); não usá-lo como relatório correto.
+ * @note No modo 1, o total é lido sob mutex e a saída só é preenchida após liberá-lo
+ * com sucesso. Inclui retiradas executadas mesmo se a publicação da vaga falhou.
+ * @warning No modo 1, a falha na liberação do mutex torna o contexto inutilizável,
+ * embora out_count permaneça inalterado. Aplicar @ref shm_operation_failures;
+ * não consultar estatísticas de um contexto que já sofreu uma falha fatal.
  */
 mpmc_result_t ipc_consumed_count(ipc_context_t *context, size_t producer_id, uint64_t *out_count);
 

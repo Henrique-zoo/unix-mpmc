@@ -47,10 +47,12 @@ static_assert(offsetof(shm_ring_t, capacity) == 3, "offset de capacity");
 static_assert(offsetof(shm_ring_t, consumed_total) == 8, "offset de consumed_total");
 static_assert(offsetof(shm_ring_t, messages) == 16, "offset de messages");
 static_assert(
-    offsetof(shm_ring_t, messages) % alignof(message_t) == 0, "messages deve estar alinhado"
+    offsetof(shm_ring_t, messages) % alignof(message_t) == 0,
+    "messages deve estar alinhado"
 );
 static_assert(
-    offsetof(shm_ring_t, messages) < MPMC_SHM_SEGMENT_BYTES, "cabecalho deve caber no segmento"
+    offsetof(shm_ring_t, messages) < MPMC_SHM_SEGMENT_BYTES,
+    "cabecalho deve caber no segmento"
 );
 static_assert(SHM_RING_CAPACITY > 0, "o segmento deve comportar ao menos uma mensagem");
 static_assert(SHM_RING_CAPACITY <= UINT8_MAX, "a capacidade deve ser representavel em uint8_t");
