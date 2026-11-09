@@ -59,7 +59,18 @@ mpmc_result_t shm_backend_create(
         };
     }
 
-    backend->producer_count = producer_count;
+    *backend = (shm_backend_t){
+        .producer_count = producer_count,
+        .ack_control_shmid = -1,
+        .ack_control = NULL,
+        .ack_semid = -1,
+    };
+
+    for (size_t index = 0; index < SHM_ACK_BITMAP_SEGMENT_COUNT; index++) {
+        backend->ack_bitmap_shmids[index] = -1;
+        backend->ack_bitmap_segments[index] = NULL;
+    }
+
     backend->segments = calloc(producer_count, sizeof(*backend->segments));
 
     if (backend->segments == NULL) {
@@ -107,35 +118,18 @@ mpmc_result_t shm_backend_create(
         if (result.status != MPMC_OK) goto cleanup;
     }
 
+    result = shm_backend_ack_resources_create(backend);
+    if (result.status != MPMC_OK) {
+        (void)shm_backend_cleanup(backend, producer_count, true, reporter);
+        return result;
+    }
+
     *out = backend;
     return (mpmc_result_t){.status = MPMC_OK};
 
 cleanup:
     (void)shm_backend_cleanup(backend, i + 1, true, reporter);
     return result;
-}
-
-mpmc_result_t shm_backend_ack_begin(
-    shm_backend_t *backend,
-    uint64_t operation_id,
-    unsigned expected
-) {
-    (void)backend;
-    (void)operation_id;
-    (void)expected;
-    return (mpmc_result_t){.status = MPMC_ERR_STATE};
-}
-
-mpmc_result_t shm_backend_ack_wait(shm_backend_t *backend, uint64_t operation_id) {
-    (void)backend;
-    (void)operation_id;
-    return (mpmc_result_t){.status = MPMC_ERR_STATE};
-}
-
-mpmc_result_t shm_backend_ack_end(shm_backend_t *backend, uint64_t operation_id) {
-    (void)backend;
-    (void)operation_id;
-    return (mpmc_result_t){.status = MPMC_ERR_STATE};
 }
 
 /**
@@ -239,6 +233,16 @@ static mpmc_result_t shm_backend_cleanup(
     const shm_cleanup_reporter_t *reporter
 ) {
     mpmc_result_t result = {.status = MPMC_OK};
+
+    /*
+     * Os recursos ACK são globais e não pertencem a uma estrutura lógica
+     * individual. Por isso, seu erro entra no resultado agregado, sem gerar
+     * shm_cleanup_error_t com producer_id artificial.
+     */
+    mpmc_result_t ack_result = shm_backend_ack_resources_cleanup(backend, remove_global);
+    if (ack_result.status != MPMC_OK) {
+        result = ack_result;
+    }
 
     if (backend->segments != NULL) {
         for (size_t i = 0; i < segment_count; i++) {

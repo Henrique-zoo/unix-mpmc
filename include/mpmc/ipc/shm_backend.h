@@ -2,9 +2,11 @@
  * @file shm_backend.h
  * @brief Backend de buffer circular em memória compartilhada com semáforos.
  * @ingroup backends
- * @note Estão implementados o ciclo de vida dos segmentos e semáforos, o envio,
- * o recebimento e a leitura sincronizada dos totais consumidos. As operações
- * de ACK permanecem como stubs que retornam MPMC_ERR_STATE.
+ * @note Estão implementados o ciclo de vida dos recursos SHM, o envio, o
+ * recebimento, a leitura sincronizada dos totais e o mecanismo interno de ACK:
+ * registro, correlação, deduplicação, espera e finalização por operação.
+ * A notificação auxiliar de consumo existe, mas ainda não é chamada por
+ * shm_backend_receive(); essa integração pertence à issue #11.
  *
  * @anchor shm_operation_failures
  * @par Falhas nas operações sincronizadas
@@ -48,8 +50,10 @@
 
 /**
  * @brief Estado opaco do backend por memória compartilhada.
- * @details Mantém os segmentos System V de 2048 bytes, suas associações locais
- * e um conjunto de semáforos por estrutura lógica.
+ * @details Mantém os segmentos System V de 2048 bytes por estrutura lógica,
+ * seus conjuntos de semáforos e os recursos globais de ACK: um segmento de
+ * controle, quatro segmentos de bitmap e um conjunto com 65 semáforos.
+ * Os mapeamentos são locais a cada processo; os objetos IPC são compartilhados.
  * Apenas `ipc/transport.c` deve acessar diretamente esta interface.
  */
 typedef struct shm_backend shm_backend_t;
@@ -92,6 +96,10 @@ typedef struct {
  * somente as falhas de liberação; a falha que impediu a criação é retornada por
  * shm_backend_create(). O retorno da callback é void: ela registra ou apresenta
  * o diagnóstico e retorna para que a limpeza prossiga.
+ *
+ * Recursos globais de ACK não pertencem a um producer_id específico e, por isso,
+ * suas falhas de limpeza não são enviadas por esta callback. Elas participam
+ * do primeiro erro retornado pela operação de cleanup.
  * @note A callback não deve destruir o backend que já está sendo limpo, nem
  * invalidar o reporter ou seus dados antes que a chamada de limpeza termine.
  * @see @ref shm_cleanup_diagnostics para um exemplo de implementação.
@@ -124,19 +132,22 @@ typedef struct {
  * @param producer_count Número positivo de estruturas independentes.
  * @param reporter Destino dos diagnósticos de rollback; pode ser NULL.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
- * - MPMC_OK: segmentos de 2048 bytes associados, buffers vazios e semáforos
- *   inicializados; system_errno é zero.
+ * - MPMC_OK: segmentos de dados e recursos globais de ACK criados e associados,
+ *   buffers vazios e semáforos inicializados; system_errno é zero.
  * - MPMC_ERR_INVALID_ARG: out nulo ou producer_count zero, com system_errno zero;
  *   ou shmget(), shmat(), semget() ou semctl(SETVAL) rejeitou um argumento;
  *   system_errno preserva o errno capturado nessa chamada.
  * - MPMC_ERR_SHUTDOWN: shmat() ou semctl(SETVAL) retornou EIDRM,
  *   preservado em system_errno.
- * - MPMC_ERR_SYS: falha em malloc(), calloc(), shmget(), shmat(), semget() ou
- *   semctl(SETVAL) sem categoria específica; system_errno preserva o errno
- *   capturado na operação que falhou, inclusive durante a limpeza.
- * @post Em sucesso, *out contém o backend com producer_count segmentos associados,
- * cada um com buffer vazio, índices e total consumido zerados e capacidade calculada.
- * O conjunto correspondente contém mutex=1, empty=capacity e full=0.
+ * - MPMC_ERR_SYS: falha em malloc(), calloc(), shmget(), shmat(), semget(),
+ *   semctl(SETVAL) ou nas operações de inicialização dos recursos de ACK sem
+ *   categoria específica; system_errno preserva o errno capturado na operação
+ *   que falhou, inclusive durante a limpeza.
+ * @post Em sucesso, *out contém o backend com producer_count segmentos de dados
+ * associados, cada um com buffer vazio, índices e total consumido zerados e
+ * capacidade calculada. Cada conjunto de dados contém mutex=1, empty=capacity
+ * e full=0. Os recursos globais de ACK também estão prontos para registrar
+ * operações, com 64 posições livres.
  * Em falha, *out permanece NULL quando out é válido, as alocações locais são liberadas
  * e a limpeza dos recursos das entradas visitadas, inclusive a parcial, é tentada.
  * @note Falhas de rollback são comunicadas por reporter e não substituem o erro
@@ -168,7 +179,8 @@ mpmc_result_t shm_backend_create(
  * o buffer inicializado e o conjunto de três semáforos disponível.
  * @pre message não nulo aponta para uma mensagem legível durante a chamada.
  * @details Aguarda espaço e exclusão mútua sem manter uma reserva parcial durante
- * a espera. O envio não aguarda consumo e ainda não consulta um contexto de ACK.
+ * a espera. O envio não aguarda consumo nem consulta o registro de ACK; a
+ * correlação é feita pela operação de notificação após a retirada da mensagem.
  * @post Em sucesso, a mensagem ocupa a posição FIFO seguinte; o total consumido não muda.
  * @warning Se a aquisição falhar, o buffer não é alterado. Se a publicação posterior
  * falhar, a inserção já ocorreu e não é desfeita; o contexto deve ser considerado
@@ -205,7 +217,9 @@ mpmc_result_t shm_backend_send(
  * @post Em sucesso, out contém a mensagem mais antiga e consumed_total aumenta em um.
  * @note blocking=false aplica IPC_NOWAIT apenas à espera por itens. A chamada ainda
  * pode aguardar a exclusão mútua do buffer.
- * @note A retirada ainda não publica confirmação de consumo; o protocolo de ACK é pendente.
+ * @note A retirada atualiza o buffer e o total consumido, mas ainda não chama
+ * a auxiliar interna shm_backend_ack_notify_consumed(). A notificação automática
+ * de ACK a partir do recebimento permanece pendente de integração na issue #11.
  * @warning Falhas anteriores à retirada preservam out e o buffer. Se a publicação
  * da vaga falhar depois da retirada, out já contém a mensagem e a contagem já foi
  * incrementada. A função não reinsere o item nem desfaz essa contagem; o contexto
@@ -221,14 +235,24 @@ mpmc_result_t shm_backend_receive(
 );
 
 /**
- * @brief Reserva mecanismo de confirmação para uma operação produtora.
+ * @brief Registra uma operação produtora que aguarda confirmações de consumo.
  * @param backend Backend do filho produtor.
- * @param operation_id ID único de trabalho, gerado pelo supervisor.
- * @param expected Quantidade total de confirmações (1..1024).
- * @return Estrutura mpmc_result_t com o seguinte estado do campo status:
- * - MPMC_ERR_STATE: operação ainda não implementada; system_errno é zero.
- * @note O contrato previsto associa a solicitação ao operation_id em um registro
- * compartilhado de operações; a política de ACK não é um campo de message_t.
+ * @param operation_id ID único e não zero de trabalho, gerado pelo supervisor.
+ * @param expected Quantidade total de mensagens a confirmar, de 1 a 1024.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: operação registrada; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: backend nulo, operation_id zero ou expected fora de
+ *   1..1024; system_errno é zero.
+ * - MPMC_ERR_STATE: operation_id já registrado; system_errno é zero.
+ * - MPMC_ERR_NO_SPACE: as 64 posições de operação estão ocupadas; system_errno é zero.
+ * - MPMC_ERR_INTERRUPTED: aquisição do mutex interrompida; system_errno contém EINTR.
+ * - MPMC_ERR_SHUTDOWN: recurso de semáforo removido; system_errno contém EIDRM.
+ * - MPMC_ERR_SYS: outra falha em operação de semáforo; system_errno preserva errno.
+ * @details Registra operation_id, PID do produtor e quantidade esperada. A tabela
+ * e os bitmaps são compartilhados entre os processos do backend. A mesma operação
+ * pode abranger mensagens destinadas a diferentes estruturas lógicas.
+ * @note A política de ACK não é um campo de message_t. A integração que emite a
+ * notificação a partir de shm_backend_receive() ainda pertence à issue #11.
  */
 mpmc_result_t shm_backend_ack_begin(
     shm_backend_t *backend,
@@ -237,22 +261,43 @@ mpmc_result_t shm_backend_ack_begin(
 );
 
 /**
- * @brief Aguarda confirmação de todos os consumos de uma operação.
+ * @brief Aguarda as confirmações de consumo de uma operação registrada.
  * @param backend Backend do filho produtor.
  * @param operation_id Trabalho registrado anteriormente.
- * @return Estrutura mpmc_result_t com o seguinte estado do campo status:
- * - MPMC_ERR_STATE: operação ainda não implementada; system_errno é zero.
- * @note O progresso das confirmações deve sobreviver a mudanças de processo
- * e à chegada de ACKs antes da chamada de espera.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: as expected sequências distintas foram confirmadas; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: backend nulo ou operation_id zero; system_errno é zero.
+ * - MPMC_ERR_STATE: operation_id não está registrado ou já possui outro waiter
+ *   ativo; system_errno é zero.
+ * - MPMC_ERR_INTERRUPTED: espera no semáforo interrompida; system_errno contém EINTR.
+ * - MPMC_ERR_SHUTDOWN: recurso de semáforo removido; system_errno contém EIDRM.
+ * - MPMC_ERR_SYS: outra falha em operação de semáforo; system_errno preserva errno.
+ * @details Apenas um processo pode aguardar cada operação. O registro permanece
+ * protegido contra reutilização durante a espera. Consulta o contador sob mutex
+ * e bloqueia no semáforo específico da operação sem manter o mutex adquirido.
+ * Repete a consulta após cada notificação.
+ * @note Notificações anteriores à chamada permanecem contabilizadas e não se perdem.
+ * @warning Falhas de semop() diferentes de EINTR na aquisição ou na liberação
+ * do mutex, ou na espera pela notificação, podem comprometer o contexto SHM.
+ * O chamador deve aplicar @ref shm_operation_failures e não realizar novas
+ * operações de dados, estatísticas ou ACK nesse contexto após uma falha fatal.
  */
 mpmc_result_t shm_backend_ack_wait(shm_backend_t *backend, uint64_t operation_id);
 
 /**
- * @brief Remove mecanismo temporário de ACK de um trabalho.
+ * @brief Encerra o registro e limpa o bitmap de uma operação ACK.
+ * @details Tokens restantes são drenados por ack_begin() antes da reutilização do slot.
  * @param backend Backend do filho produtor.
  * @param operation_id ID da operação previamente registrada.
- * @return Estrutura mpmc_result_t com o seguinte estado do campo status:
- * - MPMC_ERR_STATE: operação ainda não implementada; system_errno é zero.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: registro liberado; também retorna sucesso se a operação for
+ *   desconhecida ou já tiver sido encerrada; system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: backend nulo ou operation_id zero; system_errno é zero.
+ * - MPMC_ERR_STATE: existe um waiter ativo para a operação; o registro permanece
+ *   intacto e pode ser encerrado após o término da espera; system_errno é zero.
+ * - MPMC_ERR_INTERRUPTED: operação de semáforo interrompida; system_errno contém EINTR.
+ * - MPMC_ERR_SHUTDOWN: recurso de semáforo removido; system_errno contém EIDRM.
+ * - MPMC_ERR_SYS: outra falha em operação de semáforo; system_errno preserva errno.
  */
 mpmc_result_t shm_backend_ack_end(shm_backend_t *backend, uint64_t operation_id);
 

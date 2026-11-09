@@ -99,7 +99,8 @@ $(UNIT_DIR)/test_command: tests/unit/test_command.c src/app/command.c src/error.
 $(UNIT_DIR)/test_supervisor: tests/unit/test_supervisor.c \
 		$(UNIT_DIR)/supervisor_for_test.o src/app/command.c src/app/job_outcome.c src/error.c \
 		src/ipc/transport.c src/ipc/msg_backend.c $(SHM_BACKEND_DIR)/lifecycle.c \
-		$(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c
+		$(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -112,7 +113,7 @@ $(UNIT_DIR)/test_job_outcome: tests/unit/test_job_outcome.c $(APP_DIR)/job_outco
 $(UNIT_DIR)/test_outcome_repl: tests/unit/test_outcome_repl.c \
 		$(UNIT_DIR)/supervisor_for_test.o $(APP_DIR)/repl.c $(APP_DIR)/command.c \
 		$(APP_DIR)/job_outcome.c src/error.c src/ipc/transport.c src/ipc/msg_backend.c \
-		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
 		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(APP_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
@@ -147,10 +148,13 @@ $(UNIT_DIR)/shm_backend_for_test.o: $(SHM_BACKEND_DIR)/lifecycle.c \
 		-Dsysv_shm_detach=mpmc_test_shm_detach -Dsysv_shm_remove=mpmc_test_shm_remove \
 		-Dsysv_sem_create=mpmc_test_sem_create -Dsysv_sem_set=mpmc_test_sem_set \
 		-Dsysv_sem_remove=mpmc_test_sem_remove \
+		-Dshm_backend_ack_resources_create=mpmc_test_ack_resources_create \
+		-Dshm_backend_ack_resources_cleanup=mpmc_test_ack_resources_cleanup \
 		-c $< -o $@
 
 $(UNIT_DIR)/test_shm_backend: tests/unit/test_shm_backend.c \
-		$(UNIT_DIR)/shm_backend_for_test.o $(SHM_RING_OBJECT)
+		$(UNIT_DIR)/shm_backend_for_test.o $(SHM_BACKEND_DIR)/ack.c \
+		$(SHM_RING_OBJECT) src/ipc/shm.c src/ipc/sem.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -162,13 +166,53 @@ $(UNIT_DIR)/shm_operations_for_test.o: $(SHM_BACKEND_DIR)/operations.c \
 		-Dsysv_sem_apply=mpmc_test_sem_apply -Dsysv_sem_change=mpmc_test_sem_change \
 		-c $< -o $@
 
-$(UNIT_DIR)/test_shm_operations: tests/unit/test_shm_operations.c \
-		$(UNIT_DIR)/shm_operations_for_test.o $(SHM_BACKEND_DIR)/lifecycle.c \
+$(UNIT_DIR)/ack_for_test.o: $(SHM_BACKEND_DIR)/ack.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) \
+		-Dsysv_sem_change=mpmc_test_sem_change -c $< -o $@
+
+$(UNIT_DIR)/test_shm_backend_ack: tests/unit/test_shm_backend_ack.c \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(UNIT_DIR)/ack_for_test.o \
 		$(SHM_RING_OBJECT) src/ipc/shm.c src/ipc/sem.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
 
-$(UNIT_DIR)/test_shm_stress: tests/unit/test_shm_stress.c $(SHM_BACKEND_DIR)/lifecycle.c \
+# Cleanup ACK: substitui somente as primitivas de liberação para injetar falhas.
+$(UNIT_DIR)/ack_cleanup_for_test.o: $(SHM_BACKEND_DIR)/ack.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) \
+		-Dsysv_shm_detach=mpmc_test_shm_detach \
+		-Dsysv_shm_remove=mpmc_test_shm_remove \
+		-Dsysv_sem_remove=mpmc_test_sem_remove \
+		-c $< -o $@
+
+$(UNIT_DIR)/test_shm_backend_ack_create: tests/unit/test_shm_backend_ack_create.c \
+		$(SHM_BACKEND_DIR)/ack.c src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) \
+		-Dsysv_shm_create=mpmc_test_shm_create \
+		-Dsysv_shm_attach=mpmc_test_shm_attach \
+		-Dsysv_shm_detach=mpmc_test_shm_detach \
+		-Dsysv_shm_remove=mpmc_test_shm_remove \
+		-Dsysv_sem_create=mpmc_test_sem_create \
+		-Dsysv_sem_set=mpmc_test_sem_set \
+		-Dsysv_sem_remove=mpmc_test_sem_remove \
+		-Dsysv_sem_change=mpmc_test_sem_change \
+		-Dsysv_sem_apply=mpmc_test_sem_apply \
+		$^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/test_shm_backend_ack_cleanup: tests/unit/test_shm_backend_ack_cleanup.c \
+		$(UNIT_DIR)/ack_cleanup_for_test.o src/ipc/shm.c src/ipc/sem.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/test_shm_operations: tests/unit/test_shm_operations.c \
+		$(UNIT_DIR)/shm_operations_for_test.o $(SHM_BACKEND_DIR)/lifecycle.c \
+		$(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) src/ipc/shm.c src/ipc/sem.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(UNIT_DIR)/test_shm_stress: tests/unit/test_shm_stress.c $(SHM_BACKEND_DIR)/lifecycle.c $(SHM_BACKEND_DIR)/ack.c \
 		$(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) src/ipc/shm.c src/ipc/sem.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(SHM_BACKEND_DIR) $(CFLAGS) $^ $(LDLIBS) -o $@
@@ -193,7 +237,7 @@ $(UNIT_DIR)/test_consumer: tests/unit/test_consumer.c $(WORKERS_DIR)/consumer.c
 
 $(UNIT_DIR)/test_consumer_integration: tests/unit/test_consumer_integration.c \
 		$(WORKERS_DIR)/consumer.c src/ipc/transport.c src/ipc/msg_backend.c \
-		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
 		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
@@ -244,7 +288,8 @@ $(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c \
 
 $(UNIT_DIR)/test_transport_contract: tests/unit/test_transport_contract.c \
 		src/ipc/transport.c src/ipc/msg_backend.c $(SHM_BACKEND_DIR)/lifecycle.c \
-		$(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c
+		$(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -277,24 +322,24 @@ $(UNIT_DIR)/test_msg_ack_concurrency: tests/unit/test_msg_ack_concurrency.c \
 $(UNIT_DIR)/test_msg_ack_lifecycle: tests/unit/test_msg_ack_lifecycle.c \
 		src/ipc/msg_backend.c src/ipc/transport.c $(WORKERS_DIR)/producer.c \
 		$(WORKERS_DIR)/producer_routing.c $(WORKERS_DIR)/consumer.c \
-		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
 		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(WORKERS_DIR) $(CFLAGS) tests/unit/test_msg_ack_lifecycle.c \
 		$(WORKERS_DIR)/producer.c $(WORKERS_DIR)/producer_routing.c $(WORKERS_DIR)/consumer.c \
-		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
 		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c $(LDLIBS) -o $@
 
 $(UNIT_DIR)/test_transport_parity: tests/unit/test_transport_parity.c \
 		src/ipc/msg_backend.c src/ipc/transport.c $(WORKERS_DIR)/producer.c \
 		$(WORKERS_DIR)/producer_routing.c $(WORKERS_DIR)/consumer.c \
-		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
 		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(WORKERS_DIR) -I$(SHM_BACKEND_DIR) $(CFLAGS) \
 		tests/unit/test_transport_parity.c \
 		$(WORKERS_DIR)/producer.c $(WORKERS_DIR)/producer_routing.c $(WORKERS_DIR)/consumer.c \
-		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
+		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
 		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c $(LDLIBS) -o $@
 
 $(UNIT_DIR)/test_isolation: tests/unit/test_isolation.c src/app/command.c src/error.c
@@ -303,9 +348,12 @@ $(UNIT_DIR)/test_isolation: tests/unit/test_isolation.c src/app/command.c src/er
 
 unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
 		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
-		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_operations $(UNIT_DIR)/test_shm_stress $(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
-		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_msg_stress $(UNIT_DIR)/test_msg_ack_concurrency \
-		$(UNIT_DIR)/test_msg_ack_lifecycle \
+		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_backend_ack \
+		$(UNIT_DIR)/test_shm_backend_ack_cleanup $(UNIT_DIR)/test_shm_backend_ack_create \
+		$(UNIT_DIR)/test_shm_operations $(UNIT_DIR)/test_shm_stress \
+		$(UNIT_DIR)/test_shm_ring $(UNIT_DIR)/test_message_metadata \
+		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_msg_stress \
+		$(UNIT_DIR)/test_msg_ack_concurrency $(UNIT_DIR)/test_msg_ack_lifecycle \
 		$(UNIT_DIR)/test_isolation \
 		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_consumer \
 		$(UNIT_DIR)/test_consumer_integration $(UNIT_DIR)/test_consumer_concurrency \
@@ -326,6 +374,9 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 	@$(UNIT_DIR)/test_error
 	@$(UNIT_DIR)/test_shm
 	@$(UNIT_DIR)/test_shm_backend
+	@$(UNIT_DIR)/test_shm_backend_ack
+	@$(UNIT_DIR)/test_shm_backend_ack_cleanup
+	@$(UNIT_DIR)/test_shm_backend_ack_create
 	@$(UNIT_DIR)/test_shm_operations
 	@$(UNIT_DIR)/test_shm_stress
 	@$(UNIT_DIR)/test_shm_ring
