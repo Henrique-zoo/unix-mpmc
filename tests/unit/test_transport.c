@@ -2,31 +2,35 @@
  * @file test_transport.c
  * @brief Audita a fachada transport.c com backends substitutos.
  * @ingroup tests
- * @details Subtarefa #46 de #16. O executável é ligado a transport.c e a implementações
- * substitutas de msg_backend_*() e shm_backend_*() definidas neste arquivo: nenhum backend
- * real, nenhuma primitiva System V funcional e nenhum processo filho participam do teste.
- * Os substitutos registram cada chamada (backend, índice, ponteiros, flags e identificadores)
- * e devolvem o resultado configurado pelo teste.
+ * @details Subtarefa #46 de #16. O executável é ligado a transport.c e a
+ * implementações substitutas de msg_backend_*() e shm_backend_*() definidas
+ * neste arquivo: nenhum backend real, nenhuma primitiva System V funcional e
+ * nenhum processo filho participam do teste. Os substitutos registram cada
+ * chamada (backend, índice, ponteiros, flags e identificadores) e devolvem o
+ * resultado configurado pelo teste.
  *
  * Verifica, para os dois modos:
- * - despacho: cada operação chega ao backend do modo, com os argumentos exatos, e nunca ao
- *   outro backend;
- * - propagação: status e system_errno dos backends, e os dados de saída, atravessam a
- *   fachada sem alteração;
- * - argumentos inválidos: contexto nulo, modo inválido, saída nula e contagem zero, conforme
- *   documentado em transport.h;
- * - falha parcial de ipc_init(): alocação e criação do backend com falha injetada, *out
- *   nulo, sem destruir um backend cuja criação falhou e sem vazar a alocação da fachada;
- * - ipc_worker_close() e ipc_destroy(): rotina correta do backend, chamada antes de liberar o
- *   contexto, sem que o fechamento do filho remova recursos globais.
+ * - despacho: cada operação chega ao backend do modo, com os argumentos exatos,
+ * e nunca ao outro backend;
+ * - propagação: status e system_errno dos backends, e os dados de saída,
+ * atravessam a fachada sem alteração;
+ * - argumentos inválidos: contexto nulo, modo inválido, saída nula e contagem
+ * zero, conforme documentado em transport.h;
+ * - falha parcial de ipc_init(): alocação e criação do backend com falha
+ * injetada, *out nulo, sem destruir um backend cuja criação falhou e sem vazar
+ * a alocação da fachada;
+ * - ipc_worker_close() e ipc_destroy(): rotina correta do backend, chamada
+ * antes de liberar o contexto, sem que o fechamento do filho remova recursos
+ * globais.
  *
- * transport.c é compilado com calloc() e free() redirecionados (-Dcalloc=mpmc_test_calloc
- * -Dfree=mpmc_test_free) para injetar falhas de alocação e detectar vazamento. Espiões de
- * msgget(), msgsnd(), msgrcv(), shmget(), semget() e semop() garantem que a fachada não usa
- * System V diretamente.
+ * transport.c é compilado com calloc() e free() redirecionados
+ * (-Dcalloc=mpmc_test_calloc -Dfree=mpmc_test_free) para injetar falhas de
+ * alocação e detectar vazamento. Espiões de msgget(), msgsnd(), msgrcv(),
+ * shmget(), semget() e semop() garantem que a fachada não usa System V
+ * diretamente.
  *
- * Complementa test_transport_contract.c, que exercita os backends reais. Retorna 0 se todas
- * as verificações passarem; 1 caso contrário.
+ * Complementa test_transport_contract.c, que exercita os backends reais.
+ * Retorna 0 se todas as verificações passarem; 1 caso contrário.
  */
 #include <errno.h>
 #include <limits.h>
@@ -79,7 +83,8 @@ static unsigned g_free_calls;
 static int g_live_allocations;
 /** @brief Se diferente de zero, o próximo calloc() falha com este errno. */
 static int g_calloc_failure_errno;
-/** @brief Chamadas diretas a primitivas System V feitas por qualquer código ligado ao teste. */
+/** @brief Chamadas diretas a primitivas System V feitas por qualquer código
+ * ligado ao teste. */
 static unsigned g_sysv_calls;
 
 void *mpmc_test_calloc(size_t count, size_t size);
@@ -208,7 +213,8 @@ typedef struct {
     uint64_t operation_id; /**< Operação de ACK. */
     unsigned expected;     /**< Total esperado em ack_begin. */
     const void *reporter;  /**< Reporter recebido pelo backend shm. */
-    unsigned frees_before; /**< Liberações de contexto já feitas quando a rotina foi chamada. */
+    unsigned frees_before; /**< Liberações de contexto já feitas quando a rotina
+                              foi chamada. */
 } call_t;
 
 /** @brief Capacidade do registro de chamadas. */
@@ -219,7 +225,8 @@ static unsigned g_call_count;
 
 /** @brief Resultado devolvido pelos backends substitutos. */
 static mpmc_result_t g_result;
-/** @brief Se verdadeiro, create deixa um ponteiro não nulo em *out mesmo ao falhar. */
+/** @brief Se verdadeiro, create deixa um ponteiro não nulo em *out mesmo ao
+ * falhar. */
 static bool g_dirty_out_on_failure;
 
 /** @brief Backend de filas substituto; o endereço identifica a instância. */
@@ -227,7 +234,8 @@ struct msg_backend {
     int tag;
 };
 
-/** @brief Backend de memória compartilhada substituto; o endereço identifica a instância. */
+/** @brief Backend de memória compartilhada substituto; o endereço identifica a
+ * instância. */
 struct shm_backend {
     int tag;
 };
@@ -235,7 +243,8 @@ struct shm_backend {
 static struct msg_backend g_msg_object;
 static struct shm_backend g_shm_object;
 
-/** @brief Mensagem que o teste envia; a fachada não deve alterá-la nem copiá-la. */
+/** @brief Mensagem que o teste envia; a fachada não deve alterá-la nem
+ * copiá-la. */
 static message_t g_message_in = {.sender_pid = 1234,
     .sequence = 9u,
     .sent_at = {.tv_sec = 5, .tv_nsec = 6},
@@ -467,14 +476,17 @@ mpmc_result_t shm_backend_destroy(shm_backend_t *backend, const shm_cleanup_repo
 /* Utilitários                                                        */
 /* ------------------------------------------------------------------ */
 
-/** @brief Byte cujo endereço marca um *out que a fachada não deve tocar (o contexto é opaco). */
+/** @brief Byte cujo endereço marca um *out que a fachada não deve tocar (o
+ * contexto é opaco). */
 static char g_marker_byte;
-/** @brief Ponteiro de contexto que nunca é devolvido por ipc_init(); detecta escrita em *out. */
+/** @brief Ponteiro de contexto que nunca é devolvido por ipc_init(); detecta
+ * escrita em *out. */
 #define MARKER ((ipc_context_t *)&g_marker_byte)
 
 #define RESULT_OK ((mpmc_result_t){.status = MPMC_OK, .system_errno = 0})
 
-/** @brief Resultados de backend usados para verificar a propagação sem alteração. */
+/** @brief Resultados de backend usados para verificar a propagação sem
+ * alteração. */
 static const mpmc_result_t k_results[] = {
     {MPMC_OK, 0},
     {MPMC_ERR_INVALID_ARG, 0},
@@ -530,7 +542,8 @@ static bool is_shm_call(call_kind_t kind) {
     return kind >= CALL_SHM_CREATE && kind <= CALL_SHM_DESTROY;
 }
 
-/** @brief Restaura o estado dos substitutos e dos contadores antes de cada caso. */
+/** @brief Restaura o estado dos substitutos e dos contadores antes de cada
+ * caso. */
 static void reset_state(void) {
     memset(g_calls, 0, sizeof g_calls);
     g_call_count = 0u;
@@ -556,7 +569,8 @@ static bool same_result(mpmc_result_t actual, mpmc_result_t expected) {
 }
 
 /**
- * @brief Cria um contexto com backend substituto bem-sucedido e limpa o registro.
+ * @brief Cria um contexto com backend substituto bem-sucedido e limpa o
+ * registro.
  * @param mode Paradigma.
  * @param producers Quantidade de estruturas lógicas.
  * @return Contexto válido; aborta o teste se a criação falhar.
@@ -692,7 +706,8 @@ static call_kind_t expected_kind(op_t op, ipc_mode_t mode) {
 }
 
 /**
- * @brief Confere que o backend recebeu exatamente os argumentos que a fachada deveria repassar.
+ * @brief Confere que o backend recebeu exatamente os argumentos que a fachada
+ * deveria repassar.
  * @param op Operação da fachada.
  * @param mode Paradigma.
  * @param call Chamada registrada.
@@ -764,7 +779,8 @@ static void check_forwarded_arguments(op_t op, ipc_mode_t mode, const call_t *ca
 /* Casos                                                              */
 /* ------------------------------------------------------------------ */
 
-/** @brief Os espiões de System V e de alocação funcionam; sem isto os demais passariam em vão. */
+/** @brief Os espiões de System V e de alocação funcionam; sem isto os demais
+ * passariam em vão. */
 static void test_instrumentation_works(void) {
     reset_state();
     CHECK(msgget(0, 0) == -1 && g_sysv_calls == 1u, "espião de msgget não registrou a chamada");
@@ -799,7 +815,8 @@ static void test_instrumentation_works(void) {
     reset_state();
 }
 
-/** @brief Cada operação chega ao backend do modo, com os argumentos exatos, e a nenhum outro. */
+/** @brief Cada operação chega ao backend do modo, com os argumentos exatos, e a
+ * nenhum outro. */
 static void test_dispatch_goes_to_selected_backend(void) {
     for (size_t m = 0; m < sizeof k_modes / sizeof k_modes[0]; ++m) {
         const ipc_mode_t mode = k_modes[m];
@@ -823,7 +840,8 @@ static void test_dispatch_goes_to_selected_backend(void) {
             if (want == CALL_NONE) {
                 CHECK(
                     g_call_count == 0u,
-                    "%s, %s: a fachada não deveria chamar nenhum backend (%u chamada(s))",
+                    "%s, %s: a fachada não deveria chamar nenhum backend (%u "
+                    "chamada(s))",
                     k_op_names[op],
                     mode_name(mode),
                     g_call_count
@@ -863,7 +881,8 @@ static void test_dispatch_goes_to_selected_backend(void) {
     }
 }
 
-/** @brief ipc_poll_events() no modo 1 não consulta nenhum backend, mesmo que eles falhem. */
+/** @brief ipc_poll_events() no modo 1 não consulta nenhum backend, mesmo que
+ * eles falhem. */
 static void test_poll_events_is_noop_in_shared_memory_mode(void) {
     reset_state();
     ipc_context_t *context = make_context(IPC_SHARED_MEMORY, 2u);
@@ -875,6 +894,29 @@ static void test_poll_events_is_noop_in_shared_memory_mode(void) {
     );
     ipc_destroy(context);
     expect_clean("poll modo 1");
+}
+
+/** @brief O no-op de ACK do modo 1 ainda valida operation_id, conforme
+ * transport.h. */
+static void test_ack_abandon_shared_memory_validation(void) {
+    reset_state();
+    ipc_context_t *context = make_context(IPC_SHARED_MEMORY, 2u);
+
+    const mpmc_result_t invalid = ipc_ack_abandon(context, 0u);
+    CHECK(
+        invalid.status == MPMC_ERR_INVALID_ARG && invalid.system_errno == 0,
+        "modo 1: operation_id zero deveria retornar INVALID_ARG/0"
+    );
+    CHECK(g_call_count == 0u, "modo 1: ACK inválido chamou backend (%u vez(es))", g_call_count);
+
+    const mpmc_result_t no_op = ipc_ack_abandon(context, 1u);
+    CHECK(same_result(no_op, RESULT_OK), "modo 1: ACK abandon válido deveria ser no-op OK");
+    CHECK(
+        g_call_count == 0u, "modo 1: ACK abandon válido chamou backend (%u vez(es))", g_call_count
+    );
+
+    ipc_destroy(context);
+    expect_clean("ack abandon modo 1");
 }
 
 /** @brief Status, errno e dados de saída atravessam a fachada sem alteração. */
@@ -987,7 +1029,8 @@ static void test_null_context_is_rejected(void) {
     expect_clean("contexto nulo");
 }
 
-/** @brief Argumentos inválidos de ipc_init() seguem o contrato: erro, *out intacto, sem efeitos. */
+/** @brief Argumentos inválidos de ipc_init() seguem o contrato: erro, *out
+ * intacto, sem efeitos. */
 static void test_init_rejects_invalid_arguments(void) {
     static const ipc_mode_t invalid_modes[] = {(ipc_mode_t)0,
         (ipc_mode_t)3,
@@ -1060,7 +1103,8 @@ static void test_init_rejects_invalid_arguments(void) {
     expect_clean("init inválido");
 }
 
-/** @brief ipc_init() bem-sucedido cria o backend do modo, uma única vez, e guarda p. */
+/** @brief ipc_init() bem-sucedido cria o backend do modo, uma única vez, e
+ * guarda p. */
 static void test_init_success_selects_backend(void) {
     static const size_t counts[] = {1u, 3u, 1024u, SIZE_MAX};
 
@@ -1109,7 +1153,8 @@ static void test_init_success_selects_backend(void) {
                 );
                 CHECK(
                     g_calls[0].reporter == NULL,
-                    "%s: o reporter do backend shm deveria ser NULL (a fachada ainda não o "
+                    "%s: o reporter do backend shm deveria ser NULL (a fachada ainda "
+                    "não o "
                     "repassa)",
                     mode_name(mode)
                 );
@@ -1137,7 +1182,8 @@ static void test_init_success_selects_backend(void) {
     }
 }
 
-/** @brief Falha de alocação em ipc_init(): erro preservado, *out nulo, backend não criado. */
+/** @brief Falha de alocação em ipc_init(): erro preservado, *out nulo, backend
+ * não criado. */
 static void test_init_allocation_failure(void) {
     static const int errors[] = {ENOMEM, EAGAIN};
 
@@ -1171,9 +1217,9 @@ static void test_init_allocation_failure(void) {
 }
 
 /**
- * @brief Falha de criação do backend: resultado repassado sem alteração, *out nulo,
- * alocação da fachada liberada e nenhuma rotina de remoção chamada (o rollback pertence
- * ao backend, conforme transport.h).
+ * @brief Falha de criação do backend: resultado repassado sem alteração, *out
+ * nulo, alocação da fachada liberada e nenhuma rotina de remoção chamada (o
+ * rollback pertence ao backend, conforme transport.h).
  */
 static void test_init_backend_failure_rolls_back(void) {
 
@@ -1208,7 +1254,8 @@ static void test_init_backend_failure_rolls_back(void) {
                 );
                 CHECK(
                     g_call_count == 1u,
-                    "%s, falha %d: %u chamada(s) ao backend; nenhuma remoção deve ser chamada após "
+                    "%s, falha %d: %u chamada(s) ao backend; nenhuma remoção deve "
+                    "ser chamada após "
                     "falha de criação",
                     mode_name(mode),
                     (int)k_results[r].status,
@@ -1224,7 +1271,8 @@ static void test_init_backend_failure_rolls_back(void) {
                 }
                 CHECK(
                     g_calloc_calls == 1u && g_free_calls == 1u,
-                    "%s, falha %d: calloc=%u free=%u (a fachada deve liberar a própria alocação "
+                    "%s, falha %d: calloc=%u free=%u (a fachada deve liberar a "
+                    "própria alocação "
                     "uma vez)",
                     mode_name(mode),
                     (int)k_results[r].status,
@@ -1238,8 +1286,8 @@ static void test_init_backend_failure_rolls_back(void) {
 }
 
 /**
- * @brief ipc_worker_close() chama só a rotina de fechamento local do backend, antes de
- * liberar o contexto, e nunca a de remoção de recursos globais.
+ * @brief ipc_worker_close() chama só a rotina de fechamento local do backend,
+ * antes de liberar o contexto, e nunca a de remoção de recursos globais.
  */
 static void test_worker_close_is_local_only(void) {
     for (size_t m = 0; m < sizeof k_modes / sizeof k_modes[0]; ++m) {
@@ -1262,7 +1310,8 @@ static void test_worker_close_is_local_only(void) {
                 CHECK(
                     g_calls[0].kind
                         == (mode == IPC_MESSAGE_QUEUE ? CALL_MSG_CLOSE : CALL_SHM_CLOSE),
-                    "%s: ipc_worker_close() não chamou o fechamento local do backend (rotina %d)",
+                    "%s: ipc_worker_close() não chamou o fechamento local do backend "
+                    "(rotina %d)",
                     mode_name(mode),
                     (int)g_calls[0].kind
                 );
@@ -1300,8 +1349,8 @@ static void test_worker_close_is_local_only(void) {
 }
 
 /**
- * @brief ipc_destroy() chama só a rotina de remoção do backend, antes de liberar o
- * contexto, e nunca o fechamento local do filho.
+ * @brief ipc_destroy() chama só a rotina de remoção do backend, antes de
+ * liberar o contexto, e nunca o fechamento local do filho.
  */
 static void test_destroy_removes_global_resources(void) {
     for (size_t m = 0; m < sizeof k_modes / sizeof k_modes[0]; ++m) {
@@ -1361,7 +1410,8 @@ static void test_destroy_removes_global_resources(void) {
     }
 }
 
-/** @brief Dois contextos de modos diferentes convivem sem estado global compartilhado. */
+/** @brief Dois contextos de modos diferentes convivem sem estado global
+ * compartilhado. */
 static void test_contexts_of_both_modes_coexist(void) {
     reset_state();
     ipc_context_t *shared = make_context(IPC_SHARED_MEMORY, 2u);
@@ -1410,6 +1460,7 @@ int main(void) {
     test_instrumentation_works();
     test_dispatch_goes_to_selected_backend();
     test_poll_events_is_noop_in_shared_memory_mode();
+    test_ack_abandon_shared_memory_validation();
     test_results_and_outputs_are_forwarded();
     test_null_context_is_rejected();
     test_init_rejects_invalid_arguments();
