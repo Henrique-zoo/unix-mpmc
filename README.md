@@ -11,7 +11,7 @@
 > estão implementados. O backend SHM já contém ciclo de vida, semáforos, envio, recebimento,
 > contagens sincronizadas e o mecanismo interno de registro, correlação e espera de ACK por
 > operação. Os núcleos produtor e consumidor e o roteamento striped também existem;
-> a notificação automática de consumo no recebimento SHM e a execução integrada dos workers
+> a execução integrada dos workers
 > pelo supervisor continuam pendentes. Os comandos `produz` e `consome` são despachados para
 > filhos, mas esses filhos
 > informam que a execução do trabalho ainda não está disponível. Os exemplos de produção/consumo
@@ -328,7 +328,7 @@ Consumo usa `[P(full), P(mutex)] → retirar e contar → [V(mutex), V(empty)]`.
 Cada par entre colchetes é um vetor atômico de `semop()`; a alteração do buffer
 fica entre duas chamadas e não é desfeita se a publicação final falhar.
 A recepção com `blocking=false` não espera itens futuros, mas ainda pode aguardar
-o mutex. O backend SHM já implementa o registro e a espera de ACK por operação; a notificação automática a partir de `shm_backend_receive()` permanece pendente de integração na #11.
+o mutex. O backend SHM já implementa o registro e a espera de ACK por operação; o recebimento já confirma o consumo com uma notificação final por lote.
 **Nenhuma operação bloqueante deve manter `mutex` adquirido.** Tratamento de erros deve
 preservar os invariantes ao cancelar operações parcialmente iniciadas.
 
@@ -426,7 +426,7 @@ a integração do REPL por pipes/FIFOs e o teste de redesenho do prompt com pseu
 A suíte de dados SHM também cobre FIFO, metadados, contagens, esperas interrompidas
 e dois produtores/consumidores concorrentes com IPC real. Os testes do ciclo de vida
 injetam falhas na criação/inicialização dos conjuntos e na liberação dos recursos.
-A execução dos workers pela aplicação e a integração do ACK ao recebimento SHM permanecem pendentes; esses cenários ainda não comprovam toda a aplicação.
+A execução dos workers pela aplicação permanece pendente; esses cenários ainda não comprovam toda a aplicação.
 
 <a id="documentação-doxygen"></a>
 

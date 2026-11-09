@@ -139,7 +139,10 @@ mpmc_result_t shm_backend_receive(
         },
     };
 
-    return sysv_sem_apply(segment->semid, release, 2);
+    result = sysv_sem_apply(segment->semid, release, 2);
+    if (result.status != MPMC_OK) return result;
+
+    return shm_backend_ack_notify_consumed(backend, producer_id, out);
 }
 
 /**

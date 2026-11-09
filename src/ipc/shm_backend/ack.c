@@ -1,14 +1,11 @@
 /**
  * @file ack.c
- * @brief Registro compartilhado e sincronização das confirmações do backend SHM.
+ * @brief Conclusão de lotes por contador compartilhado e notificação final.
  * @ingroup backends
- *
- * @details A tabela e os bitmaps ficam em segmentos System V próprios, separados
- * dos buffers circulares. Um mutex global protege os registros e os bitmaps;
- * cada operação possui um semáforo contador para conservar notificações anteriores
- * à espera do produtor.
+ * @details Um mutex protege a tabela. Cada posição tem um semáforo de
+ * conclusão, incrementado somente quando remaining passa de um para zero.
+ * @see shm_backend.h para os contratos públicos.
  */
-
 #include <string.h>
 #include <sys/sem.h>
 #include <unistd.h>
@@ -17,547 +14,235 @@
 #include "mpmc/ipc/shm.h"
 #include "shm_backend_internal.h"
 
-/** @brief Identificador do layout privado da tabela de ACK. */
-#define SHM_ACK_CONTROL_MAGIC UINT32_C(0x53484D41)
+static constexpr uint32_t SHM_ACK_CONTROL_MAGIC = UINT32_C(0x53484D41);
 
-/** @brief Versão do layout privado da tabela de ACK. */
-#define SHM_ACK_CONTROL_VERSION 2U
-
-/**
- * @brief Preserva o primeiro erro de uma sequência de operações.
- * @param first Resultado agregado, atualizado somente no primeiro erro.
- * @param current Resultado da operação atual.
- */
-static void ack_keep_first(mpmc_result_t *first, mpmc_result_t current) {
-    if (first->status == MPMC_OK && current.status != MPMC_OK) {
-        *first = current;
-    }
-}
+static void ack_keep_first(mpmc_result_t *first, mpmc_result_t current);
+static mpmc_result_t ack_validate_backend(const shm_backend_t *backend);
+static mpmc_result_t ack_lock(shm_backend_t *backend);
+static mpmc_result_t ack_unlock(shm_backend_t *backend);
+static mpmc_result_t ack_unlock_preserving(shm_backend_t *backend, mpmc_result_t first);
+static size_t ack_find_operation(const shm_backend_t *backend, uint64_t operation_id);
+static mpmc_result_t ack_drain_notification(shm_backend_t *backend, size_t slot);
+static mpmc_result_t ack_finish_wait(
+    shm_backend_t *backend,
+    uint64_t operation_id,
+    mpmc_result_t first
+);
 
 /**
- * @brief Valida os mapeamentos e o conjunto de semáforos do backend.
- * @param backend Instância a validar.
- * @return MPMC_OK quando todos os recursos estão associados e inicializados.
- */
-static mpmc_result_t ack_validate_backend(const shm_backend_t *backend) {
-    if (backend == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-    }
-
-    if (backend->ack_control == NULL || backend->ack_semid < 0
-        || backend->ack_control->magic != SHM_ACK_CONTROL_MAGIC
-        || backend->ack_control->version != SHM_ACK_CONTROL_VERSION) {
-        return (mpmc_result_t){.status = MPMC_ERR_STATE};
-    }
-
-    for (size_t index = 0; index < SHM_ACK_BITMAP_SEGMENT_COUNT; index++) {
-        if (backend->ack_bitmap_segments[index] == NULL) {
-            return (mpmc_result_t){.status = MPMC_ERR_STATE};
-        }
-    }
-
-    return (mpmc_result_t){.status = MPMC_OK};
-}
-
-/**
- * @brief Adquire o mutex global da tabela ACK.
- * @param backend Backend validado.
- */
-static mpmc_result_t ack_lock(shm_backend_t *backend) {
-    return sysv_sem_change(backend->ack_semid, SHM_ACK_SEM_MUTEX, -1, false);
-}
-
-/**
- * @brief Libera o mutex global da tabela ACK.
- * @param backend Backend validado.
- */
-static mpmc_result_t ack_unlock(shm_backend_t *backend) {
-    return sysv_sem_change(backend->ack_semid, SHM_ACK_SEM_MUTEX, 1, false);
-}
-
-/**
- * @brief Libera o mutex e prioriza falhas nessa operação.
- * @param backend Backend validado.
- * @param first Resultado da operação anterior.
- * @return Erro de liberação, se houver; caso contrário, o resultado anterior.
- */
-static mpmc_result_t ack_unlock_preserving(shm_backend_t *backend, mpmc_result_t first) {
-    mpmc_result_t unlock_result = ack_unlock(backend);
-    if (unlock_result.status != MPMC_OK) {
-        /*
-         * semop() não aplica operações parcialmente quando falha.
-         * Uma segunda tentativa recupera falhas transitórias de liberação.
-         */
-        mpmc_result_t retry_result = ack_unlock(backend);
-        return retry_result.status != MPMC_OK ? retry_result : unlock_result;
-    }
-
-    return first;
-}
-
-/**
- * @brief Localiza o registro associado a um operation_id.
- * @param backend Backend com o mutex adquirido.
- * @param operation_id Identificador procurado.
- * @return Índice do registro ou SHM_ACK_OPERATION_CAPACITY se não encontrado.
- */
-static size_t ack_find_operation(const shm_backend_t *backend, uint64_t operation_id) {
-    for (size_t index = 0; index < SHM_ACK_OPERATION_CAPACITY; index++) {
-        if (backend->ack_control->records[index].operation_id == operation_id) {
-            return index;
-        }
-    }
-
-    return SHM_ACK_OPERATION_CAPACITY;
-}
-
-/**
- * @brief Obtém o bitmap de uma posição da tabela.
- * @param backend Backend associado.
- * @param slot Índice do registro.
- * @return Ponteiro para os bytes do bitmap ou NULL se o índice for inválido.
- */
-static uint8_t *ack_bitmap_for(shm_backend_t *backend, size_t slot) {
-    if (slot >= SHM_ACK_OPERATION_CAPACITY) {
-        return NULL;
-    }
-
-    size_t segment_index = slot / SHM_ACK_BITMAPS_PER_SEGMENT;
-    size_t bitmap_index = slot % SHM_ACK_BITMAPS_PER_SEGMENT;
-
-    if (backend->ack_bitmap_segments[segment_index] == NULL) {
-        return NULL;
-    }
-
-    return backend->ack_bitmap_segments[segment_index]->bits[bitmap_index];
-}
-
-/**
- * @brief Descarta notificações pendentes de uma posição.
- * @details Deve ser chamada com o mutex global adquirido. A operação não bloqueia:
- * encerra quando o semáforo contador estiver vazio.
- */
-static mpmc_result_t ack_drain_notifications(shm_backend_t *backend, size_t slot) {
-    unsigned semaphore_index = SHM_ACK_SEM_NOTIFICATION_BASE + (unsigned)slot;
-
-    for (;;) {
-        mpmc_result_t result = sysv_sem_change(backend->ack_semid, semaphore_index, -1, true);
-
-        if (result.status == MPMC_ERR_WOULD_BLOCK) {
-            return (mpmc_result_t){.status = MPMC_OK};
-        }
-
-        if (result.status != MPMC_OK) {
-            return result;
-        }
-    }
-}
-
-/**
- * @brief Cria e inicializa os recursos globais de controle ACK.
- * @details Cada segmento de controle e bitmap possui exatamente 2048 bytes.
- * O conjunto de semáforos contém um mutex e um contador por registro.
- *
- * @note Em caso de falha, os identificadores e associações já obtidos permanecem
- * registrados em backend para que shm_backend_ack_resources_cleanup() execute
- * o rollback de todos os recursos parcialmente criados.
+ * @details Identificadores parciais permanecem no backend para o rollback
+ * de lifecycle.c. A tabela usa um segmento; não existem segmentos de bitmap.
  */
 mpmc_result_t shm_backend_ack_resources_create(shm_backend_t *backend) {
-    if (backend == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-    }
+    if (backend == nullptr) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 
-    if (backend->ack_control_shmid >= 0 || backend->ack_control != NULL
+    if (backend->ack_control_shmid >= 0 || backend->ack_control != nullptr
         || backend->ack_semid >= 0) {
         return (mpmc_result_t){.status = MPMC_ERR_STATE};
     }
 
-    for (size_t index = 0; index < SHM_ACK_BITMAP_SEGMENT_COUNT; index++) {
-        if (backend->ack_bitmap_shmids[index] >= 0 || backend->ack_bitmap_segments[index] != NULL) {
-            return (mpmc_result_t){.status = MPMC_ERR_STATE};
-        }
-    }
-
     mpmc_result_t result = sysv_shm_create(MPMC_SHM_SEGMENT_BYTES, &backend->ack_control_shmid);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
+    if (result.status != MPMC_OK) return result;
 
-    void *address = NULL;
+    void *address = nullptr;
+
     result = sysv_shm_attach(backend->ack_control_shmid, &address);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
+    if (result.status != MPMC_OK) return result;
 
     backend->ack_control = address;
-    memset(backend->ack_control, 0, MPMC_SHM_SEGMENT_BYTES);
+    memset(address, 0, MPMC_SHM_SEGMENT_BYTES);
     backend->ack_control->magic = SHM_ACK_CONTROL_MAGIC;
-    backend->ack_control->version = SHM_ACK_CONTROL_VERSION;
-
-    for (size_t index = 0; index < SHM_ACK_BITMAP_SEGMENT_COUNT; index++) {
-        result = sysv_shm_create(MPMC_SHM_SEGMENT_BYTES, &backend->ack_bitmap_shmids[index]);
-        if (result.status != MPMC_OK) {
-            return result;
-        }
-
-        address = NULL;
-        result = sysv_shm_attach(backend->ack_bitmap_shmids[index], &address);
-        if (result.status != MPMC_OK) {
-            return result;
-        }
-
-        backend->ack_bitmap_segments[index] = address;
-        memset(address, 0, MPMC_SHM_SEGMENT_BYTES);
-    }
 
     result = sysv_sem_create(SHM_ACK_SEM_COUNT, &backend->ack_semid);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
+    if (result.status != MPMC_OK) return result;
 
     result = sysv_sem_set(backend->ack_semid, SHM_ACK_SEM_MUTEX, 1);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
+    if (result.status != MPMC_OK) return result;
 
-    for (unsigned index = 0; index < SHM_ACK_OPERATION_CAPACITY; index++) {
+    for (unsigned index = 0; index < SHM_ACK_OPERATION_CAPACITY; ++index) {
         result = sysv_sem_set(backend->ack_semid, SHM_ACK_SEM_NOTIFICATION_BASE + index, 0);
-        if (result.status != MPMC_OK) {
-            return result;
-        }
+        if (result.status != MPMC_OK) return result;
     }
 
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
-/**
- * @brief Desassocia e, quando solicitado, remove os recursos globais de ACK.
- * @details Tenta todas as operações, mesmo após uma falha, e retorna a primeira.
- * Recursos parcialmente inicializados são aceitos.
- */
+/** @details Visita todos os recursos adquiridos e preserva o primeiro erro. */
 mpmc_result_t shm_backend_ack_resources_cleanup(shm_backend_t *backend, bool remove_global) {
-    if (backend == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-    }
+    if (backend == nullptr) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 
     mpmc_result_t result = {.status = MPMC_OK};
 
-    if (backend->ack_control != NULL) {
+    if (backend->ack_control != nullptr) {
         mpmc_result_t current = sysv_shm_detach(backend->ack_control);
-        ack_keep_first(&result, current);
-        if (current.status == MPMC_OK) {
-            backend->ack_control = NULL;
-        }
-    }
 
-    for (size_t index = 0; index < SHM_ACK_BITMAP_SEGMENT_COUNT; index++) {
-        if (backend->ack_bitmap_segments[index] != NULL) {
-            mpmc_result_t current = sysv_shm_detach(backend->ack_bitmap_segments[index]);
-            ack_keep_first(&result, current);
-            if (current.status == MPMC_OK) {
-                backend->ack_bitmap_segments[index] = NULL;
-            }
-        }
+        ack_keep_first(&result, current);
+
+        if (current.status == MPMC_OK) backend->ack_control = nullptr;
     }
 
     if (remove_global && backend->ack_semid >= 0) {
         mpmc_result_t current = sysv_sem_remove(backend->ack_semid);
+
         ack_keep_first(&result, current);
-        if (current.status == MPMC_OK) {
-            backend->ack_semid = -1;
-        }
+
+        if (current.status == MPMC_OK) backend->ack_semid = -1;
     }
 
     if (remove_global && backend->ack_control_shmid >= 0) {
         mpmc_result_t current = sysv_shm_remove(backend->ack_control_shmid);
-        ack_keep_first(&result, current);
-        if (current.status == MPMC_OK) {
-            backend->ack_control_shmid = -1;
-        }
-    }
 
-    if (remove_global) {
-        for (size_t index = 0; index < SHM_ACK_BITMAP_SEGMENT_COUNT; index++) {
-            if (backend->ack_bitmap_shmids[index] >= 0) {
-                mpmc_result_t current = sysv_shm_remove(backend->ack_bitmap_shmids[index]);
-                ack_keep_first(&result, current);
-                if (current.status == MPMC_OK) {
-                    backend->ack_bitmap_shmids[index] = -1;
-                }
-            }
-        }
+        ack_keep_first(&result, current);
+
+        if (current.status == MPMC_OK) backend->ack_control_shmid = -1;
     }
 
     return result;
 }
 
 /**
- * @brief Registra uma operação produtora na tabela compartilhada.
- * @details O slot só é publicado depois de limpar o bitmap e o contador de
- * notificações que possam ter permanecido de uma utilização anterior.
+ * @details Drena a eventual notificação final anterior antes de publicar
+ * a nova identidade. Uma posição livre não possui waiter nem notificador ativo.
  */
 mpmc_result_t shm_backend_ack_begin(
     shm_backend_t *backend,
     uint64_t operation_id,
     unsigned expected
 ) {
-    if (backend == NULL || operation_id == 0 || expected == 0 || expected > MPMC_MAX_MESSAGES) {
+    if (backend == nullptr || operation_id == 0 || expected == 0 || expected > MPMC_MAX_MESSAGES) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
     mpmc_result_t result = ack_validate_backend(backend);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
+    if (result.status != MPMC_OK) return result;
 
     result = ack_lock(backend);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
+    if (result.status != MPMC_OK) return result;
 
     size_t free_slot = SHM_ACK_OPERATION_CAPACITY;
 
-    for (size_t index = 0; index < SHM_ACK_OPERATION_CAPACITY; index++) {
-        uint64_t registered_id = backend->ack_control->records[index].operation_id;
+    for (size_t index = 0; index < SHM_ACK_OPERATION_CAPACITY; ++index) {
+        uint64_t registered = backend->ack_control->records[index].operation_id;
 
-        if (registered_id == operation_id) {
+        if (registered == operation_id) {
             return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
         }
 
-        if (registered_id == 0 && free_slot == SHM_ACK_OPERATION_CAPACITY) {
-            free_slot = index;
-        }
+        if (registered == 0 && free_slot == SHM_ACK_OPERATION_CAPACITY) free_slot = index;
     }
 
     if (free_slot == SHM_ACK_OPERATION_CAPACITY) {
         return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_NO_SPACE});
     }
 
-    result = ack_drain_notifications(backend, free_slot);
-    if (result.status != MPMC_OK) {
-        return ack_unlock_preserving(backend, result);
-    }
+    result = ack_drain_notification(backend, free_slot);
+    if (result.status != MPMC_OK) return ack_unlock_preserving(backend, result);
 
-    uint8_t *bitmap = ack_bitmap_for(backend, free_slot);
-    if (bitmap == NULL) {
-        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
-    }
+    shm_ack_record_t *record = &backend->ack_control->records[free_slot];
 
-    memset(bitmap, 0, SHM_ACK_BITMAP_BYTES);
-    backend->ack_control->records[free_slot] = (shm_ack_record_t){
+    *record = (shm_ack_record_t){
         .operation_id = operation_id,
         .producer_pid = getpid(),
-        .expected = (uint16_t)expected,
-        .received = 0,
-        .waiters = 0,
+        .remaining = (uint16_t)expected,
     };
 
     result = ack_unlock(backend);
+
     if (result.status != MPMC_OK) {
-        backend->ack_control->records[free_slot] = (shm_ack_record_t){0};
-        memset(bitmap, 0, SHM_ACK_BITMAP_BYTES);
+        /* A liberação falhou atomicamente: o mutex continua adquirido. */
+        *record = (shm_ack_record_t){};
         return ack_unlock_preserving(backend, result);
-    }
-
-    return (mpmc_result_t){.status = MPMC_OK};
-}
-
-/**
- * @brief Libera o registro de waiter de uma operação.
- * @details Deve ser chamada quando a espera termina com erro, depois de
- * recuperar o mutex global.
- */
-static mpmc_result_t ack_waiter_release(
-    shm_backend_t *backend,
-    uint64_t operation_id,
-    mpmc_result_t first
-) {
-    /*
-     * A interrupção de semop() não adquire o mutex.
-     * Repetimos a aquisição para garantir a limpeza do waiter.
-     */
-    mpmc_result_t result;
-
-    do {
-        result = ack_lock(backend);
-    } while (result.status == MPMC_ERR_INTERRUPTED);
-
-    if (result.status != MPMC_OK) {
-        return result;
-    }
-
-    size_t slot = ack_find_operation(backend, operation_id);
-    if (slot == SHM_ACK_OPERATION_CAPACITY) {
-        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
-    }
-
-    shm_ack_record_t *record = &backend->ack_control->records[slot];
-    if (record->waiters != 1U) {
-        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
-    }
-
-    record->waiters = 0;
-
-    return ack_unlock_preserving(backend, first);
-}
-
-/**
- * @brief Aguarda as confirmações de uma operação registrada.
- * @details Apenas um processo pode aguardar cada operação. O registro
- * permanece protegido contra reutilização durante toda a espera.
- */
-mpmc_result_t shm_backend_ack_wait(shm_backend_t *backend, uint64_t operation_id) {
-    if (backend == NULL || operation_id == 0) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-    }
-
-    mpmc_result_t result = ack_validate_backend(backend);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
-
-    result = ack_lock(backend);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
-
-    size_t slot = ack_find_operation(backend, operation_id);
-    if (slot == SHM_ACK_OPERATION_CAPACITY) {
-        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
-    }
-
-    shm_ack_record_t *record = &backend->ack_control->records[slot];
-
-    if (record->waiters != 0U) {
-        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
-    }
-
-    record->waiters = 1U;
-
-    result = ack_unlock(backend);
-    if (result.status != MPMC_OK) {
-        /*
-         * semop() é atômico: como o incremento falhou, ainda possuímos
-         * o mutex e podemos desfazer o registro do waiter com segurança.
-         */
-        record->waiters = 0U;
-
-        mpmc_result_t retry_result = ack_unlock(backend);
-        return retry_result.status != MPMC_OK ? retry_result : result;
-    }
-
-    unsigned notification_index = SHM_ACK_SEM_NOTIFICATION_BASE + (unsigned)slot;
-
-    for (;;) {
-        result = ack_lock(backend);
-        if (result.status != MPMC_OK) {
-            return ack_waiter_release(backend, operation_id, result);
-        }
-
-        slot = ack_find_operation(backend, operation_id);
-        if (slot == SHM_ACK_OPERATION_CAPACITY) {
-            return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
-        }
-
-        record = &backend->ack_control->records[slot];
-
-        if (record->received >= record->expected) {
-            record->waiters = 0U;
-
-            result = ack_unlock(backend);
-            if (result.status != MPMC_OK) {
-                mpmc_result_t retry_result = ack_unlock(backend);
-                return retry_result.status != MPMC_OK ? retry_result : result;
-            }
-
-            return result;
-        }
-
-        result = ack_unlock(backend);
-        if (result.status != MPMC_OK) {
-            /*
-             * A liberação falhou e o mutex continua adquirido.
-             * Retiramos o waiter antes de tentar liberar novamente.
-             */
-            record->waiters = 0U;
-
-            mpmc_result_t retry_result = ack_unlock(backend);
-            return retry_result.status != MPMC_OK ? retry_result : result;
-        }
-
-        result = sysv_sem_change(backend->ack_semid, notification_index, -1, false);
-        if (result.status != MPMC_OK) {
-            return ack_waiter_release(backend, operation_id, result);
-        }
-    }
-}
-
-/**
- * @brief Encerra uma operação e libera seu registro para reutilização.
- * @details Operações desconhecidas já estão encerradas e retornam sucesso.
- */
-mpmc_result_t shm_backend_ack_end(shm_backend_t *backend, uint64_t operation_id) {
-    if (backend == NULL || operation_id == 0) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-    }
-
-    mpmc_result_t result = ack_validate_backend(backend);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
-
-    result = ack_lock(backend);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
-
-    size_t slot = ack_find_operation(backend, operation_id);
-    if (slot == SHM_ACK_OPERATION_CAPACITY) {
-        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_OK});
-    }
-
-    if (backend->ack_control->records[slot].waiters != 0U) {
-        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
-    }
-
-    uint8_t *bitmap = ack_bitmap_for(backend, slot);
-    if (bitmap == NULL) {
-        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
-    }
-
-    memset(bitmap, 0, SHM_ACK_BITMAP_BYTES);
-    backend->ack_control->records[slot] = (shm_ack_record_t){0};
-
-    result = ack_unlock(backend);
-    if (result.status != MPMC_OK) {
-        /*
-         * A falha de semop() não aplicou a liberação do mutex. O registro
-         * permanece encerrado; tentamos liberar o mutex mais uma vez para
-         * evitar deixar a posição ocupada após uma falha transitória.
-         */
-        mpmc_result_t retry_result = ack_unlock(backend);
-        return retry_result.status != MPMC_OK ? retry_result : result;
     }
 
     return result;
 }
 
 /**
- * @brief Conta uma confirmação válida de mensagem efetivamente consumida.
- * @param backend Backend compartilhado.
- * @param producer_id Estrutura lógica na qual a mensagem foi consumida.
- * @param message Mensagem retirada do buffer.
- *
- * @details Confirmações desconhecidas, duplicadas ou incompatíveis com o PID e
- * intervalo de sequências da operação são ignoradas. A notificação e a liberação
- * do mutex são publicadas no mesmo vetor atômico de semop().
+ * @details Registra o waiter antes de liberar o mutex. O token final permanece
+ * no kernel se o último consumo ocorrer antes da chamada bloqueante.
+ */
+mpmc_result_t shm_backend_ack_wait(shm_backend_t *backend, uint64_t operation_id) {
+    if (backend == nullptr || operation_id == 0) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    }
+
+    mpmc_result_t result = ack_validate_backend(backend);
+    if (result.status != MPMC_OK) return result;
+
+    result = ack_lock(backend);
+    if (result.status != MPMC_OK) return result;
+
+    size_t slot = ack_find_operation(backend, operation_id);
+
+    if (slot == SHM_ACK_OPERATION_CAPACITY) {
+        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
+    }
+
+    shm_ack_record_t *record = &backend->ack_control->records[slot];
+
+    if (record->waiting) {
+        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
+    }
+
+    if (record->remaining == 0) {
+        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_OK});
+    }
+
+    record->waiting = true;
+    result = ack_unlock(backend);
+
+    if (result.status != MPMC_OK) {
+        record->waiting = false;
+        return ack_unlock_preserving(backend, result);
+    }
+
+    result = sysv_sem_change(
+        backend->ack_semid, SHM_ACK_SEM_NOTIFICATION_BASE + (unsigned)slot, -1, false
+    );
+
+    return ack_finish_wait(backend, operation_id, result);
+}
+
+/** @details A posição só pode ser liberada quando não existe waiter ativo. */
+mpmc_result_t shm_backend_ack_end(shm_backend_t *backend, uint64_t operation_id) {
+    if (backend == nullptr || operation_id == 0) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    }
+
+    mpmc_result_t result = ack_validate_backend(backend);
+    if (result.status != MPMC_OK) return result;
+
+    result = ack_lock(backend);
+    if (result.status != MPMC_OK) return result;
+
+    size_t slot = ack_find_operation(backend, operation_id);
+
+    if (slot == SHM_ACK_OPERATION_CAPACITY) {
+        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_OK});
+    }
+
+    shm_ack_record_t *record = &backend->ack_control->records[slot];
+
+    if (record->waiting) {
+        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
+    }
+
+    *record = (shm_ack_record_t){};
+
+    return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_OK});
+}
+
+/**
+ * @details A função é chamada uma vez por retirada efetiva. Decrementa o lote
+ * sob mutex; apenas a transição para zero publica uma notificação. Se semop()
+ * falhar, restaura o contador antes de tentar liberar o mutex ainda adquirido.
  */
 mpmc_result_t shm_backend_ack_notify_consumed(
     shm_backend_t *backend,
     size_t producer_id,
     const message_t *message
 ) {
-    if (backend == NULL || message == NULL) {
+    if (backend == nullptr || message == nullptr) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
@@ -565,68 +250,151 @@ mpmc_result_t shm_backend_ack_notify_consumed(
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX};
     }
 
-    if (message->operation_id == 0) {
-        return (mpmc_result_t){.status = MPMC_OK};
-    }
+    if (message->operation_id == 0) return (mpmc_result_t){.status = MPMC_OK};
 
     mpmc_result_t result = ack_validate_backend(backend);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
+    if (result.status != MPMC_OK) return result;
 
     result = ack_lock(backend);
-    if (result.status != MPMC_OK) {
-        return result;
-    }
+    if (result.status != MPMC_OK) return result;
 
     size_t slot = ack_find_operation(backend, message->operation_id);
+
     if (slot == SHM_ACK_OPERATION_CAPACITY) {
         return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_OK});
     }
 
     shm_ack_record_t *record = &backend->ack_control->records[slot];
 
-    if (message->sender_pid != record->producer_pid || message->sequence == 0
-        || message->sequence > record->expected || record->received >= record->expected) {
+    if (record->producer_pid != message->sender_pid || record->remaining == 0) {
         return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_OK});
     }
 
-    uint8_t *bitmap = ack_bitmap_for(backend, slot);
-    if (bitmap == NULL) {
-        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
+    --record->remaining;
+
+    if (record->remaining != 0) {
+        result = ack_unlock(backend);
+    } else {
+        struct sembuf release[] = {
+            {
+                .sem_num = (unsigned short)(SHM_ACK_SEM_NOTIFICATION_BASE + slot),
+                .sem_op = 1,
+            },
+            {
+                .sem_num = SHM_ACK_SEM_MUTEX,
+                .sem_op = 1,
+            },
+        };
+
+        result = sysv_sem_apply(backend->ack_semid, release, 2);
     }
 
-    uint32_t bit_index = message->sequence - 1U;
-    size_t byte_index = bit_index / 8U;
-    uint8_t bit_mask = (uint8_t)(1U << (bit_index % 8U));
-
-    if ((bitmap[byte_index] & bit_mask) != 0) {
-        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_OK});
-    }
-
-    bitmap[byte_index] |= bit_mask;
-    record->received++;
-
-    struct sembuf release[] = {
-        {
-            .sem_num = (unsigned short)(SHM_ACK_SEM_NOTIFICATION_BASE + slot),
-            .sem_op = 1,
-            .sem_flg = 0,
-        },
-        {
-            .sem_num = SHM_ACK_SEM_MUTEX,
-            .sem_op = 1,
-            .sem_flg = 0,
-        },
-    };
-
-    result = sysv_sem_apply(backend->ack_semid, release, 2);
     if (result.status != MPMC_OK) {
-        bitmap[byte_index] &= (uint8_t)~bit_mask;
-        record->received--;
-
+        ++record->remaining;
         return ack_unlock_preserving(backend, result);
     }
 
+    return result;
+}
+
+/** @brief Preserva o primeiro erro durante a visita aos recursos de cleanup. */
+static void ack_keep_first(mpmc_result_t *first, mpmc_result_t current) {
+    if (first->status == MPMC_OK) *first = current;
+}
+
+/** @brief Confere o mapeamento local e a versão do layout compartilhado. */
+static mpmc_result_t ack_validate_backend(const shm_backend_t *backend) {
+    if (backend->ack_control == nullptr || backend->ack_semid < 0
+        || backend->ack_control->magic != SHM_ACK_CONTROL_MAGIC) {
+        return (mpmc_result_t){.status = MPMC_ERR_STATE};
+    }
+
     return (mpmc_result_t){.status = MPMC_OK};
+}
+
+/** @brief Adquire o mutex global; não repete interrupções da operação normal. */
+static mpmc_result_t ack_lock(shm_backend_t *backend) {
+    return sysv_sem_change(backend->ack_semid, SHM_ACK_SEM_MUTEX, -1, false);
+}
+
+/** @brief Libera o mutex global em uma operação atômica do kernel. */
+static mpmc_result_t ack_unlock(shm_backend_t *backend) {
+    return sysv_sem_change(backend->ack_semid, SHM_ACK_SEM_MUTEX, 1, false);
+}
+
+/**
+ * @brief Libera o mutex e prioriza falhas de liberação.
+ * @details Uma falha não aplica o incremento. Tenta novamente uma vez;
+ * preserva a falha original de liberação se a segunda tentativa concluir.
+ */
+static mpmc_result_t ack_unlock_preserving(shm_backend_t *backend, mpmc_result_t first) {
+    mpmc_result_t result = ack_unlock(backend);
+    if (result.status == MPMC_OK) return first;
+
+    mpmc_result_t retry = ack_unlock(backend);
+
+    return retry.status == MPMC_OK ? result : retry;
+}
+
+/** @brief Procura uma identidade com o mutex adquirido; capacidade indica ausência. */
+static size_t ack_find_operation(const shm_backend_t *backend, uint64_t operation_id) {
+    for (size_t index = 0; index < SHM_ACK_OPERATION_CAPACITY; ++index) {
+        if (backend->ack_control->records[index].operation_id == operation_id) return index;
+    }
+
+    return SHM_ACK_OPERATION_CAPACITY;
+}
+
+/**
+ * @brief Descarta o eventual token final de uma utilização anterior.
+ * @pre Mutex adquirido e posição livre, sem waiter ativo.
+ * @details Pelo protocolo existe no máximo um token; ausência é sucesso.
+ */
+static mpmc_result_t ack_drain_notification(shm_backend_t *backend, size_t slot) {
+    mpmc_result_t result = sysv_sem_change(
+        backend->ack_semid, SHM_ACK_SEM_NOTIFICATION_BASE + (unsigned)slot, -1, true
+    );
+
+    if (result.status == MPMC_ERR_WOULD_BLOCK) return (mpmc_result_t){.status = MPMC_OK};
+
+    return result;
+}
+
+/**
+ * @brief Finaliza a indicação de espera e confere a conclusão do lote.
+ * @details Repete EINTR somente para adquirir o mutex necessário à limpeza.
+ * Falhas de recurso nessa recuperação são propagadas sem acessar o registro.
+ */
+static mpmc_result_t ack_finish_wait(
+    shm_backend_t *backend,
+    uint64_t operation_id,
+    mpmc_result_t first
+) {
+    mpmc_result_t result;
+
+    do {
+        result = ack_lock(backend);
+    } while (result.status == MPMC_ERR_INTERRUPTED);
+
+    if (result.status != MPMC_OK) return result;
+
+    size_t slot = ack_find_operation(backend, operation_id);
+
+    if (slot == SHM_ACK_OPERATION_CAPACITY) {
+        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
+    }
+
+    shm_ack_record_t *record = &backend->ack_control->records[slot];
+
+    if (!record->waiting) {
+        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
+    }
+
+    record->waiting = false;
+
+    if (first.status == MPMC_OK && record->remaining != 0) {
+        first = (mpmc_result_t){.status = MPMC_ERR_STATE};
+    }
+
+    return ack_unlock_preserving(backend, first);
 }

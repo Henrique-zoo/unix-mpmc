@@ -120,7 +120,7 @@ as operações locais do buffer, cujo layout e contratos privados ficam em
 Tipos que precisam ser conhecidos por vários arquivos de implementação devem
 ser definidos em um cabeçalho privado no mesmo diretório. `shm_ring_t` já segue
 essa organização. `shm_backend_internal.h` define `shm_segment_t`, os tipos de
-controle e bitmap de ACK e a representação completa de `struct shm_backend`,
+controle de ACK e a representação completa de `struct shm_backend`,
 incluindo os vetores locais de segmentos, os identificadores dos conjuntos e
 os índices MUTEX/EMPTY/FULL e ACK. `lifecycle.c`, `operations.c` e `ack.c`
 compartilham esses tipos. O layout e as operações do buffer continuam em
@@ -199,7 +199,7 @@ e do encerramento permanece na #20. Cada worker fecha seu estado local; somente 
 recolher todos os filhos o supervisor destrói os objetos globais. Não há tentativa
 de reparar contadores ou continuar usando o contexto após uma falha fatal.
 
-O módulo `ack.c` implementa o registro, a correlação por operação, a deduplicação por sequência, a espera e a finalização dos ACKs SHM. A auxiliar interna de notificação também está implementada, mas `shm_backend_receive()` ainda não a chama; essa integração permanece na #11. A implementação atual não mascara sinais
+O módulo `ack.c` implementa o registro, a correlação por operação, a espera e a finalização dos ACKs SHM. O recebimento confirma cada retirada e publica somente a conclusão final; não há bitmap nem deduplicação por sequência. A implementação atual não mascara sinais
 entre aquisição e publicação. Término de processo nesse intervalo também exige
 descartar o contexto; recuperá-lo para continuar outras operações está fora do
 contrato da #10. `worker_close` e `destroy` tratam backend nulo como operação vazia,
@@ -275,7 +275,7 @@ Consulte @ref ipc_protocol e @ref testing_plan.
 - #16: a fachada de transporte já despacha para os backends e seus contratos estão
   fixados em `transport.h` (#45). Falta propagar resultados e diagnósticos de cleanup
   em `ipc_worker_close`/`ipc_destroy` e completar a integração da aplicação. Os dados
-  e as contagens do modo 1 já são exercitados com IPC real; o mecanismo interno de registro e espera de ACK SHM já está implementado; falta integrar a notificação ao recebimento real na #11.
+  e as contagens do modo 1 já são exercitados com IPC real; o ACK SHM já é emitido no recebimento real, com testes de lotes concorrentes e striped.
 - #17: o núcleo de producer_run() e o roteamento já existem e possuem testes com
   transporte substituto. Falta ligar a chamada ao ponto de entrada do filho no supervisor
   e comprovar a execução integrada, incluindo os ACKs reais dos dois backends.

@@ -21,7 +21,7 @@
         }                                                                                          \
     } while (0)
 
-#define SHM_COUNT (SHM_ACK_BITMAP_SEGMENT_COUNT + 1U)
+#define SHM_COUNT 1
 
 static unsigned checks;
 static unsigned failures;
@@ -44,7 +44,7 @@ static bool shm_attached[SHM_COUNT];
 static unsigned short sem_values[SHM_ACK_SEM_COUNT];
 static bool sem_created;
 
-static unsigned char shm_memory[SHM_COUNT][MPMC_SHM_SEGMENT_BYTES];
+alignas(shm_ack_control_t) static unsigned char shm_memory[SHM_COUNT][MPMC_SHM_SEGMENT_BYTES];
 
 static mpmc_result_t simulated_error(mpmc_status_t status, int error) {
     return (mpmc_result_t){.status = status, .system_errno = error};
@@ -70,10 +70,6 @@ static void init_backend(shm_backend_t *backend) {
 
     backend->ack_control_shmid = -1;
     backend->ack_semid = -1;
-
-    for (size_t index = 0; index < SHM_ACK_BITMAP_SEGMENT_COUNT; ++index) {
-        backend->ack_bitmap_shmids[index] = -1;
-    }
 }
 
 mpmc_result_t mpmc_test_shm_create(size_t size, int *out_shmid) {
@@ -339,7 +335,6 @@ static void test_successful_creation(void) {
     CHECK(backend.ack_control_shmid == 100);
     CHECK(backend.ack_control != NULL);
     CHECK(backend.ack_control->magic == UINT32_C(0x53484D41));
-    CHECK(backend.ack_control->version == 2U);
     CHECK(backend.ack_semid == 700);
 
     CHECK(sem_values[SHM_ACK_SEM_MUTEX] == 1U);
@@ -348,11 +343,10 @@ static void test_successful_creation(void) {
         CHECK(sem_values[SHM_ACK_SEM_NOTIFICATION_BASE + index] == 0U);
     }
 
-    for (size_t index = 0; index < SHM_ACK_BITMAP_SEGMENT_COUNT; ++index) {
-        CHECK(backend.ack_bitmap_segments[index] != NULL);
-        for (size_t byte = 0; byte < MPMC_SHM_SEGMENT_BYTES; ++byte) {
-            CHECK(((unsigned char *)backend.ack_bitmap_segments[index])[byte] == 0);
-        }
+    for (size_t index = 0; index < SHM_ACK_OPERATION_CAPACITY; ++index) {
+        CHECK(backend.ack_control->records[index].operation_id == 0);
+        CHECK(backend.ack_control->records[index].remaining == 0);
+        CHECK(!backend.ack_control->records[index].waiting);
     }
 
     result = shm_backend_ack_resources_cleanup(&backend, true);

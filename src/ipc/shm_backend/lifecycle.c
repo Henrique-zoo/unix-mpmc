@@ -66,11 +66,6 @@ mpmc_result_t shm_backend_create(
         .ack_semid = -1,
     };
 
-    for (size_t index = 0; index < SHM_ACK_BITMAP_SEGMENT_COUNT; index++) {
-        backend->ack_bitmap_shmids[index] = -1;
-        backend->ack_bitmap_segments[index] = NULL;
-    }
-
     backend->segments = calloc(producer_count, sizeof(*backend->segments));
 
     if (backend->segments == NULL) {
