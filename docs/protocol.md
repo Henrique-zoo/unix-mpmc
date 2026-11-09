@@ -467,6 +467,12 @@ do trabalho. Os retornos por função estão em `transport.h`.
 
 - Esperas bloqueantes (`semop`, `msgsnd`, `msgrcv`, `nanosleep`) não repetem `EINTR`
   por conta própria; devolvem `MPMC_ERR_INTERRUPTED`, e o worker decide encerrar.
+- Remoção das filas (shutdown/falha) com esperas ativas: `msgrcv`/`msgsnd` já bloqueados
+  retornam `EIDRM` (`MPMC_ERR_SHUTDOWN`). O laço de envio do produtor `ack=1` usa
+  `IPC_NOWAIT`; numa fila já removida o Linux devolve `EINVAL`, classificado como
+  `MPMC_ERR_INVALID_ARG`. Em ambos os casos a espera termina de imediato, `ack_end` roda e
+  o produtor sai com falha; quem interpreta o resultado deve tratar as duas classes como
+  encerramento quando o supervisor já removeu as filas (`test_msg_ack_lifecycle`).
 - No modo 1, os vetores de aquisição/publicação são atômicos individualmente, mas
   SIGTERM/SIGINT não são mascarados no intervalo entre eles. Término de processo
   nesse intervalo exige descartar o contexto por encerramento coordenado; não há
