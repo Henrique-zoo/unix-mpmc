@@ -25,6 +25,9 @@ struct msg_backend {
     ack_registration_t *registrations;
     size_t registration_count;
     size_t registration_capacity;
+    uint64_t *abandoned;
+    size_t abandoned_count;
+    size_t abandoned_capacity;
 };
 
 typedef struct {
@@ -88,6 +91,29 @@ static mpmc_result_t msg_backend_ack_drain(
         bool received = false;
         mpmc_result_t result =
             msg_backend_ack_receive(backend, registration, true, account, &received);
+        if (result.status == MPMC_ERR_WOULD_BLOCK) {
+            return (mpmc_result_t){.status = MPMC_OK};
+        }
+        if (result.status != MPMC_OK) {
+            return result;
+        }
+    }
+}
+
+/**
+ * @brief Descarta sem bloquear todos os ACKs de uma operação encerrada.
+ * @details Usada pelo supervisor: ACKs de operações sem dono só ocupam a fila de controle.
+ */
+static mpmc_result_t msg_backend_purge_operation(msg_backend_t *backend, uint64_t operation_id) {
+    for (;;) {
+        ack_event_t ack;
+        ssize_t received = 0;
+        mpmc_result_t result = sysv_msg_receive(
+            backend->ack_queue, (long)operation_id, &ack, sizeof(ack), true, &received
+        );
+        if (result.status == MPMC_ERR_INTERRUPTED) {
+            continue;
+        }
         if (result.status == MPMC_ERR_WOULD_BLOCK) {
             return (mpmc_result_t){.status = MPMC_OK};
         }
@@ -374,7 +400,7 @@ mpmc_result_t msg_backend_poll_events(msg_backend_t *backend) {
             continue;
         }
         if (result.status == MPMC_ERR_WOULD_BLOCK) {
-            return (mpmc_result_t){.status = MPMC_OK};
+            break;
         }
         if (result.status != MPMC_OK) {
             return result;
@@ -386,6 +412,44 @@ mpmc_result_t msg_backend_poll_events(msg_backend_t *backend) {
         }
         backend->consumed_counts[event.producer_id - 1u] += event.count;
     }
+
+    /* ACKs tardios de operações abandonadas não podem lotar Q_ack e travar consumidores. */
+    mpmc_result_t first = {.status = MPMC_OK};
+    for (size_t index = 0u; index < backend->abandoned_count; ++index) {
+        mpmc_result_t purged = msg_backend_purge_operation(backend, backend->abandoned[index]);
+        if (first.status == MPMC_OK) {
+            first = purged;
+        }
+    }
+    return first;
+}
+
+mpmc_result_t msg_backend_ack_abandon(msg_backend_t *backend, uint64_t operation_id) {
+    if (backend == NULL || operation_id == 0u || operation_id > (uint64_t)LONG_MAX) {
+        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    }
+    bool known = false;
+    for (size_t index = 0u; index < backend->abandoned_count; ++index) {
+        known = known || backend->abandoned[index] == operation_id;
+    }
+    if (!known) {
+        if (backend->abandoned_count == backend->abandoned_capacity) {
+            size_t capacity =
+                backend->abandoned_capacity == 0u ? 8u : backend->abandoned_capacity * 2u;
+            if (capacity < backend->abandoned_capacity
+                || capacity > SIZE_MAX / sizeof(*backend->abandoned)) {
+                return (mpmc_result_t){.status = MPMC_ERR_SYS};
+            }
+            uint64_t *grown = realloc(backend->abandoned, capacity * sizeof(*grown));
+            if (grown == NULL) {
+                return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+            }
+            backend->abandoned = grown;
+            backend->abandoned_capacity = capacity;
+        }
+        backend->abandoned[backend->abandoned_count++] = operation_id;
+    }
+    return msg_backend_purge_operation(backend, operation_id);
 }
 
 mpmc_result_t msg_backend_consumed_count(

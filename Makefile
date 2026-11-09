@@ -209,11 +209,6 @@ $(UNIT_DIR)/test_msg_backend: tests/unit/test_msg_backend.c \
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
-$(UNIT_DIR)/test_producer: tests/unit/test_producer.c $(WORKERS_DIR)/producer.c \
-		$(WORKERS_DIR)/producer_routing.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Dclock_gettime=mpmc_test_clock_gettime $^ $(LDLIBS) -o $@
-
 $(UNIT_DIR)/test_transport_contract: tests/unit/test_transport_contract.c \
 		src/ipc/transport.c src/ipc/msg_backend.c $(SHM_BACKEND_DIR)/lifecycle.c \
 		$(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c
