@@ -14,8 +14,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "mpmc/ipc/shm_backend.h"
 #include "mpmc/ipc/sem.h"
+#include "mpmc/ipc/shm_backend.h"
 #include "shm_backend_internal.h"
 
 #define CHILD_CAPACITY 8
@@ -59,14 +59,9 @@ static void inject_sem_failure(
     };
 }
 
-mpmc_result_t mpmc_test_sem_change(
-    int semid,
-    unsigned index,
-    short delta,
-    bool nowait
-) {
-    if (sem_failure.enabled && sem_failure.semid == semid
-        && sem_failure.index == index && sem_failure.delta == delta) {
+mpmc_result_t mpmc_test_sem_change(int semid, unsigned index, short delta, bool nowait) {
+    if (sem_failure.enabled && sem_failure.semid == semid && sem_failure.index == index
+        && sem_failure.delta == delta) {
         if (sem_failure.skip_matches > 0U) {
             sem_failure.skip_matches--;
         } else {
@@ -327,8 +322,7 @@ static void test_reuse_slot_after_early_notifications(void) {
 
     check_result(shm_backend_ack_begin(owned_backend, second_id, 2), MPMC_OK, 0);
 
-    notification_t second_first =
-        make_notification(second_id, 1, producer_pid, 1);
+    notification_t second_first = make_notification(second_id, 1, producer_pid, 1);
     notify_direct(&second_first);
 
     alarm_seen = 0;
@@ -341,8 +335,7 @@ static void test_reuse_slot_after_early_notifications(void) {
     CHECK(alarm_seen);
     check_result(result, MPMC_ERR_INTERRUPTED, EINTR);
 
-    notification_t second_final =
-        make_notification(second_id, 2, producer_pid, 2);
+    notification_t second_final = make_notification(second_id, 2, producer_pid, 2);
     notify_direct(&second_final);
 
     check_result(shm_backend_ack_wait(owned_backend, second_id), MPMC_OK, 0);
@@ -444,11 +437,7 @@ static void test_wait_recovers_initial_unlock_failure(void) {
         (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR}
     );
 
-    check_result(
-        shm_backend_ack_wait(owned_backend, operation_id),
-        MPMC_ERR_INTERRUPTED,
-        EINTR
-    );
+    check_result(shm_backend_ack_wait(owned_backend, operation_id), MPMC_ERR_INTERRUPTED, EINTR);
 
     check_result(shm_backend_ack_end(owned_backend, operation_id), MPMC_OK, 0);
 }
@@ -469,11 +458,7 @@ static void test_wait_recovers_loop_lock_failure(void) {
         (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR}
     );
 
-    check_result(
-        shm_backend_ack_wait(owned_backend, operation_id),
-        MPMC_ERR_INTERRUPTED,
-        EINTR
-    );
+    check_result(shm_backend_ack_wait(owned_backend, operation_id), MPMC_ERR_INTERRUPTED, EINTR);
 
     check_result(shm_backend_ack_end(owned_backend, operation_id), MPMC_OK, 0);
 }
@@ -494,11 +479,7 @@ static void test_wait_recovers_loop_unlock_failure(void) {
         (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR}
     );
 
-    check_result(
-        shm_backend_ack_wait(owned_backend, operation_id),
-        MPMC_ERR_INTERRUPTED,
-        EINTR
-    );
+    check_result(shm_backend_ack_wait(owned_backend, operation_id), MPMC_ERR_INTERRUPTED, EINTR);
 
     check_result(shm_backend_ack_end(owned_backend, operation_id), MPMC_OK, 0);
 }
@@ -526,11 +507,7 @@ static void test_wait_recovers_completed_unlock_failure(void) {
         (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR}
     );
 
-    check_result(
-        shm_backend_ack_wait(owned_backend, operation_id),
-        MPMC_ERR_INTERRUPTED,
-        EINTR
-    );
+    check_result(shm_backend_ack_wait(owned_backend, operation_id), MPMC_ERR_INTERRUPTED, EINTR);
 
     check_result(shm_backend_ack_end(owned_backend, operation_id), MPMC_OK, 0);
 }
@@ -543,8 +520,7 @@ static void test_wait_unblocks_on_notification(void) {
 
     check_result(shm_backend_ack_begin(owned_backend, operation_id, 1), MPMC_OK, 0);
 
-    notification_t notification =
-        make_notification(operation_id, 1, getpid(), 2);
+    notification_t notification = make_notification(operation_id, 1, getpid(), 2);
 
     pid_t child = spawn_delayed_notification(&notification);
 
@@ -559,7 +535,6 @@ static void test_wait_unblocks_on_notification(void) {
     reap_child(child);
     check_result(shm_backend_ack_end(owned_backend, operation_id), MPMC_OK, 0);
 }
-
 
 /**
  * @brief Aguarda até que uma operação tenha um waiter ativo.
@@ -662,8 +637,7 @@ static void test_end_rejected_while_waiting(void) {
 
     check_result(shm_backend_ack_end(owned_backend, operation_id), MPMC_ERR_STATE, 0);
 
-    notification_t notification =
-        make_notification(operation_id, 1, getpid(), 1);
+    notification_t notification = make_notification(operation_id, 1, getpid(), 1);
     notify_direct(&notification);
 
     reap_child(child);
@@ -768,15 +742,13 @@ static void test_notifications_do_not_cross_operations(void) {
         return;
     }
 
-    notification_t first_notification =
-        make_notification(first_id, 1, getpid(), 1);
+    notification_t first_notification = make_notification(first_id, 1, getpid(), 1);
     notify_direct(&first_notification);
 
     reap_child(first_child);
     check_child_still_waiting(second_child);
 
-    notification_t second_notification =
-        make_notification(second_id, 1, getpid(), 2);
+    notification_t second_notification = make_notification(second_id, 1, getpid(), 2);
     notify_direct(&second_notification);
 
     reap_child(second_child);
@@ -888,9 +860,7 @@ static void test_preserving_path_recovers_unlock_failure(void) {
      * ao liberar o mutex; a tentativa seguinte deve liberá-lo de verdade.
      */
     check_result(
-        shm_backend_ack_begin(owned_backend, operation_id, 1),
-        MPMC_ERR_INTERRUPTED,
-        EINTR
+        shm_backend_ack_begin(owned_backend, operation_id, 1), MPMC_ERR_INTERRUPTED, EINTR
     );
 
     CHECK(!sem_failure.enabled);
@@ -928,20 +898,12 @@ static void test_end_releases_slot_after_unlock_failure(void) {
         (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR}
     );
 
-    check_result(
-        shm_backend_ack_end(owned_backend, operation_id),
-        MPMC_ERR_INTERRUPTED,
-        EINTR
-    );
+    check_result(shm_backend_ack_end(owned_backend, operation_id), MPMC_ERR_INTERRUPTED, EINTR);
 
     CHECK(!sem_failure.enabled);
     CHECK(owned_backend->ack_control->records[slot].operation_id == 0);
 
-    check_result(
-        shm_backend_ack_begin(owned_backend, reused_operation_id, 1),
-        MPMC_OK,
-        0
-    );
+    check_result(shm_backend_ack_begin(owned_backend, reused_operation_id, 1), MPMC_OK, 0);
     check_result(shm_backend_ack_end(owned_backend, reused_operation_id), MPMC_OK, 0);
 }
 
@@ -971,11 +933,7 @@ static void test_wait_fatal_sem_failure(void) {
     if (slot == SHM_ACK_OPERATION_CAPACITY) return;
 
     inject_sem_failure(
-        owned_backend->ack_semid,
-        SHM_ACK_SEM_NOTIFICATION_BASE + (unsigned)slot,
-        -1,
-        0,
-        fatal
+        owned_backend->ack_semid, SHM_ACK_SEM_NOTIFICATION_BASE + (unsigned)slot, -1, 0, fatal
     );
 
     check_result(shm_backend_ack_wait(owned_backend, operation_id), MPMC_ERR_SHUTDOWN, EIDRM);

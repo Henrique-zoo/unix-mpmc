@@ -8,8 +8,8 @@
 #include <string.h>
 
 #include "mpmc/error.h"
-#include "mpmc/ipc/shm.h"
 #include "mpmc/ipc/sem.h"
+#include "mpmc/ipc/shm.h"
 #include "shm_backend_internal.h"
 
 #define CHECK(condition)                                                                           \

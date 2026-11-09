@@ -379,16 +379,12 @@ static mpmc_result_t ack_waiter_release(
 
     size_t slot = ack_find_operation(backend, operation_id);
     if (slot == SHM_ACK_OPERATION_CAPACITY) {
-        return ack_unlock_preserving(
-            backend, (mpmc_result_t){.status = MPMC_ERR_STATE}
-        );
+        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
     }
 
     shm_ack_record_t *record = &backend->ack_control->records[slot];
     if (record->waiters != 1U) {
-        return ack_unlock_preserving(
-            backend, (mpmc_result_t){.status = MPMC_ERR_STATE}
-        );
+        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
     }
 
     record->waiters = 0;
@@ -418,17 +414,13 @@ mpmc_result_t shm_backend_ack_wait(shm_backend_t *backend, uint64_t operation_id
 
     size_t slot = ack_find_operation(backend, operation_id);
     if (slot == SHM_ACK_OPERATION_CAPACITY) {
-        return ack_unlock_preserving(
-            backend, (mpmc_result_t){.status = MPMC_ERR_STATE}
-        );
+        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
     }
 
     shm_ack_record_t *record = &backend->ack_control->records[slot];
 
     if (record->waiters != 0U) {
-        return ack_unlock_preserving(
-            backend, (mpmc_result_t){.status = MPMC_ERR_STATE}
-        );
+        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
     }
 
     record->waiters = 1U;
@@ -455,9 +447,7 @@ mpmc_result_t shm_backend_ack_wait(shm_backend_t *backend, uint64_t operation_id
 
         slot = ack_find_operation(backend, operation_id);
         if (slot == SHM_ACK_OPERATION_CAPACITY) {
-            return ack_unlock_preserving(
-                backend, (mpmc_result_t){.status = MPMC_ERR_STATE}
-            );
+            return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
         }
 
         record = &backend->ack_control->records[slot];
@@ -518,9 +508,7 @@ mpmc_result_t shm_backend_ack_end(shm_backend_t *backend, uint64_t operation_id)
     }
 
     if (backend->ack_control->records[slot].waiters != 0U) {
-        return ack_unlock_preserving(
-            backend, (mpmc_result_t){.status = MPMC_ERR_STATE}
-        );
+        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
     }
 
     uint8_t *bitmap = ack_bitmap_for(backend, slot);

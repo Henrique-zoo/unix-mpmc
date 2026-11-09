@@ -8,17 +8,18 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "mpmc/ipc/shm.h"
 #include "mpmc/ipc/sem.h"
+#include "mpmc/ipc/shm.h"
 #include "shm_backend_internal.h"
 
-#define CHECK(condition) do { \
-    ++checks; \
-    if (!(condition)) { \
-        ++failures; \
-        fprintf(stderr, "FALHA %s:%d: %s\n", __FILE__, __LINE__, #condition); \
-    } \
-} while (0)
+#define CHECK(condition)                                                                           \
+    do {                                                                                           \
+        ++checks;                                                                                  \
+        if (!(condition)) {                                                                        \
+            ++failures;                                                                            \
+            fprintf(stderr, "FALHA %s:%d: %s\n", __FILE__, __LINE__, #condition);                  \
+        }                                                                                          \
+    } while (0)
 
 #define SHM_COUNT (SHM_ACK_BITMAP_SEGMENT_COUNT + 1U)
 
