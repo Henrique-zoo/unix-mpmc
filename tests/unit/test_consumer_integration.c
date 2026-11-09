@@ -31,8 +31,13 @@ static int current_mode;
 
 static void check(bool condition, const char *description, int line) {
     if (!condition) {
-        fprintf(stderr, "consumer integration failed [mode %d, line %d]: %s\n", current_mode,
-                line, description);
+        fprintf(
+            stderr,
+            "consumer integration failed [mode %d, line %d]: %s\n",
+            current_mode,
+            line,
+            description
+        );
         ++failures;
     }
 }
@@ -64,7 +69,10 @@ static uint64_t backend_total(ipc_context_t *context, size_t index) {
 }
 
 static consumer_result_t run_consumer(
-    ipc_context_t *context, size_t index, unsigned count, consumer_ack_mode_t mode,
+    ipc_context_t *context,
+    size_t index,
+    unsigned count,
+    consumer_ack_mode_t mode,
     mpmc_result_t *result
 ) {
     consumer_job_t job = {
@@ -77,11 +85,15 @@ static consumer_result_t run_consumer(
 static void test_zero_available(ipc_context_t *context) {
     mpmc_result_t result;
     consumer_result_t out = run_consumer(context, 1u, 3u, CONSUMER_NONBLOCKING, &result);
-    CHECK(result.status == MPMC_ERR_WOULD_BLOCK && out.error.status == result.status,
-          "empty structure must report WOULD_BLOCK");
+    CHECK(
+        result.status == MPMC_ERR_WOULD_BLOCK && out.error.status == result.status,
+        "empty structure must report WOULD_BLOCK"
+    );
     CHECK(out.consumed_count == 0u, "zero available must consume zero");
-    CHECK(result.system_errno == (current_mode == 1 ? EAGAIN : ENOMSG),
-          "backend errno must be preserved");
+    CHECK(
+        result.system_errno == (current_mode == 1 ? EAGAIN : ENOMSG),
+        "backend errno must be preserved"
+    );
     CHECK(backend_total(context, 1u) == 0u, "backend total must stay zero");
 }
 
@@ -89,12 +101,16 @@ static void test_partial_and_no_reinsert(ipc_context_t *context) {
     mpmc_result_t result;
     CHECK(send_messages(context, 1u, 2u, 10u), "setup send");
     consumer_result_t out = run_consumer(context, 1u, 5u, CONSUMER_NONBLOCKING, &result);
-    CHECK(result.status == MPMC_ERR_WOULD_BLOCK && out.consumed_count == 2u,
-          "partial result must report the 2 messages actually consumed");
+    CHECK(
+        result.status == MPMC_ERR_WOULD_BLOCK && out.consumed_count == 2u,
+        "partial result must report the 2 messages actually consumed"
+    );
     CHECK(backend_total(context, 1u) == 2u, "backend total must equal consumed_count");
     out = run_consumer(context, 1u, 1u, CONSUMER_NONBLOCKING, &result);
-    CHECK(result.status == MPMC_ERR_WOULD_BLOCK && out.consumed_count == 0u,
-          "consumed messages must not be reinserted");
+    CHECK(
+        result.status == MPMC_ERR_WOULD_BLOCK && out.consumed_count == 0u,
+        "consumed messages must not be reinserted"
+    );
 }
 
 static void test_complete_leaves_remainder(ipc_context_t *context) {
@@ -103,8 +119,10 @@ static void test_complete_leaves_remainder(ipc_context_t *context) {
     consumer_result_t out = run_consumer(context, 2u, 4u, CONSUMER_BLOCKING, &result);
     CHECK(result.status == MPMC_OK && out.consumed_count == 4u, "blocking n completo");
     out = run_consumer(context, 2u, 2u, CONSUMER_NONBLOCKING, &result);
-    CHECK(result.status == MPMC_OK && out.consumed_count == 2u,
-          "remainder must still be available after a complete consume");
+    CHECK(
+        result.status == MPMC_OK && out.consumed_count == 2u,
+        "remainder must still be available after a complete consume"
+    );
     CHECK(backend_total(context, 2u) == 6u, "backend total after complete consumes");
 }
 
@@ -113,8 +131,10 @@ static void test_blocking_interrupted(ipc_context_t *context) {
     message_t message;
     CHECK(send_messages(context, 1u, 5u, 12u), "setup send");
     run_consumer(context, 1u, 2u, CONSUMER_BLOCKING, &result);
-    CHECK(ipc_receive(context, 1u, &message, false).status == MPMC_OK && message.sequence == 3u,
-          "messages are consumed once and in order (next is #3)");
+    CHECK(
+        ipc_receive(context, 1u, &message, false).status == MPMC_OK && message.sequence == 3u,
+        "messages are consumed once and in order (next is #3)"
+    );
     const uint64_t before = backend_total(context, 1u); /* 2 + 2 + 1 */
     CHECK(before == 5u, "total before the interrupted consume");
 
@@ -165,8 +185,10 @@ static void test_blocking_interrupted(ipc_context_t *context) {
     (void)waitpid(pid, NULL, 0);
     close(fds[0]);
     close(fds[1]);
-    CHECK(report.status == MPMC_ERR_INTERRUPTED && report.system_errno == EINTR,
-          "interrupted blocking consume must return INTERRUPTED/EINTR");
+    CHECK(
+        report.status == MPMC_ERR_INTERRUPTED && report.system_errno == EINTR,
+        "interrupted blocking consume must return INTERRUPTED/EINTR"
+    );
     CHECK(report.consumed_count == 2u, "interruption keeps the partial count");
     CHECK(backend_total(context, 1u) == before + 2u, "backend total matches after interruption");
 }
@@ -181,8 +203,10 @@ static void test_worker_close_keeps_supervisor(ipc_context_t *context) {
     }
     CHECK(pid > 0, "fork");
     (void)waitpid(pid, NULL, 0);
-    CHECK(ipc_receive(context, 2u, &message, false).status == MPMC_OK,
-          "supervisor must still use the resources after a worker's ipc_worker_close()");
+    CHECK(
+        ipc_receive(context, 2u, &message, false).status == MPMC_OK,
+        "supervisor must still use the resources after a worker's ipc_worker_close()"
+    );
 }
 
 static void test_backend_acks(ipc_context_t *context) {
@@ -191,8 +215,10 @@ static void test_backend_acks(ipc_context_t *context) {
     CHECK(send_messages(context, 1u, 3u, 50u), "setup send");
     consumer_result_t out = run_consumer(context, 1u, 3u, CONSUMER_BLOCKING, &result);
     CHECK(result.status == MPMC_OK && out.consumed_count == 3u, "consume the acked operation");
-    CHECK(ipc_ack_wait(context, 50u).status == MPMC_OK,
-          "ACKs must arrive from the backend; the consumer worker publishes none");
+    CHECK(
+        ipc_ack_wait(context, 50u).status == MPMC_OK,
+        "ACKs must arrive from the backend; the consumer worker publishes none"
+    );
     (void)ipc_ack_end(context, 50u);
 }
 

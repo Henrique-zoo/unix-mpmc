@@ -38,9 +38,8 @@ static int test_maximum_count(void);
 
 int main(void) {
     if (test_complete_reads() != 0 || test_zero_available() != 0
-        || test_partial_nonblocking_result() != 0
-        || test_error_propagation() != 0 || test_validation() != 0
-        || test_maximum_count() != 0) {
+        || test_partial_nonblocking_result() != 0 || test_error_propagation() != 0
+        || test_validation() != 0 || test_maximum_count() != 0) {
         return 1;
     }
     if (check(close_calls == 0u, "consumer_run must leave worker cleanup to its caller")) {
@@ -58,7 +57,10 @@ size_t ipc_producer_count(const ipc_context_t *context) {
 
 /* Substituto privado da fachada para controlar sucesso, fila vazia e falhas. */
 mpmc_result_t ipc_receive(
-    ipc_context_t *context, size_t producer_id, message_t *out, bool blocking
+    ipc_context_t *context,
+    size_t producer_id,
+    message_t *out,
+    bool blocking
 ) {
     unsigned call = ++receive_calls;
     if (call <= MAX_RECEIVES) {
@@ -95,20 +97,28 @@ static int test_complete_reads(void) {
         mpmc_result_t result = consumer_run(&context, &job, &out);
         const bool blocking = modes[mode_index] == CONSUMER_BLOCKING;
 
-        if (check(result.status == MPMC_OK && result.system_errno == 0,
-                  "complete receive sequence should succeed")
-            || check(out.error.status == MPMC_OK && out.error.system_errno == 0
-                         && out.consumed_count == job.message_count,
-                     "success result should report every message")
-            || check(producer_count_calls == 1u && receive_calls == job.message_count,
-                     "query producer count once and receive exactly n times")) {
+        if (check(
+                result.status == MPMC_OK && result.system_errno == 0,
+                "complete receive sequence should succeed"
+            )
+            || check(
+                out.error.status == MPMC_OK && out.error.system_errno == 0
+                    && out.consumed_count == job.message_count,
+                "success result should report every message"
+            )
+            || check(
+                producer_count_calls == 1u && receive_calls == job.message_count,
+                "query producer count once and receive exactly n times"
+            )) {
             return 1;
         }
         for (unsigned index = 0u; index < job.message_count; ++index) {
-            if (check(observed_contexts[index] == &context
-                          && observed_producer_ids[index] == job.producer_id
-                          && observed_blocking[index] == blocking,
-                      "each receive uses the supplied context, index, and wait policy")) {
+            if (check(
+                    observed_contexts[index] == &context
+                        && observed_producer_ids[index] == job.producer_id
+                        && observed_blocking[index] == blocking,
+                    "each receive uses the supplied context, index, and wait policy"
+                )) {
                 return 1;
             }
         }
@@ -137,11 +147,15 @@ static int test_zero_available(void) {
         receive_failure = (mpmc_result_t){.status = MPMC_ERR_WOULD_BLOCK, .system_errno = EAGAIN};
 
         mpmc_result_t result = consumer_run(&context, &job, &out);
-        if (check(result.status == MPMC_ERR_WOULD_BLOCK && result.system_errno == EAGAIN,
-                  "empty structure must return the receive result unchanged")
-            || check(out.error.status == result.status && out.error.system_errno == EAGAIN
-                         && out.consumed_count == 0u,
-                     "zero available must report consumed_count zero, not stale data")
+        if (check(
+                result.status == MPMC_ERR_WOULD_BLOCK && result.system_errno == EAGAIN,
+                "empty structure must return the receive result unchanged"
+            )
+            || check(
+                out.error.status == result.status && out.error.system_errno == EAGAIN
+                    && out.consumed_count == 0u,
+                "zero available must report consumed_count zero, not stale data"
+            )
             || check(receive_calls == 1u, "stop after the first empty receive")
             || check(close_calls == 0u, "worker must not close the inherited context")) {
             return 1;
@@ -164,11 +178,15 @@ static int test_partial_nonblocking_result(void) {
     receive_failure = (mpmc_result_t){.status = MPMC_ERR_WOULD_BLOCK, .system_errno = ENOMSG};
 
     mpmc_result_t result = consumer_run(&context, &job, &out);
-    if (check(result.status == MPMC_ERR_WOULD_BLOCK && result.system_errno == ENOMSG,
-              "nonblocking empty result and errno must be propagated")
-        || check(out.error.status == result.status && out.error.system_errno == ENOMSG
-                     && out.consumed_count == 2u,
-                 "partial result must preserve the successfully consumed count")
+    if (check(
+            result.status == MPMC_ERR_WOULD_BLOCK && result.system_errno == ENOMSG,
+            "nonblocking empty result and errno must be propagated"
+        )
+        || check(
+            out.error.status == result.status && out.error.system_errno == ENOMSG
+                && out.consumed_count == 2u,
+            "partial result must preserve the successfully consumed count"
+        )
         || check(receive_calls == 3u, "stop on the first empty receive")) {
         return 1;
     }
@@ -202,13 +220,17 @@ static int test_error_propagation(void) {
         fail_receive_call = 3u;
         receive_failure = failures[index];
         mpmc_result_t result = consumer_run(&context, &job, &out);
-        if (check(result.status == failures[index].status
-                      && result.system_errno == failures[index].system_errno,
-                  "receive error must be returned without translation")
-            || check(out.error.status == failures[index].status
-                         && out.error.system_errno == failures[index].system_errno
-                         && out.consumed_count == 2u,
-                     "receive failure must preserve its cause and partial count")
+        if (check(
+                result.status == failures[index].status
+                    && result.system_errno == failures[index].system_errno,
+                "receive error must be returned without translation"
+            )
+            || check(
+                out.error.status == failures[index].status
+                    && out.error.system_errno == failures[index].system_errno
+                    && out.consumed_count == 2u,
+                "receive failure must preserve its cause and partial count"
+            )
             || check(receive_calls == 3u, "first receive error stops the worker")) {
             return 1;
         }
@@ -227,53 +249,73 @@ static int test_validation(void) {
     consumer_result_t out;
     reset_mocks();
 
-    if (check(consumer_run(NULL, &job, &out).status == MPMC_ERR_INVALID_ARG
-                  && out.consumed_count == 0u && out.error.status == MPMC_ERR_INVALID_ARG,
-              "null transport should fail and initialize result")
-        || check(consumer_run(&context, NULL, &out).status == MPMC_ERR_INVALID_ARG
-                     && out.consumed_count == 0u,
-                 "null job should fail and initialize result")
-        || check(consumer_run(&context, &job, NULL).status == MPMC_ERR_INVALID_ARG,
-                 "null result should fail")) {
+    if (check(
+            consumer_run(NULL, &job, &out).status == MPMC_ERR_INVALID_ARG
+                && out.consumed_count == 0u && out.error.status == MPMC_ERR_INVALID_ARG,
+            "null transport should fail and initialize result"
+        )
+        || check(
+            consumer_run(&context, NULL, &out).status == MPMC_ERR_INVALID_ARG
+                && out.consumed_count == 0u,
+            "null job should fail and initialize result"
+        )
+        || check(
+            consumer_run(&context, &job, NULL).status == MPMC_ERR_INVALID_ARG,
+            "null result should fail"
+        )) {
         return 1;
     }
 
     consumer_job_t invalid = job;
     invalid.message_count = 0u;
-    if (check(consumer_run(&context, &invalid, &out).status == MPMC_ERR_INVALID_ARG,
-              "zero count should be rejected")) {
+    if (check(
+            consumer_run(&context, &invalid, &out).status == MPMC_ERR_INVALID_ARG,
+            "zero count should be rejected"
+        )) {
         return 1;
     }
     invalid = job;
     invalid.message_count = MPMC_MAX_MESSAGES + 1u;
-    if (check(consumer_run(&context, &invalid, &out).status == MPMC_ERR_INVALID_ARG,
-              "count above protocol maximum should be rejected")) {
+    if (check(
+            consumer_run(&context, &invalid, &out).status == MPMC_ERR_INVALID_ARG,
+            "count above protocol maximum should be rejected"
+        )) {
         return 1;
     }
     invalid = job;
     invalid.ack_mode = (consumer_ack_mode_t)3;
-    if (check(consumer_run(&context, &invalid, &out).status == MPMC_ERR_INVALID_ARG,
-              "unknown wait policy should be rejected")) {
+    if (check(
+            consumer_run(&context, &invalid, &out).status == MPMC_ERR_INVALID_ARG,
+            "unknown wait policy should be rejected"
+        )) {
         return 1;
     }
     invalid = job;
     invalid.producer_id = 0u;
-    if (check(consumer_run(&context, &invalid, &out).status == MPMC_ERR_INVALID_ARG,
-              "producer index zero should be rejected")) {
+    if (check(
+            consumer_run(&context, &invalid, &out).status == MPMC_ERR_INVALID_ARG,
+            "producer index zero should be rejected"
+        )) {
         return 1;
     }
     invalid.producer_id = 3u;
-    if (check(consumer_run(&context, &invalid, &out).status == MPMC_ERR_INVALID_ARG,
-              "producer index above count should be rejected")) {
+    if (check(
+            consumer_run(&context, &invalid, &out).status == MPMC_ERR_INVALID_ARG,
+            "producer index above count should be rejected"
+        )) {
         return 1;
     }
     struct ipc_context empty = {.producer_count = 0u};
-    if (check(consumer_run(&empty, &job, &out).status == MPMC_ERR_INVALID_ARG,
-              "empty transport should be rejected")) {
+    if (check(
+            consumer_run(&empty, &job, &out).status == MPMC_ERR_INVALID_ARG,
+            "empty transport should be rejected"
+        )) {
         return 1;
     }
-    if (check(producer_count_calls == 3u && receive_calls == 0u,
-              "invalid jobs must not receive; only valid-shaped contexts are queried")) {
+    if (check(
+            producer_count_calls == 3u && receive_calls == 0u,
+            "invalid jobs must not receive; only valid-shaped contexts are queried"
+        )) {
         return 1;
     }
     return 0;
@@ -290,10 +332,11 @@ static int test_maximum_count(void) {
     consumer_result_t out;
     reset_mocks();
     mpmc_result_t result = consumer_run(&context, &job, &out);
-    if (check(result.status == MPMC_OK && out.error.status == MPMC_OK
-                  && out.consumed_count == MPMC_MAX_MESSAGES
-                  && receive_calls == MPMC_MAX_MESSAGES,
-              "protocol maximum should be accepted and consumed exactly")) {
+    if (check(
+            result.status == MPMC_OK && out.error.status == MPMC_OK
+                && out.consumed_count == MPMC_MAX_MESSAGES && receive_calls == MPMC_MAX_MESSAGES,
+            "protocol maximum should be accepted and consumed exactly"
+        )) {
         return 1;
     }
     return 0;
