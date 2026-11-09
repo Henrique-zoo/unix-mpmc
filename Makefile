@@ -69,6 +69,26 @@ $(UNIT_DIR)/test_supervisor_report: tests/unit/test_supervisor_report.c \
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+# Filhos reais, IPC substituto e falhas controladas no prazo de shutdown.
+$(UNIT_DIR)/supervisor_shutdown_for_test.o: src/app/supervisor.c \
+		include/mpmc/app/supervisor.h Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		-Dfork=mpmc_shutdown_test_fork -Dkill=mpmc_shutdown_test_kill \
+		-Dclock_gettime=mpmc_shutdown_test_clock_gettime -Dpoll=mpmc_shutdown_test_poll \
+		'-Dsigaction(...)=mpmc_shutdown_test_sigaction(__VA_ARGS__)' \
+		-Dsigprocmask=mpmc_shutdown_test_sigprocmask -Dwaitpid=mpmc_shutdown_test_waitpid \
+		-Dread=mpmc_shutdown_test_read -Dpipe=mpmc_shutdown_test_pipe -Dclose=mpmc_shutdown_test_close \
+		-Dipc_init=mpmc_shutdown_test_ipc_init -Dipc_destroy=mpmc_shutdown_test_ipc_destroy \
+		-Dipc_poll_events=mpmc_shutdown_test_ipc_poll_events \
+		-Dipc_consumed_count=mpmc_shutdown_test_ipc_consumed_count \
+		-c $< -o $@
+
+$(UNIT_DIR)/test_supervisor_shutdown: tests/unit/test_supervisor_shutdown.c \
+		$(UNIT_DIR)/supervisor_shutdown_for_test.o
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
 $(UNIT_DIR)/test_command: tests/unit/test_command.c src/app/command.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
@@ -209,10 +229,11 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 		$(UNIT_DIR)/test_msg_backend $(UNIT_DIR)/test_msg_stress $(UNIT_DIR)/test_isolation \
 		$(UNIT_DIR)/test_producer_routing $(UNIT_DIR)/test_producer $(UNIT_DIR)/test_transport_contract \
 		$(UNIT_DIR)/test_transport $(UNIT_DIR)/test_protocol_properties \
-		$(UNIT_DIR)/test_supervisor_report
+		$(UNIT_DIR)/test_supervisor_report $(UNIT_DIR)/test_supervisor_shutdown
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
 	@$(UNIT_DIR)/test_supervisor_report
+	@$(UNIT_DIR)/test_supervisor_shutdown
 	@$(UNIT_DIR)/test_msg
 	@$(UNIT_DIR)/test_sem
 	@$(UNIT_DIR)/test_error
