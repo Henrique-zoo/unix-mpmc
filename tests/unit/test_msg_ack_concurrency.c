@@ -66,36 +66,34 @@ static msg_backend_t *volatile live_backend;
 static pid_t owner_pid;
 
 /** @brief Registra uma propriedade sem depender de assert(). */
-#define CHECK(condition)                                                       \
-  do {                                                                         \
-    ++checks;                                                                  \
-    if (!(condition)) {                                                        \
-      ++failures;                                                              \
-      fprintf(stderr, "FALHA %s:%d: %s\n", __FILE__, __LINE__, #condition);    \
-    }                                                                          \
-  } while (0)
+#define CHECK(condition)                                                                           \
+    do {                                                                                           \
+        ++checks;                                                                                  \
+        if (!(condition)) {                                                                        \
+            ++failures;                                                                            \
+            fprintf(stderr, "FALHA %s:%d: %s\n", __FILE__, __LINE__, #condition);                  \
+        }                                                                                          \
+    } while (0)
 
 /** @brief Tratador de SIGALRM: interrompe esperas do pai e mata filhos
  * próprios. */
 static void on_alarm(int signal_number) {
-  (void)signal_number;
-  for (size_t index = 0u; index < MAX_KIDS; ++index) {
-    if (kids[index] > 0)
-      (void)kill(kids[index], SIGKILL);
-  }
+    (void)signal_number;
+    for (size_t index = 0u; index < MAX_KIDS; ++index) {
+        if (kids[index] > 0) (void)kill(kids[index], SIGKILL);
+    }
 }
 
 /** @brief Remove as filas do backend em uso; só chama funções seguras em
  * tratador de sinal. */
 static void remove_live_queues(void) {
-  msg_backend_t *backend = live_backend;
-  if (backend == NULL)
-    return;
-  for (size_t index = 0u; index < backend->producer_count; ++index) {
-    (void)msgctl(backend->data_queues[index], IPC_RMID, NULL);
-  }
-  (void)msgctl(backend->event_queue, IPC_RMID, NULL);
-  (void)msgctl(backend->ack_queue, IPC_RMID, NULL);
+    msg_backend_t *backend = live_backend;
+    if (backend == NULL) return;
+    for (size_t index = 0u; index < backend->producer_count; ++index) {
+        (void)msgctl(backend->data_queues[index], IPC_RMID, NULL);
+    }
+    (void)msgctl(backend->event_queue, IPC_RMID, NULL);
+    (void)msgctl(backend->ack_queue, IPC_RMID, NULL);
 }
 
 /**
@@ -105,45 +103,42 @@ static void remove_live_queues(void) {
  * filas do pai.
  */
 static void on_fatal(int signal_number) {
-  if (getpid() == owner_pid) {
-    for (size_t index = 0u; index < MAX_KIDS; ++index) {
-      if (kids[index] > 0)
-        (void)kill(kids[index], SIGKILL);
+    if (getpid() == owner_pid) {
+        for (size_t index = 0u; index < MAX_KIDS; ++index) {
+            if (kids[index] > 0) (void)kill(kids[index], SIGKILL);
+        }
+        remove_live_queues();
     }
-    remove_live_queues();
-  }
-  _exit(128 + signal_number);
+    _exit(128 + signal_number);
 }
 
 /** @brief Reduz o limite de bytes de uma fila; reduzir não exige privilégio. */
 static bool set_qbytes(int queue, unsigned long bytes) {
-  struct msqid_ds info;
-  if (msgctl(queue, IPC_STAT, &info) == -1)
-    return false;
-  info.msg_qbytes = bytes;
-  return msgctl(queue, IPC_SET, &info) == 0;
+    struct msqid_ds info;
+    if (msgctl(queue, IPC_STAT, &info) == -1) return false;
+    info.msg_qbytes = bytes;
+    return msgctl(queue, IPC_SET, &info) == 0;
 }
 
 /** @brief Quantidade de mensagens na fila; ULONG_MAX se a fila não existe mais.
  */
 static unsigned long queued(int queue) {
-  struct msqid_ds info;
-  if (msgctl(queue, IPC_STAT, &info) == -1)
-    return ULONG_MAX;
-  return (unsigned long)info.msg_qnum;
+    struct msqid_ds info;
+    if (msgctl(queue, IPC_STAT, &info) == -1) return ULONG_MAX;
+    return (unsigned long)info.msg_qnum;
 }
 
 /** @brief Pausa de 2 ms entre verificações de filhos. */
 static void tick(void) {
-  const struct timespec delay = {.tv_sec = 0, .tv_nsec = 2000000};
-  (void)nanosleep(&delay, NULL);
+    const struct timespec delay = {.tv_sec = 0, .tv_nsec = 2000000};
+    (void)nanosleep(&delay, NULL);
 }
 
 static unsigned long elapsed_ms(const struct timespec *start) {
-  struct timespec now;
-  clock_gettime(CLOCK_MONOTONIC, &now);
-  return (unsigned long)((now.tv_sec - start->tv_sec) * 1000L +
-                         (now.tv_nsec - start->tv_nsec) / 1000000L);
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (unsigned long)((now.tv_sec - start->tv_sec) * 1000L
+        + (now.tv_nsec - start->tv_nsec) / 1000000L);
 }
 
 /**
@@ -153,170 +148,158 @@ static unsigned long elapsed_ms(const struct timespec *start) {
  * venceu e o filho foi morto por SIGKILL.
  */
 static int reap(size_t slot, unsigned deadline_ms, msg_backend_t *supervisor) {
-  struct timespec start;
-  clock_gettime(CLOCK_MONOTONIC, &start);
-  for (;;) {
-    if (supervisor != NULL)
-      (void)msg_backend_poll_events(supervisor);
-    int status = 0;
-    pid_t pid = waitpid(kids[slot], &status, WNOHANG);
-    if (pid == kids[slot]) {
-      kids[slot] = 0;
-      return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        if (supervisor != NULL) (void)msg_backend_poll_events(supervisor);
+        int status = 0;
+        pid_t pid = waitpid(kids[slot], &status, WNOHANG);
+        if (pid == kids[slot]) {
+            kids[slot] = 0;
+            return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+        }
+        if (pid == -1 && errno != EINTR) {
+            kids[slot] = 0;
+            return -1;
+        }
+        if (elapsed_ms(&start) > deadline_ms) {
+            (void)kill(kids[slot], SIGKILL);
+            (void)waitpid(kids[slot], &status, 0);
+            kids[slot] = 0;
+            return -1;
+        }
+        tick();
     }
-    if (pid == -1 && errno != EINTR) {
-      kids[slot] = 0;
-      return -1;
-    }
-    if (elapsed_ms(&start) > deadline_ms) {
-      (void)kill(kids[slot], SIGKILL);
-      (void)waitpid(kids[slot], &status, 0);
-      kids[slot] = 0;
-      return -1;
-    }
-    tick();
-  }
 }
 
 /** @brief Verifica que todas as filas do backend sumiram do kernel após
  * destroy(). */
 static void destroy_and_check(msg_backend_t *backend) {
-  int ids[16];
-  size_t count = 0u;
-  for (size_t index = 0u; index < backend->producer_count && count < 13u;
-       ++index) {
-    ids[count++] = backend->data_queues[index];
-  }
-  ids[count++] = backend->event_queue;
-  ids[count++] = backend->ack_queue;
-  live_backend = NULL;
-  msg_backend_destroy(backend);
-  for (size_t index = 0u; index < count; ++index) {
-    CHECK(queued(ids[index]) == ULONG_MAX);
-  }
+    int ids[16];
+    size_t count = 0u;
+    for (size_t index = 0u; index < backend->producer_count && count < 13u; ++index) {
+        ids[count++] = backend->data_queues[index];
+    }
+    ids[count++] = backend->event_queue;
+    ids[count++] = backend->ack_queue;
+    live_backend = NULL;
+    msg_backend_destroy(backend);
+    for (size_t index = 0u; index < count; ++index) {
+        CHECK(queued(ids[index]) == ULONG_MAX);
+    }
 }
 
 /** @brief Três operações concorrentes, filas de 4 dados, 3 ACKs e 2 eventos. */
 static void test_concurrent_operations(void) {
-  msg_backend_t *backend = NULL;
-  CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
-  if (backend == NULL)
-    return;
-  live_backend = backend;
-  CHECK(set_qbytes(backend->data_queues[0], 4u * sizeof(message_t)));
-  CHECK(set_qbytes(backend->ack_queue, 3u * sizeof(ack_event_t)));
-  CHECK(set_qbytes(backend->event_queue, 2u * sizeof(consumption_event_t)));
+    msg_backend_t *backend = NULL;
+    CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
+    if (backend == NULL) return;
+    live_backend = backend;
+    CHECK(set_qbytes(backend->data_queues[0], 4u * sizeof(message_t)));
+    CHECK(set_qbytes(backend->ack_queue, 3u * sizeof(ack_event_t)));
+    CHECK(set_qbytes(backend->event_queue, 2u * sizeof(consumption_event_t)));
 
-  const uint64_t operations[3] = {11u, 22u, 33u};
-  const unsigned counts[3] = {20u, 7u, 40u};
-  const unsigned per_consumer[2] = {34u, 33u};
-  for (size_t slot = 0u; slot < 3u; ++slot) {
-    kids[slot] = fork();
-    if (kids[slot] == 0) {
-      mpmc_result_t result =
-          msg_backend_ack_begin(backend, operations[slot], counts[slot]);
-      for (unsigned seq = 1u; result.status == MPMC_OK && seq <= counts[slot];
-           ++seq) {
-        message_t message = {.sender_pid = getpid(),
-                             .sequence = seq,
-                             .operation_id = operations[slot]};
-        result = msg_backend_send(backend, 1u, &message);
-      }
-      if (result.status == MPMC_OK) {
-        result = msg_backend_ack_wait(backend, operations[slot]);
-      }
-      mpmc_result_t ended = msg_backend_ack_end(backend, operations[slot]);
-      _exit(result.status == MPMC_OK && ended.status == MPMC_OK ? 0 : 1);
+    const uint64_t operations[3] = {11u, 22u, 33u};
+    const unsigned counts[3] = {20u, 7u, 40u};
+    const unsigned per_consumer[2] = {34u, 33u};
+    for (size_t slot = 0u; slot < 3u; ++slot) {
+        kids[slot] = fork();
+        if (kids[slot] == 0) {
+            mpmc_result_t result = msg_backend_ack_begin(backend, operations[slot], counts[slot]);
+            for (unsigned seq = 1u; result.status == MPMC_OK && seq <= counts[slot]; ++seq) {
+                message_t message = {
+                    .sender_pid = getpid(), .sequence = seq, .operation_id = operations[slot]};
+                result = msg_backend_send(backend, 1u, &message);
+            }
+            if (result.status == MPMC_OK) {
+                result = msg_backend_ack_wait(backend, operations[slot]);
+            }
+            mpmc_result_t ended = msg_backend_ack_end(backend, operations[slot]);
+            _exit(result.status == MPMC_OK && ended.status == MPMC_OK ? 0 : 1);
+        }
+        CHECK(kids[slot] > 0);
     }
-    CHECK(kids[slot] > 0);
-  }
-  for (size_t index = 0u; index < 2u; ++index) {
-    size_t slot = 3u + index;
-    kids[slot] = fork();
-    if (kids[slot] == 0) {
-      for (unsigned k = 0u; k < per_consumer[index]; ++k) {
-        message_t message;
-        if (msg_backend_receive(backend, 1u, &message, true).status != MPMC_OK)
-          _exit(1);
-      }
-      _exit(0);
+    for (size_t index = 0u; index < 2u; ++index) {
+        size_t slot = 3u + index;
+        kids[slot] = fork();
+        if (kids[slot] == 0) {
+            for (unsigned k = 0u; k < per_consumer[index]; ++k) {
+                message_t message;
+                if (msg_backend_receive(backend, 1u, &message, true).status != MPMC_OK) _exit(1);
+            }
+            _exit(0);
+        }
+        CHECK(kids[slot] > 0);
     }
-    CHECK(kids[slot] > 0);
-  }
 
-  alarm(WAIT_ALARM_SECONDS * 4u);
-  for (size_t slot = 0u; slot < 5u; ++slot) {
-    if (kids[slot] > 0)
-      CHECK(reap(slot, CHILD_DEADLINE_MS, backend) == 0);
-  }
-  alarm(0);
+    alarm(WAIT_ALARM_SECONDS * 4u);
+    for (size_t slot = 0u; slot < 5u; ++slot) {
+        if (kids[slot] > 0) CHECK(reap(slot, CHILD_DEADLINE_MS, backend) == 0);
+    }
+    alarm(0);
 
-  CHECK(msg_backend_poll_events(backend).status == MPMC_OK);
-  uint64_t consumed = 0u;
-  CHECK(msg_backend_consumed_count(backend, 1u, &consumed).status == MPMC_OK);
-  CHECK(consumed == 67u);
-  CHECK(queued(backend->ack_queue) == 0u);
-  CHECK(queued(backend->data_queues[0]) == 0u);
-  destroy_and_check(backend);
+    CHECK(msg_backend_poll_events(backend).status == MPMC_OK);
+    uint64_t consumed = 0u;
+    CHECK(msg_backend_consumed_count(backend, 1u, &consumed).status == MPMC_OK);
+    CHECK(consumed == 67u);
+    CHECK(queued(backend->ack_queue) == 0u);
+    CHECK(queued(backend->data_queues[0]) == 0u);
+    destroy_and_check(backend);
 }
 
 /** @brief ACK antecipado, isolamento entre operações e ack=2 sem ACK. */
 static void test_early_ack_and_unregistered(void) {
-  msg_backend_t *backend = NULL;
-  CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
-  if (backend == NULL)
-    return;
-  live_backend = backend;
+    msg_backend_t *backend = NULL;
+    CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
+    if (backend == NULL) return;
+    live_backend = backend;
 
-  CHECK(msg_backend_ack_begin(backend, 5u, 3u).status == MPMC_OK);
-  CHECK(msg_backend_ack_begin(backend, 6u, 1u).status == MPMC_OK);
-  for (unsigned seq = 1u; seq <= 3u; ++seq) {
-    message_t message = {
-        .sender_pid = getpid(), .sequence = seq, .operation_id = 5u};
-    CHECK(msg_backend_send(backend, 1u, &message).status == MPMC_OK);
-  }
-  kids[0] = fork();
-  if (kids[0] == 0) {
-    for (unsigned k = 0u; k < 3u; ++k) {
-      message_t message;
-      if (msg_backend_receive(backend, 1u, &message, true).status != MPMC_OK)
-        _exit(1);
+    CHECK(msg_backend_ack_begin(backend, 5u, 3u).status == MPMC_OK);
+    CHECK(msg_backend_ack_begin(backend, 6u, 1u).status == MPMC_OK);
+    for (unsigned seq = 1u; seq <= 3u; ++seq) {
+        message_t message = {.sender_pid = getpid(), .sequence = seq, .operation_id = 5u};
+        CHECK(msg_backend_send(backend, 1u, &message).status == MPMC_OK);
     }
-    _exit(0);
-  }
-  CHECK(kids[0] > 0);
-  CHECK(reap(0u, CHILD_DEADLINE_MS, backend) == 0);
+    kids[0] = fork();
+    if (kids[0] == 0) {
+        for (unsigned k = 0u; k < 3u; ++k) {
+            message_t message;
+            if (msg_backend_receive(backend, 1u, &message, true).status != MPMC_OK) _exit(1);
+        }
+        _exit(0);
+    }
+    CHECK(kids[0] > 0);
+    CHECK(reap(0u, CHILD_DEADLINE_MS, backend) == 0);
 
-  /* Os três ACKs chegaram antes de qualquer ack_wait(): continuam na fila. */
-  CHECK(queued(backend->ack_queue) == 3u);
+    /* Os três ACKs chegaram antes de qualquer ack_wait(): continuam na fila. */
+    CHECK(queued(backend->ack_queue) == 3u);
 
-  /* A operação 6 não pode ser satisfeita pelos ACKs da 5. */
-  alarm(1);
-  mpmc_result_t other = msg_backend_ack_wait(backend, 6u);
-  alarm(0);
-  CHECK(other.status == MPMC_ERR_INTERRUPTED && other.system_errno == EINTR);
-  CHECK(queued(backend->ack_queue) == 3u);
+    /* A operação 6 não pode ser satisfeita pelos ACKs da 5. */
+    alarm(1);
+    mpmc_result_t other = msg_backend_ack_wait(backend, 6u);
+    alarm(0);
+    CHECK(other.status == MPMC_ERR_INTERRUPTED && other.system_errno == EINTR);
+    CHECK(queued(backend->ack_queue) == 3u);
 
-  alarm(WAIT_ALARM_SECONDS);
-  mpmc_result_t waited = msg_backend_ack_wait(backend, 5u);
-  alarm(0);
-  CHECK(waited.status == MPMC_OK);
-  CHECK(queued(backend->ack_queue) == 0u);
-  CHECK(msg_backend_ack_end(backend, 5u).status == MPMC_OK);
-  CHECK(msg_backend_ack_end(backend, 6u).status == MPMC_OK);
+    alarm(WAIT_ALARM_SECONDS);
+    mpmc_result_t waited = msg_backend_ack_wait(backend, 5u);
+    alarm(0);
+    CHECK(waited.status == MPMC_OK);
+    CHECK(queued(backend->ack_queue) == 0u);
+    CHECK(msg_backend_ack_end(backend, 5u).status == MPMC_OK);
+    CHECK(msg_backend_ack_end(backend, 6u).status == MPMC_OK);
 
-  /* ack=2: sem registro, a mensagem é de tipo 1, ninguém emite ACK e a espera é
-   * recusada. */
-  message_t plain = {
-      .sender_pid = getpid(), .sequence = 1u, .operation_id = 9u};
-  message_t out;
-  CHECK(msg_backend_send(backend, 1u, &plain).status == MPMC_OK);
-  CHECK(msg_backend_receive(backend, 1u, &out, false).status == MPMC_OK);
-  CHECK(out.operation_id == 9u);
-  CHECK(queued(backend->ack_queue) == 0u);
-  CHECK(msg_backend_ack_wait(backend, 9u).status == MPMC_ERR_STATE);
+    /* ack=2: sem registro, a mensagem é de tipo 1, ninguém emite ACK e a espera é
+     * recusada. */
+    message_t plain = {.sender_pid = getpid(), .sequence = 1u, .operation_id = 9u};
+    message_t out;
+    CHECK(msg_backend_send(backend, 1u, &plain).status == MPMC_OK);
+    CHECK(msg_backend_receive(backend, 1u, &out, false).status == MPMC_OK);
+    CHECK(out.operation_id == 9u);
+    CHECK(queued(backend->ack_queue) == 0u);
+    CHECK(msg_backend_ack_wait(backend, 9u).status == MPMC_ERR_STATE);
 
-  destroy_and_check(backend);
+    destroy_and_check(backend);
 }
 
 /**
@@ -327,59 +310,55 @@ static void test_early_ack_and_unregistered(void) {
  * Q_evt então libera o consumidor e permite a limpeza normal.
  */
 static void test_ack_before_full_event_queue(void) {
-  msg_backend_t *backend = NULL;
-  CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
-  if (backend == NULL)
-    return;
-  live_backend = backend;
-  CHECK(set_qbytes(backend->event_queue, sizeof(consumption_event_t)));
-  CHECK(msg_backend_ack_begin(backend, 88u, 2u).status == MPMC_OK);
+    msg_backend_t *backend = NULL;
+    CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
+    if (backend == NULL) return;
+    live_backend = backend;
+    CHECK(set_qbytes(backend->event_queue, sizeof(consumption_event_t)));
+    CHECK(msg_backend_ack_begin(backend, 88u, 2u).status == MPMC_OK);
 
-  for (unsigned seq = 1u; seq <= 2u; ++seq) {
-    message_t message = {
-        .sender_pid = getpid(), .sequence = seq, .operation_id = 88u};
-    CHECK(msg_backend_send(backend, 1u, &message).status == MPMC_OK);
-  }
-
-  kids[0] = fork();
-  if (kids[0] == 0) {
-    for (unsigned index = 0u; index < 2u; ++index) {
-      message_t message;
-      if (msg_backend_receive(backend, 1u, &message, true).status != MPMC_OK)
-        _exit(1);
+    for (unsigned seq = 1u; seq <= 2u; ++seq) {
+        message_t message = {.sender_pid = getpid(), .sequence = seq, .operation_id = 88u};
+        CHECK(msg_backend_send(backend, 1u, &message).status == MPMC_OK);
     }
-    _exit(0);
-  }
-  CHECK(kids[0] > 0);
-  if (kids[0] <= 0) {
-    (void)msg_backend_ack_end(backend, 88u);
+
+    kids[0] = fork();
+    if (kids[0] == 0) {
+        for (unsigned index = 0u; index < 2u; ++index) {
+            message_t message;
+            if (msg_backend_receive(backend, 1u, &message, true).status != MPMC_OK) _exit(1);
+        }
+        _exit(0);
+    }
+    CHECK(kids[0] > 0);
+    if (kids[0] <= 0) {
+        (void)msg_backend_ack_end(backend, 88u);
+        destroy_and_check(backend);
+        return;
+    }
+
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    while (queued(backend->ack_queue) < 2u && elapsed_ms(&start) < CHILD_DEADLINE_MS) {
+        tick();
+    }
+    CHECK(queued(backend->ack_queue) == 2u);
+    CHECK(queued(backend->event_queue) == 1u);
+
+    alarm(WAIT_ALARM_SECONDS);
+    mpmc_result_t waited = msg_backend_ack_wait(backend, 88u);
+    alarm(0);
+    CHECK(waited.status == MPMC_OK);
+    CHECK(waitpid(kids[0], NULL, WNOHANG) == 0);
+
+    CHECK(msg_backend_poll_events(backend).status == MPMC_OK);
+    CHECK(reap(0u, CHILD_DEADLINE_MS, backend) == 0);
+    CHECK(msg_backend_ack_end(backend, 88u).status == MPMC_OK);
+    CHECK(msg_backend_poll_events(backend).status == MPMC_OK);
+    uint64_t consumed = 0u;
+    CHECK(msg_backend_consumed_count(backend, 1u, &consumed).status == MPMC_OK);
+    CHECK(consumed == 2u);
     destroy_and_check(backend);
-    return;
-  }
-
-  struct timespec start;
-  clock_gettime(CLOCK_MONOTONIC, &start);
-  while (queued(backend->ack_queue) < 2u &&
-         elapsed_ms(&start) < CHILD_DEADLINE_MS) {
-    tick();
-  }
-  CHECK(queued(backend->ack_queue) == 2u);
-  CHECK(queued(backend->event_queue) == 1u);
-
-  alarm(WAIT_ALARM_SECONDS);
-  mpmc_result_t waited = msg_backend_ack_wait(backend, 88u);
-  alarm(0);
-  CHECK(waited.status == MPMC_OK);
-  CHECK(waitpid(kids[0], NULL, WNOHANG) == 0);
-
-  CHECK(msg_backend_poll_events(backend).status == MPMC_OK);
-  CHECK(reap(0u, CHILD_DEADLINE_MS, backend) == 0);
-  CHECK(msg_backend_ack_end(backend, 88u).status == MPMC_OK);
-  CHECK(msg_backend_poll_events(backend).status == MPMC_OK);
-  uint64_t consumed = 0u;
-  CHECK(msg_backend_consumed_count(backend, 1u, &consumed).status == MPMC_OK);
-  CHECK(consumed == 2u);
-  destroy_and_check(backend);
 }
 
 /**
@@ -390,126 +369,112 @@ static void test_ack_before_full_event_queue(void) {
  * @return Resultado de reap() do consumidor.
  */
 static int run_late_ack(bool abandon) {
-  msg_backend_t *backend = NULL;
-  CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
-  if (backend == NULL)
-    return -2;
-  live_backend = backend;
-  CHECK(set_qbytes(backend->ack_queue, 2u * sizeof(ack_event_t)));
+    msg_backend_t *backend = NULL;
+    CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
+    if (backend == NULL) return -2;
+    live_backend = backend;
+    CHECK(set_qbytes(backend->ack_queue, 2u * sizeof(ack_event_t)));
 
-  /* Produtor ack=1 que desiste depois de enviar 4 mensagens (erro ou
-   * cancelamento). */
-  CHECK(msg_backend_ack_begin(backend, 77u, 4u).status == MPMC_OK);
-  for (unsigned seq = 1u; seq <= 4u; ++seq) {
-    message_t message = {
-        .sender_pid = getpid(), .sequence = seq, .operation_id = 77u};
-    CHECK(msg_backend_send(backend, 1u, &message).status == MPMC_OK);
-  }
-  CHECK(msg_backend_ack_end(backend, 77u).status == MPMC_OK);
-  if (abandon)
-    CHECK(msg_backend_ack_abandon(backend, 77u).status == MPMC_OK);
-
-  kids[0] = fork();
-  if (kids[0] == 0) {
-    for (unsigned k = 0u; k < 4u; ++k) {
-      message_t message;
-      if (msg_backend_receive(backend, 1u, &message, true).status != MPMC_OK)
-        _exit(1);
+    /* Produtor ack=1 que desiste depois de enviar 4 mensagens (erro ou
+     * cancelamento). */
+    CHECK(msg_backend_ack_begin(backend, 77u, 4u).status == MPMC_OK);
+    for (unsigned seq = 1u; seq <= 4u; ++seq) {
+        message_t message = {.sender_pid = getpid(), .sequence = seq, .operation_id = 77u};
+        CHECK(msg_backend_send(backend, 1u, &message).status == MPMC_OK);
     }
-    _exit(0);
-  }
-  CHECK(kids[0] > 0);
-  int rc = reap(0u, abandon ? CHILD_DEADLINE_MS : WEDGE_OBSERVE_MS, backend);
-  if (abandon) {
-    CHECK(queued(backend->ack_queue) == 0u);
-    CHECK(queued(backend->data_queues[0]) == 0u);
-  }
-  destroy_and_check(backend);
-  return rc;
+    CHECK(msg_backend_ack_end(backend, 77u).status == MPMC_OK);
+    if (abandon) CHECK(msg_backend_ack_abandon(backend, 77u).status == MPMC_OK);
+
+    kids[0] = fork();
+    if (kids[0] == 0) {
+        for (unsigned k = 0u; k < 4u; ++k) {
+            message_t message;
+            if (msg_backend_receive(backend, 1u, &message, true).status != MPMC_OK) _exit(1);
+        }
+        _exit(0);
+    }
+    CHECK(kids[0] > 0);
+    int rc = reap(0u, abandon ? CHILD_DEADLINE_MS : WEDGE_OBSERVE_MS, backend);
+    if (abandon) {
+        CHECK(queued(backend->ack_queue) == 0u);
+        CHECK(queued(backend->data_queues[0]) == 0u);
+    }
+    destroy_and_check(backend);
+    return rc;
 }
 
 static void test_late_acks(void) {
-  /* Controle negativo: sem abandon, o consumidor fica preso em msgsnd() da fila
-   * de ACK. */
-  CHECK(run_late_ack(false) == -1);
-  /* Com abandon, poll_events() libera o consumidor e a fila de ACK termina
-   * vazia. */
-  CHECK(run_late_ack(true) == 0);
+    /* Controle negativo: sem abandon, o consumidor fica preso em msgsnd() da fila
+     * de ACK. */
+    CHECK(run_late_ack(false) == -1);
+    /* Com abandon, poll_events() libera o consumidor e a fila de ACK termina
+     * vazia. */
+    CHECK(run_late_ack(true) == 0);
 }
 
 /** @brief Argumentos, idempotência e seletividade de msg_backend_ack_abandon().
  */
 static void test_abandon_contract(void) {
-  CHECK(msg_backend_ack_abandon(NULL, 1u).status == MPMC_ERR_INVALID_ARG);
-  msg_backend_t *backend = NULL;
-  CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
-  if (backend == NULL)
-    return;
-  live_backend = backend;
+    CHECK(msg_backend_ack_abandon(NULL, 1u).status == MPMC_ERR_INVALID_ARG);
+    msg_backend_t *backend = NULL;
+    CHECK(msg_backend_create(&backend, 1u).status == MPMC_OK && backend != NULL);
+    if (backend == NULL) return;
+    live_backend = backend;
 
-  CHECK(msg_backend_ack_abandon(backend, 0u).status == MPMC_ERR_INVALID_ARG);
-  CHECK(msg_backend_ack_abandon(backend, (uint64_t)LONG_MAX + 1u).status ==
-        MPMC_ERR_INVALID_ARG);
-  CHECK(backend->abandoned_count == 0u);
+    CHECK(msg_backend_ack_abandon(backend, 0u).status == MPMC_ERR_INVALID_ARG);
+    CHECK(msg_backend_ack_abandon(backend, (uint64_t)LONG_MAX + 1u).status == MPMC_ERR_INVALID_ARG);
+    CHECK(backend->abandoned_count == 0u);
 
-  CHECK(msg_backend_ack_abandon(backend, 40u).status == MPMC_OK);
-  CHECK(msg_backend_ack_abandon(backend, 40u).status == MPMC_OK);
-  CHECK(backend->abandoned_count == 1u);
+    CHECK(msg_backend_ack_abandon(backend, 40u).status == MPMC_OK);
+    CHECK(msg_backend_ack_abandon(backend, 40u).status == MPMC_OK);
+    CHECK(backend->abandoned_count == 1u);
 
-  /* ACKs injetados: o da operação abandonada some no poll; o de outra operação
-   * fica. */
-  ack_event_t late = {.operation_id = 40u};
-  ack_event_t live = {.operation_id = 41u};
-  CHECK(
-      sysv_msg_send(backend->ack_queue, 40, &late, sizeof(late), true).status ==
-      MPMC_OK);
-  CHECK(
-      sysv_msg_send(backend->ack_queue, 41, &live, sizeof(live), true).status ==
-      MPMC_OK);
-  CHECK(
-      sysv_msg_send(backend->ack_queue, 40, &late, sizeof(late), true).status ==
-      MPMC_OK);
-  CHECK(queued(backend->ack_queue) == 3u);
-  CHECK(msg_backend_poll_events(backend).status == MPMC_OK);
-  CHECK(queued(backend->ack_queue) == 1u);
+    /* ACKs injetados: o da operação abandonada some no poll; o de outra operação
+     * fica. */
+    ack_event_t late = {.operation_id = 40u};
+    ack_event_t live = {.operation_id = 41u};
+    CHECK(sysv_msg_send(backend->ack_queue, 40, &late, sizeof(late), true).status == MPMC_OK);
+    CHECK(sysv_msg_send(backend->ack_queue, 41, &live, sizeof(live), true).status == MPMC_OK);
+    CHECK(sysv_msg_send(backend->ack_queue, 40, &late, sizeof(late), true).status == MPMC_OK);
+    CHECK(queued(backend->ack_queue) == 3u);
+    CHECK(msg_backend_poll_events(backend).status == MPMC_OK);
+    CHECK(queued(backend->ack_queue) == 1u);
 
-  /* Um produtor vivo ainda recebe o próprio ACK depois da purga. */
-  CHECK(msg_backend_ack_begin(backend, 41u, 1u).status == MPMC_OK);
-  alarm(WAIT_ALARM_SECONDS);
-  CHECK(msg_backend_ack_wait(backend, 41u).status == MPMC_OK);
-  alarm(0);
-  CHECK(msg_backend_ack_end(backend, 41u).status == MPMC_OK);
-  destroy_and_check(backend);
+    /* Um produtor vivo ainda recebe o próprio ACK depois da purga. */
+    CHECK(msg_backend_ack_begin(backend, 41u, 1u).status == MPMC_OK);
+    alarm(WAIT_ALARM_SECONDS);
+    CHECK(msg_backend_ack_wait(backend, 41u).status == MPMC_OK);
+    alarm(0);
+    CHECK(msg_backend_ack_end(backend, 41u).status == MPMC_OK);
+    destroy_and_check(backend);
 }
 
 /** @brief Instala SIGALRM (interrompe esperas, mata filhos) e os tratadores
  * fatais. */
 static bool install_handlers(void) {
-  struct sigaction alarm_action = {.sa_handler = on_alarm};
-  struct sigaction fatal_action = {.sa_handler = on_fatal};
-  sigemptyset(&alarm_action.sa_mask);
-  sigemptyset(&fatal_action.sa_mask);
-  return sigaction(SIGALRM, &alarm_action, NULL) == 0 &&
-         sigaction(SIGINT, &fatal_action, NULL) == 0 &&
-         sigaction(SIGTERM, &fatal_action, NULL) == 0 &&
-         sigaction(SIGHUP, &fatal_action, NULL) == 0;
+    struct sigaction alarm_action = {.sa_handler = on_alarm};
+    struct sigaction fatal_action = {.sa_handler = on_fatal};
+    sigemptyset(&alarm_action.sa_mask);
+    sigemptyset(&fatal_action.sa_mask);
+    return sigaction(SIGALRM, &alarm_action, NULL) == 0
+        && sigaction(SIGINT, &fatal_action, NULL) == 0
+        && sigaction(SIGTERM, &fatal_action, NULL) == 0
+        && sigaction(SIGHUP, &fatal_action, NULL) == 0;
 }
 
 int main(void) {
-  owner_pid = getpid();
-  if (!install_handlers()) {
-    perror("sigaction");
-    return 1;
-  }
-  test_concurrent_operations();
-  test_early_ack_and_unregistered();
-  test_ack_before_full_event_queue();
-  test_late_acks();
-  test_abandon_contract();
-  printf("%u verificações de ACK concorrente MSG, %u falhas\n", checks,
-         failures);
-  if (failures != 0u)
-    return 1;
-  puts("Message backend ACK concurrency tests passed.");
-  return 0;
+    owner_pid = getpid();
+    if (!install_handlers()) {
+        perror("sigaction");
+        return 1;
+    }
+    test_concurrent_operations();
+    test_early_ack_and_unregistered();
+    test_ack_before_full_event_queue();
+    test_late_acks();
+    test_abandon_contract();
+    printf("%u verificações de ACK concorrente MSG, %u falhas\n", checks, failures);
+    if (failures != 0u) return 1;
+    puts("Message backend ACK concurrency tests passed.");
+    return 0;
 }

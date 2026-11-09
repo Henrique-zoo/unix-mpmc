@@ -72,8 +72,11 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count);
  * kernel sem consumir os ACKs da sua operação. ACKs de operações sem dono são
  * descartados por msg_backend_ack_abandon(). Ver docs/protocol.md.
  */
-mpmc_result_t msg_backend_send(msg_backend_t *backend, size_t producer_id,
-                               const message_t *message);
+mpmc_result_t msg_backend_send(
+    msg_backend_t *backend,
+    size_t producer_id,
+    const message_t *message
+);
 
 /**
  * @brief Retira uma mensagem, contabiliza e encaminha seu ACK se necessário.
@@ -113,8 +116,12 @@ mpmc_result_t msg_backend_send(msg_backend_t *backend, size_t producer_id,
  * (msg_backend_ack_abandon()). O ACK é publicado antes do evento para que uma
  * Q_evt cheia não retenha a confirmação de uma mensagem já retirada.
  */
-mpmc_result_t msg_backend_receive(msg_backend_t *backend, size_t producer_id,
-                                  message_t *out, bool blocking);
+mpmc_result_t msg_backend_receive(
+    msg_backend_t *backend,
+    size_t producer_id,
+    message_t *out,
+    bool blocking
+);
 
 /**
  * @brief Prepara rastreamento de ACK por operação produtora.
@@ -130,8 +137,11 @@ mpmc_result_t msg_backend_receive(msg_backend_t *backend, size_t producer_id,
  *   errno de realloc(), ou zero em overflow de capacidade.
  * @note O canal distingue a operação, e não apenas o índice da fila.
  */
-mpmc_result_t msg_backend_ack_begin(msg_backend_t *backend,
-                                    uint64_t operation_id, unsigned expected);
+mpmc_result_t msg_backend_ack_begin(
+    msg_backend_t *backend,
+    uint64_t operation_id,
+    unsigned expected
+);
 
 /**
  * @brief Aguarda ACKs de todas as mensagens da operação indicada.
@@ -151,8 +161,7 @@ mpmc_result_t msg_backend_ack_begin(msg_backend_t *backend,
  * ACKs esperados, com sinal (MPMC_ERR_INTERRUPTED) ou com a remoção da fila
  * (MPMC_ERR_SHUTDOWN).
  */
-mpmc_result_t msg_backend_ack_wait(msg_backend_t *backend,
-                                   uint64_t operation_id);
+mpmc_result_t msg_backend_ack_wait(msg_backend_t *backend, uint64_t operation_id);
 
 /**
  * @brief Finaliza registro/canal de ACK da operação.
@@ -170,8 +179,7 @@ mpmc_result_t msg_backend_ack_wait(msg_backend_t *backend,
  * exclusivos durante a vida das filas para que ACKs tardios não sejam
  * associados a outra operação.
  */
-mpmc_result_t msg_backend_ack_end(msg_backend_t *backend,
-                                  uint64_t operation_id);
+mpmc_result_t msg_backend_ack_end(msg_backend_t *backend, uint64_t operation_id);
 
 /**
  * @brief Declara sem dono uma operação cujo produtor terminou sem receber todos
@@ -195,8 +203,7 @@ mpmc_result_t msg_backend_ack_end(msg_backend_t *backend,
  * @note Só o supervisor chama esta função. Não afeta operações vivas: o
  * descarte é seletivo por mtype = operation_id.
  */
-mpmc_result_t msg_backend_ack_abandon(msg_backend_t *backend,
-                                      uint64_t operation_id);
+mpmc_result_t msg_backend_ack_abandon(msg_backend_t *backend, uint64_t operation_id);
 
 /**
  * @brief Drena eventos de consumo e acumula estatísticas no processo pai.
@@ -227,9 +234,11 @@ mpmc_result_t msg_backend_poll_events(msg_backend_t *backend);
  * de 1..p.
  * @pre Chamar msg_backend_poll_events() antes do relatório final.
  */
-mpmc_result_t msg_backend_consumed_count(msg_backend_t *backend,
-                                         size_t producer_id,
-                                         uint64_t *out_count);
+mpmc_result_t msg_backend_consumed_count(
+    msg_backend_t *backend,
+    size_t producer_id,
+    uint64_t *out_count
+);
 
 /**
  * @brief Libera somente o estado local do processo filho.
