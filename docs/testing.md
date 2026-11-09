@@ -30,6 +30,7 @@ não é suficiente para provar correção concorrente.
 | U16 | `supervisor`/relatório | Fixture controlada (`test_supervisor_report`): três filhos simulados com saída normal, término por sinal e falha; associação por PID, `operation_id` e tipo sem assumir ordem de coleta; durações monotônicas com virada de segundo, regressão e falha do relógio; duração total do processo principal com e sem relógio; contagens controladas para estruturas 1..p; substituição de `fork()`, `waitpid()`, relógio e fachada IPC, sem criar filhos reais ou recursos System V |
 | U17 | `shm_backend` | Criação/SETVAL de cada conjunto, rollback por etapa, IDs independentes e falhas de remoção de semáforos |
 | U18 | `shm_operations` | FIFO, metadados, isolamento, totais, interrupção de esperas reais, concorrência e falhas de aquisição/publicação; envio em estrutura cheia que bloqueia só o remetente e retoma após consumo; recepção bloqueante retomada somente por dado da própria estrutura (processos filhos coordenados por eventos); backend com 1024 estruturas independentes e índice 1025 inválido |
+| U19 | `shm_stress` | Estresse do backend SHM real (`test_shm_stress`): 4 rodadas criam/destroem backends com 1..4 estruturas cheias; 6 produtores e 2 consumidores por estrutura; 30375 verificações de identidade única, sem perda nem duplicação, destino/remetente corretos, FIFO por (consumidor, produtor) e totais exatos, sem filhos remanescentes; backend espectador preservado |
 
 ## Testes de integração (repetir para modos 1 e 2)
 
@@ -176,6 +177,22 @@ metadados, isolamento entre estruturas e totais independentes. Interrompe com
 e preservação das saídas. Dois produtores e dois consumidores exercitam a mesma
 estrutura, com 128 identidades conferidas sem perda ou duplicação. Um pipe leva as
 observações ao pai; sua ordem não é usada como evidência da ordem de retirada.
+
+`test_shm_stress` (U19, issue 56) exercita o backend SHM real sem ACK, supervisor, workers finais
+ou REPL. Em cada uma de quatro rodadas (1, 2, 3 e 4 estruturas) o pai cria o backend e enche todas
+as estruturas (63 mensagens, `EMPTY == 0`) antes de criar os filhos; seis produtores enviam 150
+mensagens cada, bloqueando em estruturas cheias, e dois consumidores por estrutura retiram
+exatamente a cota de cada uma. A identidade é `(operation_id, sequence)`; o pai confere, sem supor
+ordem global entre produtores, que cada identidade chega uma única vez, na estrutura e do remetente
+corretos, que a ordem de cada consumidor respeita FIFO por produtor, que `consumed_count` iguala o
+total enviado e que as estruturas terminam vazias. Volume e padrão de envio são fixos
+(reproduzíveis, sem `sleep()`). Pai usa `alarm(30)` por rodada (cancela as demais ao expirar);
+filhos usam `alarm(20)` e morrem por SIGALRM. Os filhos fecham só o estado local, o pai recolhe
+todos (sem zumbis) e remove apenas seus recursos, o que se confere por `shmctl`/`semctl`; um
+backend espectador criado antes das rodadas continua íntegro no fim.
+**Limitações:** esta etapa não comprova o protocolo de ACK nem shutdown durante esperas reais;
+ACK concorrente, interrupção durante dados/espaço/ACK, falhas parciais e shutdown completo
+continuam na issue 26.
 
 Dois cenários adicionais usam processos filhos de teste, sem ACK, workers finais, supervisor
 ou REPL. Cada filho avisa o pai por pipe imediatamente antes de uma única operação bloqueante,
