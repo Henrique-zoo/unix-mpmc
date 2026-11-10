@@ -163,8 +163,15 @@ $ ./mpmc 2 2
 
 ### Entrada por `stdin`, pipes e EOF
 
-O REPL aceita `stdin` interativo (terminal), arquivo (`./mpmc 4 1 < comandos.txt`) ou pipe
-(`printf 'produz 1 2 2\nshutdown\n' | ./mpmc 4 1`). O comportamento é o mesmo nos três casos:
+O REPL aceita `stdin` interativo (terminal), arquivo (`./mpmc 4 1 < comandos.txt`) ou pipe:
+
+```sh
+printf 'produz 1 2 2\nshutdown\n' | ./mpmc 4 1
+```
+
+O exemplo solicita encerramento logo após o despacho; pode cancelar o worker antes
+que ele conclua. Para obter resultados específicos, aguarde os avisos de conclusão.
+O tratamento da entrada segue estas regras:
 
 - O prompt `>>` é exibido no início e depois de cada linha processada, válida ou não.
 - Quando o supervisor informa em `stderr` o término anormal de um filho, o prompt é redesenhado
