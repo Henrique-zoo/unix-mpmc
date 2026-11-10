@@ -26,7 +26,7 @@
 typedef struct {
     int shmid; /**< Identificador do segmento; -1 antes da criação. Zero é válido. */
     int semid; /**< Identificador do conjunto de SHM_SEM_COUNT semáforos; -1 antes da criação. */
-    shm_ring_t *ring; /**< Endereço associado neste processo; NULL antes da associação. */
+    shm_ring_t *ring; /**< Endereço associado neste processo; nullptr antes da associação. */
 } shm_segment_t;
 
 /**
@@ -41,12 +41,14 @@ enum {
     SHM_SEM_COUNT, /**< Quantidade de semáforos do conjunto; não é um índice utilizável. */
 };
 
-/** @brief Quantidade máxima de operações ACK simultaneamente registradas. */
+/** @brief Registros ativos de ACK; comandos adicionais aguardam uma vaga. */
 #define SHM_ACK_OPERATION_CAPACITY 64
 
 /** @brief Índices do conjunto global de semáforos de ACK. */
 enum {
     SHM_ACK_SEM_MUTEX,
+    SHM_ACK_SEM_AVAILABLE, /**< Registros livres; produtores aguardam uma vaga sem manter o mutex.
+                            */
     SHM_ACK_SEM_NOTIFICATION_BASE,
     SHM_ACK_SEM_COUNT = SHM_ACK_SEM_NOTIFICATION_BASE + SHM_ACK_OPERATION_CAPACITY,
 };
@@ -85,13 +87,32 @@ struct shm_backend {
     int ack_semid;                  /**< Mutex e notificações de conclusão. */
 };
 
-/** @brief Cria e inicializa os recursos globais de controle ACK. */
+/**
+ * @brief Cria e inicializa os recursos globais de controle ACK.
+ * @param backend Estado local com IDs -1 e associação nula antes da criação.
+ * @return Estrutura mpmc_result_t com um dos estados:
+ * - MPMC_OK: segmento, mutex, vagas e conclusões inicializados; system_errno zero.
+ * - MPMC_ERR_INVALID_ARG: backend nulo, com errno zero, ou argumentos rejeitados
+ *   por shmget(), shmat(), semget() ou semctl(SETVAL), com errno preservado.
+ * - MPMC_ERR_STATE: o backend já contém recursos de ACK; system_errno zero.
+ * - MPMC_ERR_SHUTDOWN: recurso removido durante inicialização; errno EIDRM preservado.
+ * - MPMC_ERR_SYS: outra falha dos wrappers de SHM/SEM; errno da syscall preservado.
+ * @post IDs parciais continuam disponíveis para o rollback de lifecycle.c.
+ */
 mpmc_result_t shm_backend_ack_resources_create(shm_backend_t *backend);
 
 /**
  * @brief Desassocia e, quando solicitado, remove os recursos globais de ACK.
  * @param backend Instância do backend.
  * @param remove_global Se true, também solicita IPC_RMID dos recursos.
+ * @return Estrutura mpmc_result_t com um dos estados:
+ * - MPMC_OK: liberações solicitadas concluídas; system_errno zero.
+ * - MPMC_ERR_INVALID_ARG: backend nulo, com errno zero, ou EINVAL de shmdt(),
+ *   semctl(IPC_RMID) ou shmctl(IPC_RMID), com errno preservado.
+ * - MPMC_ERR_SHUTDOWN: IPC_RMID encontrou recurso removido; errno EIDRM preservado.
+ * - MPMC_ERR_SYS: outra falha de liberação; errno da primeira falha preservado.
+ * @details Visita todos os recursos. O observador comum recebe cada falha;
+ * IDs/mapeamento só são invalidados quando sua liberação conclui.
  */
 mpmc_result_t shm_backend_ack_resources_cleanup(shm_backend_t *backend, bool remove_global);
 
@@ -103,6 +124,16 @@ mpmc_result_t shm_backend_ack_resources_cleanup(shm_backend_t *backend, bool rem
  * @pre Cada retirada efetiva chama esta função exatamente uma vez.
  * @details Função privada, sem deduplicação por sequência. Operações
  * desconhecidas são ignoradas. Somente o último consumo publica notificação.
+ * @return Estrutura mpmc_result_t com um dos estados:
+ * - MPMC_OK: consumo registrado ou mensagem sem lote ativo; system_errno zero.
+ * - MPMC_ERR_INVALID_ARG: backend/mensagem nulos, com errno zero, ou argumento
+ *   rejeitado por semop(), com errno preservado.
+ * - MPMC_ERR_INVALID_INDEX: índice lógico fora de 1..p; system_errno zero.
+ * - MPMC_ERR_STATE: controle ACK não inicializado; system_errno zero.
+ * - MPMC_ERR_INTERRUPTED: semop() interrompida; errno EINTR preservado.
+ * - MPMC_ERR_SHUTDOWN: conjunto removido; errno EIDRM preservado.
+ * - MPMC_ERR_SYS: outra falha em semop(); errno capturado é preservado.
+ * @warning A mensagem já saiu do ring; em falha, não repetir o recebimento.
  */
 mpmc_result_t shm_backend_ack_notify_consumed(
     shm_backend_t *backend,

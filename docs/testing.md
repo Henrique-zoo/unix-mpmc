@@ -68,7 +68,7 @@ não é suficiente para provar correção concorrente.
 | I20 | Multiprodutores com ACK concorrente | ACKs não se cruzam entre trabalhos |
 | I21 | Tempos de vida dos filhos e do `mpmc` | Relatório apresenta durações não negativas e coerentes |
 | I22 | Mensagem e relatório final | ID/PID do produtor correlacionam com suas mensagens; relatório de consumidor não sobrescreve os metadados do produtor |
-| I23 | Inicialização com `p` no limite e acima dele | `p = MPMC_MAX_PRODUCERS` é aceito nos dois paradigmas; `p` maior, inclusive overflow de `size_t`, é recusado com erro e uso, sem iniciar o REPL |
+| I23 | Inicialização com `p` no limite e acima dele | `p=1025` chega à inicialização IPC em fixture com falha de criação; overflow de size_t é recusado com uso, antes do REPL |
 
 ## Propriedades a verificar
 
@@ -208,7 +208,7 @@ ID zero. A suíte verifica os valores iniciais MUTEX=1, EMPTY=capacity e FULL=0,
 injeta falha na criação e em cada SETVAL de cada entrada e confere o rollback dos
 recursos efetivamente criados. Os diagnósticos usam `resource_id`, distinguem
 segmento/conjunto e preservam o primeiro erro mesmo quando o cleanup também falha.
-Fechamento com NULL não aloca, não libera recursos e não chama o reporter.
+Fechamento com nullptr não aloca, não libera recursos e não chama o reporter.
 
 `test_shm_operations` usa segmentos e semáforos reais para FIFO após volta dos índices,
 metadados, isolamento entre estruturas e totais independentes. Interrompe com
@@ -269,13 +269,13 @@ estrutura 2 vazia; o pai envia antes à estrutura 1 e depois à 2, e o filho dev
 exatamente a mensagem da 2, com todos os campos, enquanto a da 1 permanece. Recursos System V
 são criados e removidos apenas pelo pai, no backend do próprio teste.
 
-Um terceiro cenário cria o backend com `MPMC_MAX_PRODUCERS` (1024) estruturas, sem processos
+Um terceiro cenário cria o backend com 1024 estruturas, sem processos
 filhos: segmentos e conjuntos de semáforos distintos por índice, uma mensagem própria enviada a
 cada índice de 1 a 1024 e retirada do mesmo índice em ordem inversa, contador acumulado igual a
 1 em todos, e índice 1025 inválido em `send`, `receive` e `consumed_count` com saídas
-preservadas. `shm_backend_create()` só rejeita `producer_count == 0`; o limite superior é
-validado na camada de argumentos do programa, por isso o teste não espera erro de criação para
-1025. Se o sistema esgotar seus limites System V (ENOSPC/ENOMEM/EMFILE), o cenário é dispensado
+preservadas. 1024 é o volume deste cenário, não um limite de p. O parser aceita
+p positivo representável em size_t; a criação depende de memória e limites reais
+do sistema. Se o sistema esgotar seus limites System V (ENOSPC/ENOMEM/EMFILE), o cenário é dispensado
 com aviso em stderr; qualquer outra falha conta como falha do teste.
 
 Alcance (#55, subtarefa de #25): valida o backend SHM real com processos de teste e mensagens
@@ -291,12 +291,11 @@ recuperação dos contadores. Isso corresponde à obrigação de descarte descri
 @ref shm_operation_failures. Os testes de interrupção da aquisição e recepção vazia
 verificam que esses retornos não deixam reservas parciais nem alteram o buffer.
 A comunicação de falhas fatais ao supervisor e o shutdown coordenado continuam
-pendentes de integração na #20 e não são comprovados por esta suíte.
+comprovados pela matriz do executável de prova descrita ao final desta página.
 O cleanup de segurança encerra/recolhe apenas os filhos próprios e remove apenas
 os recursos do contexto.
 O teste U24 (`test_shm_backend_ack`) verifica registro, conclusão antecipada,
-proprietário, notificação final única, isolamento entre operações, limite de 64
-posições e 1024 consumos, reutilização, waiter único, interrupção e falhas de mutex.
+proprietário, notificação final única, isolamento entre operações, 64 posições internas com espera por vaga e 1024 consumos, reutilização, waiter único, interrupção e falhas de mutex.
 A deduplicação por sequência foi substituída pelo contrato de uma confirmação por
 retirada efetiva. `test_shm_ack_lifecycle` passa pelo buffer real: confirmações
 antecipadas, consumo parcial, espera bloqueada, quatro produtores concorrentes e
@@ -348,8 +347,7 @@ para verificar o prompt inicial, seu redesenho após o aviso de término de um f
 relatório final. A entrada em terminal complementa os cenários por pipes e FIFOs do
 script `test_repl.sh`, incluindo a validação do limite de estruturas na inicialização.
 
-Os testes completos de integração de FIFO, ACKs e concorrência dos backends da matriz acima ainda
-dependem das respectivas implementações. Os *smoke tests* validam somente inicialização
+FIFO, ACKs e concorrência dos backends têm cobertura nas suítes nativas e de paridade. Os *smoke tests* validam somente inicialização
 e shutdown; os cenários do REPL não substituem a verificação do transporte IPC completo.
 Scripts automatizados devem capturar a saída e impor limites de tempo para detectar travamentos.
 
@@ -394,3 +392,20 @@ O estresse de dados MSG da #58 já está em `test_msg_stress`: mensagens com ide
 de criação/destruição e alarmes. A cobertura de ACK/shutdown é complementar, nas
 suítes de ACK e na matriz acima. Os testes C mantêm `alarm()` com tratadores e
 máscaras adequados ao macOS; não foi realizada execução nativa em macOS nesta revisão.
+
+
+## Regressões de aderência ao enunciado
+
+- test_background.py: job em background com terminal suspende por SIGTTIN,
+  retoma quando seu grupo recebe foreground/SIGCONT e aceita shutdown; dois modos.
+- test_conformance.py: 65 produtores ACK antes do consumidor concluem nos dois
+  modos; p=1025 alcança o backend; EIO no relógio final preserva contagens e
+  apresenta indisponível com saída de erro.
+- test_shm_ack_lifecycle: espera por vaga interrompida por alarm(), retorno de
+  todas as reservas e liberação do mutex para o processo que encerra outro lote.
+- test_supervisor_report: falha individual, regressão monotônica e falha total
+  preservam dados, errno/PID e callbacks sem duplicação; zero real continua válido.
+
+As suítes Python usam processos, pipes e prazos; os testes nativos conservam
+alarm()/sigaction sem SA_RESTART e máscaras explícitas para compatibilidade macOS.
+A execução desta revisão ocorreu em Linux; não foi feita validação nativa macOS.

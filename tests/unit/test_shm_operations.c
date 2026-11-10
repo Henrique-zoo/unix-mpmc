@@ -45,6 +45,9 @@ static unsigned apply_calls, change_calls, fail_apply_call, fail_change_call;
 static mpmc_result_t injected_error;
 
 /** @brief Registra uma propriedade sem depender de assert(), inclusive em release. */
+/** @brief Volume deste cenário; não é um limite da aplicação. */
+static constexpr size_t TEST_STRUCTURE_COUNT = 1024;
+
 #define CHECK(condition)                                                                           \
     do {                                                                                           \
         ++checks;                                                                                  \
@@ -492,7 +495,7 @@ static void test_blocking_receive_resumes_on_own_structure(void) {
  * @brief Backend com o máximo documentado de estruturas: índices 1..p independentes.
  * @details shm_backend_create() só rejeita zero; o limite superior é validado na camada
  * de argumentos do programa, portanto aqui não se espera erro para p + 1 na criação. Com
- * MPMC_MAX_PRODUCERS estruturas, cada índice recebe uma mensagem própria; as retiradas
+ * TEST_STRUCTURE_COUNT estruturas, cada índice recebe uma mensagem própria; as retiradas
  * devolvem a mensagem do mesmo índice e o índice p + 1 é inválido. Se o sistema operacional
  * esgotar seus limites System V (ENOSPC/ENOMEM/EMFILE), o cenário é dispensado com aviso,
  * sem contar como sucesso nem como falha; qualquer outra falha é registrada.
@@ -501,27 +504,27 @@ static void test_maximum_structure_count(void) {
     cleanup();
     apply_calls = change_calls = fail_apply_call = fail_change_call = 0;
     arm_timeout(10);
-    mpmc_result_t created = shm_backend_create(&owned_backend, MPMC_MAX_PRODUCERS, nullptr);
+    mpmc_result_t created = shm_backend_create(&owned_backend, TEST_STRUCTURE_COUNT, nullptr);
     if (created.status == MPMC_ERR_SYS
         && (created.system_errno == ENOSPC || created.system_errno == ENOMEM
             || created.system_errno == EMFILE)) {
         fprintf(
             stderr,
-            "AVISO: limite System V do sistema impede %u estruturas (errno %d); cenário "
+            "AVISO: limite System V do sistema impede %zu estruturas (errno %d); cenário "
             "dispensado\n",
-            MPMC_MAX_PRODUCERS,
+            TEST_STRUCTURE_COUNT,
             created.system_errno
         );
         return;
     }
     CHECK(created.status == MPMC_OK && created.system_errno == 0);
     if (created.status != MPMC_OK) return;
-    CHECK(owned_backend->producer_count == MPMC_MAX_PRODUCERS);
+    CHECK(owned_backend->producer_count == TEST_STRUCTURE_COUNT);
 
     /* Cada estrutura possui segmento e conjunto de semáforos próprios. */
     bool distinct = true;
-    for (size_t a = 0; a < MPMC_MAX_PRODUCERS && distinct; ++a) {
-        for (size_t b = a + 1; b < MPMC_MAX_PRODUCERS; ++b) {
+    for (size_t a = 0; a < TEST_STRUCTURE_COUNT && distinct; ++a) {
+        for (size_t b = a + 1; b < TEST_STRUCTURE_COUNT; ++b) {
             if (owned_backend->segments[a].shmid == owned_backend->segments[b].shmid
                 || owned_backend->segments[a].semid == owned_backend->segments[b].semid) {
                 distinct = false;
@@ -531,11 +534,11 @@ static void test_maximum_structure_count(void) {
     }
     CHECK(distinct);
 
-    for (size_t id = 1; id <= MPMC_MAX_PRODUCERS; ++id) {
+    for (size_t id = 1; id <= TEST_STRUCTURE_COUNT; ++id) {
         message_t message = sample_message((unsigned)id, id);
         CHECK_RESULT(shm_backend_send(owned_backend, id, &message), MPMC_OK, 0);
     }
-    for (size_t id = MPMC_MAX_PRODUCERS; id >= 1; --id) {
+    for (size_t id = TEST_STRUCTURE_COUNT; id >= 1; --id) {
         message_t out, expected = sample_message((unsigned)id, id);
         uint64_t count = UINT64_MAX;
         CHECK(owned_backend->segments[id - 1].ring->count == 1);
@@ -549,19 +552,21 @@ static void test_maximum_structure_count(void) {
     }
 
     const size_t first_shmid = (size_t)owned_backend->segments[0].shmid;
-    const size_t last_semid = (size_t)owned_backend->segments[MPMC_MAX_PRODUCERS - 1].semid;
+    const size_t last_semid = (size_t)owned_backend->segments[TEST_STRUCTURE_COUNT - 1].semid;
     message_t message = sample_message(1, 1), out = message;
     uint64_t count = UINT64_MAX;
     CHECK_RESULT(
-        shm_backend_send(owned_backend, MPMC_MAX_PRODUCERS + 1, &message), MPMC_ERR_INVALID_INDEX, 0
-    );
-    CHECK_RESULT(
-        shm_backend_receive(owned_backend, MPMC_MAX_PRODUCERS + 1, &out, false),
+        shm_backend_send(owned_backend, TEST_STRUCTURE_COUNT + 1, &message),
         MPMC_ERR_INVALID_INDEX,
         0
     );
     CHECK_RESULT(
-        shm_backend_consumed_count(owned_backend, MPMC_MAX_PRODUCERS + 1, &count),
+        shm_backend_receive(owned_backend, TEST_STRUCTURE_COUNT + 1, &out, false),
+        MPMC_ERR_INVALID_INDEX,
+        0
+    );
+    CHECK_RESULT(
+        shm_backend_consumed_count(owned_backend, TEST_STRUCTURE_COUNT + 1, &count),
         MPMC_ERR_INVALID_INDEX,
         0
     );

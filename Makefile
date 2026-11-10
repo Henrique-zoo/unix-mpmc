@@ -431,7 +431,11 @@ $(INTEGRATION_DIR)/test_repl: tests/integration/test_repl.c
 
 # Executável de prova: mesmos módulos da aplicação, syscalls observadas somente nos wrappers.
 PROBE_BINARY := $(INTEGRATION_DIR)/mpmc_probe
-PROBE_OBJECTS := $(filter-out $(BUILD_DIR)/ipc/sem.o $(BUILD_DIR)/ipc/shm.o $(BUILD_DIR)/ipc/msg.o,$(OBJECTS))
+PROBE_OBJECTS := $(filter-out $(BUILD_DIR)/ipc/sem.o $(BUILD_DIR)/ipc/shm.o $(BUILD_DIR)/ipc/msg.o $(BUILD_DIR)/app/supervisor.o,$(OBJECTS))
+
+$(INTEGRATION_DIR)/probe_supervisor.o: src/app/supervisor.c include/mpmc/app/supervisor.h Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Dclock_gettime=mpmc_probe_clock_gettime -c $< -o $@
 
 $(INTEGRATION_DIR)/probe_sem.o: src/ipc/sem.c include/mpmc/diagnostic.h Makefile
 	@mkdir -p $(dir $@)
@@ -445,7 +449,7 @@ $(INTEGRATION_DIR)/probe_msg.o: src/ipc/msg.c include/mpmc/diagnostic.h Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Dmsgget=mpmc_probe_msgget -Dmsgctl=mpmc_probe_msgctl -Dmsgrcv=mpmc_probe_msgrcv -Dmsgsnd=mpmc_probe_msgsnd -c $< -o $@
 
-$(PROBE_BINARY): $(PROBE_OBJECTS) $(INTEGRATION_DIR)/probe_sem.o $(INTEGRATION_DIR)/probe_shm.o $(INTEGRATION_DIR)/probe_msg.o tests/integration/probe_syscalls.c
+$(PROBE_BINARY): $(PROBE_OBJECTS) $(INTEGRATION_DIR)/probe_supervisor.o $(INTEGRATION_DIR)/probe_sem.o $(INTEGRATION_DIR)/probe_shm.o $(INTEGRATION_DIR)/probe_msg.o tests/integration/probe_syscalls.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
 $(INTEGRATION_DIR)/resource_inspect: tests/integration/resource_inspect.c
@@ -460,6 +464,8 @@ test: all unit $(INTEGRATION_DIR)/test_repl $(PROBE_BINARY) $(INTEGRATION_DIR)/r
 	@sh tests/integration/test_invalid_commands.sh $(BINARY)
 	@sh tests/integration/test_repl.sh $(BINARY)
 	@$(INTEGRATION_DIR)/test_repl $(BINARY)
+	@python3 tests/integration/test_background.py $(PROBE_BINARY) $(INTEGRATION_DIR)/resource_inspect
+	@python3 tests/integration/test_conformance.py $(BINARY) $(PROBE_BINARY) $(INTEGRATION_DIR)/resource_inspect
 	@python3 tests/integration/test_application.py $(BINARY)
 	@python3 tests/integration/test_cooperative_shutdown.py $(PROBE_BINARY)
 	@python3 tests/integration/test_shutdown_resources.py $(PROBE_BINARY) $(INTEGRATION_DIR)/resource_inspect

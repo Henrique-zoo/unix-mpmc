@@ -8,12 +8,18 @@ import signal
 import subprocess
 import sys
 import time
+import tempfile
+from pathlib import Path
 
 
 class Application:
     """Mantém somente o grupo de processos criado por este cenário."""
 
-    def __init__(self, binary, producers, mode, environment=None):
+    def __init__(self, binary, producers, mode, environment=None, resource_helper=None):
+        self.resource_helper = resource_helper
+        self.resource_directory = tempfile.TemporaryDirectory(prefix="mpmc-owned-") if resource_helper else None
+        self.manifest = Path(self.resource_directory.name) / "resources" if resource_helper else None
+        extra = {"MPMC_PROBE_RESOURCES": str(self.manifest)} if resource_helper else {}
         self.process = subprocess.Popen(
             [binary, str(producers), str(mode)],
             stdin=subprocess.PIPE,
@@ -21,7 +27,7 @@ class Application:
             stderr=subprocess.STDOUT,
             start_new_session=True,
             bufsize=0,
-            env={**os.environ, "NO_COLOR": "1", **(environment or {})},
+            env={**os.environ, "NO_COLOR": "1", **(environment or {}), **extra},
         )
         self.selector = selectors.DefaultSelector()
         self.selector.register(self.process.stdout, selectors.EVENT_READ)
@@ -65,6 +71,10 @@ class Application:
         assert re.search(r"Tempo total de operação do mpmc: [0-9]+\.[0-9]+ s", self.text), self.text
         assert "ainda não está implementada" not in self.text, self.text
         assert "\x1b[" not in self.text, self.text
+        if self.manifest and self.manifest.exists():
+            for kind, resource, pid in (line.split() for line in self.manifest.read_text().splitlines()):
+                assert int(pid) == self.process.pid
+                assert subprocess.run([self.resource_helper, "exists", kind, resource], timeout=3).returncode == 1
 
     def close(self):
         if self.process.poll() is None:
@@ -74,6 +84,12 @@ class Application:
             except subprocess.TimeoutExpired:
                 os.killpg(self.process.pid, signal.SIGKILL)
                 self.process.communicate()
+        if self.manifest and self.manifest.exists():
+            for kind, resource, pid in (line.split() for line in self.manifest.read_text().splitlines()):
+                assert int(pid) == self.process.pid
+                subprocess.run([self.resource_helper, "remove", kind, resource], timeout=3, check=False)
+        if self.resource_directory:
+            self.resource_directory.cleanup()
         self.selector.close()
         for stream in (self.process.stdin, self.process.stdout):
             if stream and not stream.closed:

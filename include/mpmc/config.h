@@ -28,17 +28,6 @@
  */
 
 /**
- * @brief Maior quantidade válida de estruturas lógicas (parâmetro `p`).
- * @details Cada estrutura consome recursos System V do kernel: no paradigma 1, um segmento
- * de memória compartilhada e um conjunto de semáforos; no paradigma 2, uma fila de mensagens.
- * O limite evita pedir ao kernel uma quantidade absurda de recursos e fica abaixo dos
- * valores padrão usuais do Linux (por exemplo, `shmmni` = 4096), deixando folga para outros
- * processos. Não garante que o sistema comporte `p` estruturas: ipc_init() ainda precisa
- * tratar a falha e desfazer o que já criou.
- */
-#define MPMC_MAX_PRODUCERS 1024U
-
-/**
  * @brief Configuração de inicialização do sistema MPMC.
  *
  * @details
@@ -46,7 +35,7 @@
  * lógicas de comunicação e o paradigma IPC utilizado pela aplicação.
  *
  * Uma configuração validada deve satisfazer as seguintes invariantes:
- * - 1 <= producer_count <= MPMC_MAX_PRODUCERS.
+ * - producer_count >= 1, representável em size_t.
  * - mode == IPC_SHARED_MEMORY ou mode == IPC_MESSAGE_QUEUE.
  *
  * @note A existência desta estrutura não garante que seus campos
