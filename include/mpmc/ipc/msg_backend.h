@@ -257,7 +257,8 @@ mpmc_result_t msg_backend_consumed_count(
  * liberar, entrega a Q_evt os consumos acumulados por receives sem espera,
  * aguardando se ela estiver cheia (o supervisor a drena em poll_events); antes disso,
  * entrega com espera os ACKs que um receive sem espera não conseguiu publicar. Falhas
- * dessas entregas, como EIDRM depois do destroy, são ignoradas. Libera também os
+ * dessas entregas, como EIDRM depois do destroy, são comunicadas ao observador
+ * comum de diagnostic.h; o cleanup continua. Libera também os
  * registros de ACK e a lista de operações abandonadas herdados.
  * @note O acumulado é local ao processo e herdado por fork(); só o filho que
  * consumiu deve chamar esta função com consumos pendentes.
@@ -271,7 +272,8 @@ void msg_backend_worker_close(msg_backend_t *backend);
  * @details Chama msgctl(IPC_RMID) para todos os identificadores válidos
  * criados na inicialização e libera memória alocada para a instância.
  * Tenta remover todas as filas mesmo que uma remoção falhe. Falhas de remoção
- * ainda não são reportadas (pendente, alinhar com shm_backend na #16).
+ * são comunicadas individualmente ao observador comum, inclusive depois de outra
+ * remoção falhar. Veja @ref flow_diagnostics.
  */
 void msg_backend_destroy(msg_backend_t *backend);
 

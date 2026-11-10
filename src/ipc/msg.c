@@ -9,7 +9,6 @@
  * montado aqui e o `msgsz` passado ao kernel exclui o campo `mtype`. EINTR não é
  * repetido: é devolvido ao chamador como MPMC_ERR_INTERRUPTED.
  */
-
 #include "mpmc/ipc/msg.h"
 
 #include <errno.h>
@@ -19,6 +18,8 @@
 #include <string.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
+
+#include "mpmc/diagnostic.h"
 
 /** @brief Envelope de msgsnd()/msgrcv(): tipo seguido do corpo. */
 typedef struct {
@@ -32,31 +33,49 @@ static msg_envelope_t *envelope_alloc(size_t body_size);
 static mpmc_result_t msg_error_result(int error);
 
 mpmc_result_t sysv_msg_create(int *out_msqid) {
-    if (out_msqid == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+
+    if (out_msqid == NULL)
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
 
     int msqid = msgget(IPC_PRIVATE, IPC_CREAT | 0600);
     if (msqid == -1) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = errno,
+            }
+        );
     }
 
     *out_msqid = msqid;
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 mpmc_result_t sysv_msg_send(int msqid, long type, const void *payload, size_t size, bool nowait) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+    diagnostic_scope.resource_id = msqid;
+
     if ((size > 0 && payload == NULL) || size > SIZE_MAX - offsetof(msg_envelope_t, mtext)) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
 
     msg_envelope_t *envelope = envelope_alloc(size);
     if (envelope == NULL) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = errno,
+            }
+        );
     }
 
     envelope->mtype = type;
@@ -69,9 +88,9 @@ mpmc_result_t sysv_msg_send(int msqid, long type, const void *payload, size_t si
 
     free(envelope);
 
-    if (rc == 0) return (mpmc_result_t){.status = MPMC_OK};
+    if (rc == 0) return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 
-    return msg_error_result(err);
+    return mpmc_diagnostic_end(&diagnostic_scope, msg_error_result(err));
 }
 
 mpmc_result_t sysv_msg_receive(
@@ -82,8 +101,13 @@ mpmc_result_t sysv_msg_receive(
     bool nowait,
     ssize_t *out_size
 ) {
-    return sysv_msg_receive_typed(
-        msqid, desired_type, out_payload, capacity, nowait, out_size, NULL
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+    diagnostic_scope.resource_id = msqid;
+
+    return mpmc_diagnostic_end(
+        &diagnostic_scope,
+        sysv_msg_receive_typed(msqid, desired_type, out_payload, capacity, nowait, out_size, NULL)
     );
 }
 
@@ -96,17 +120,26 @@ mpmc_result_t sysv_msg_receive_typed(
     ssize_t *out_size,
     long *out_type
 ) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+    diagnostic_scope.resource_id = msqid;
+
     if (out_size == NULL || (capacity > 0 && out_payload == NULL)
         || capacity > SIZE_MAX - offsetof(msg_envelope_t, mtext)) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
 
     msg_envelope_t *envelope = envelope_alloc(capacity);
     if (envelope == NULL) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = errno,
+            }
+        );
     }
 
     /* Sem MSG_NOERROR: mensagem maior que `capacity` falha com E2BIG e fica na fila. */
@@ -123,17 +156,22 @@ mpmc_result_t sysv_msg_receive_typed(
         if (out_type != NULL) {
             *out_type = received_type;
         }
-        return (mpmc_result_t){.status = MPMC_OK};
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
     }
 
     free(envelope);
-    return msg_error_result(err);
+    return mpmc_diagnostic_end(&diagnostic_scope, msg_error_result(err));
 }
 
 mpmc_result_t sysv_msg_remove(int msqid) {
-    if (msgctl(msqid, IPC_RMID, NULL) == -1) return msg_error_result(errno);
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+    diagnostic_scope.resource_id = msqid;
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    if (msgctl(msqid, IPC_RMID, NULL) == -1)
+        return mpmc_diagnostic_end(&diagnostic_scope, msg_error_result(errno));
+
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /**

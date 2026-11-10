@@ -11,6 +11,8 @@
 #include <sys/ipc.h>
 #include <sys/sem.h>
 
+#include "mpmc/diagnostic.h"
+
 /** @brief Argumentos utilizados por semctl(). */
 union mpmc_semun {
     int val;               /**< Valor utilizado na operação SETVAL. */
@@ -21,16 +23,22 @@ union mpmc_semun {
 static mpmc_result_t sem_error_result(int error);
 
 mpmc_result_t sysv_sem_create(unsigned count, int *out_semid) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+
     if (count > (unsigned)INT_MAX || out_semid == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
 
     int identificador_sem = semget(IPC_PRIVATE, (int)count, 0600);
-    if (identificador_sem == -1) return sem_error_result(errno);
+    if (identificador_sem == -1)
+        return mpmc_diagnostic_end(&diagnostic_scope, sem_error_result(errno));
 
     *out_semid = identificador_sem;
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /**
@@ -39,22 +47,39 @@ mpmc_result_t sysv_sem_create(unsigned count, int *out_semid) {
  * distingui-lo, preservando as permissões exigidas pela operação original.
  */
 mpmc_result_t sysv_sem_set(int semid, unsigned index, unsigned value) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+    diagnostic_scope.resource_id = semid;
+
     if (value > (unsigned)INT_MAX) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
 
-    if (index > (unsigned)INT_MAX) return (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX};
+    if (index > (unsigned)INT_MAX)
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX}
+        );
 
     union mpmc_semun argumento = {.val = (int)value};
 
-    if (semctl(semid, (int)index, SETVAL, argumento) == -1) return sem_error_result(errno);
+    if (semctl(semid, (int)index, SETVAL, argumento) == -1)
+        return mpmc_diagnostic_end(&diagnostic_scope, sem_error_result(errno));
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /** @details Valida o estreitamento do índice antes de montar struct sembuf. */
 mpmc_result_t sysv_sem_change(int semid, unsigned index, short delta, bool nowait) {
-    if (index > USHRT_MAX) return (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX};
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+    diagnostic_scope.resource_id = semid;
+
+    if (index > USHRT_MAX)
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX}
+        );
 
     struct sembuf operacao = {
         .sem_num = (unsigned short)index,
@@ -62,19 +87,29 @@ mpmc_result_t sysv_sem_change(int semid, unsigned index, short delta, bool nowai
         .sem_flg = nowait ? IPC_NOWAIT : 0,
     };
 
-    return sysv_sem_apply(semid, &operacao, 1);
+    return mpmc_diagnostic_end(&diagnostic_scope, sysv_sem_apply(semid, &operacao, 1));
 }
 
 mpmc_result_t sysv_sem_apply(int semid, struct sembuf *operations, size_t count) {
-    if (semop(semid, operations, count) == -1) return sem_error_result(errno);
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+    diagnostic_scope.resource_id = semid;
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    if (semop(semid, operations, count) == -1)
+        return mpmc_diagnostic_end(&diagnostic_scope, sem_error_result(errno));
+
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 mpmc_result_t sysv_sem_remove(int semid) {
-    if (semctl(semid, 0, IPC_RMID) == -1) return sem_error_result(errno);
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+    diagnostic_scope.resource_id = semid;
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    if (semctl(semid, 0, IPC_RMID) == -1)
+        return mpmc_diagnostic_end(&diagnostic_scope, sem_error_result(errno));
+
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /**
