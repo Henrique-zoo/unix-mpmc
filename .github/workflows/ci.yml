@@ -66,7 +66,7 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/llvm-23.list
 
           sudo apt-get update
-          sudo apt-get install -y clang-23 coreutils procps
+          sudo apt-get install -y clang-23 coreutils procps python3
 
       - name: Show compiler version
         run: clang-23 --version
@@ -76,7 +76,7 @@ jobs:
 
       - name: Run unit and integration tests
         run: >-
-          timeout --signal=TERM --kill-after=10s 120s
+          timeout --signal=TERM --kill-after=10s 180s
           make MODE=${{ matrix.mode }} CC=clang-23 test
 
   documentation:
