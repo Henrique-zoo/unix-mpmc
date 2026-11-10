@@ -562,3 +562,7 @@ void mpmc_test_worker_close(ipc_context_t *context) {
 void mpmc_test_quiesce(ipc_context_t *context) {
     (void)context;
 }
+
+/** @brief Cancelamento não é executado nos filhos controlados desta fixture. */
+void mpmc_test_worker_cancel(void) {
+}

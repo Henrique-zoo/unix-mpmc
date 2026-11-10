@@ -2,11 +2,19 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdlib.h>
 
 #include "mpmc/diagnostic.h"
 #include "mpmc/ipc/msg_backend.h"
 #include "mpmc/ipc/shm_backend.h"
+
+/** @brief Pedido de cancelamento local ao processo worker; seguro para tratadores. */
+static volatile sig_atomic_t worker_cancelled;
+
+void ipc_worker_cancel(void) {
+    worker_cancelled = 1;
+}
 
 struct ipc_context {
     ipc_mode_t mode;
@@ -90,6 +98,8 @@ mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
+    if (worker_cancelled)
+        return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INTERRUPTED));
     if (context != nullptr && context->quiescent)
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_SHUTDOWN));
     if (context == nullptr || message == nullptr)
@@ -113,6 +123,8 @@ mpmc_result_t ipc_receive(
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
+    if (worker_cancelled)
+        return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INTERRUPTED));
     if (context != nullptr && context->quiescent)
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_SHUTDOWN));
     if (context == nullptr || out == nullptr)
@@ -131,6 +143,8 @@ mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsig
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
+    if (worker_cancelled)
+        return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INTERRUPTED));
     if (context != nullptr && context->quiescent)
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_SHUTDOWN));
     if (context == nullptr || !operation_id_valid(operation_id) || expected < MPMC_MIN_MESSAGES
@@ -149,6 +163,8 @@ mpmc_result_t ipc_ack_wait(ipc_context_t *context, uint64_t operation_id) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
+    if (worker_cancelled)
+        return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INTERRUPTED));
     if (context != nullptr && context->quiescent)
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_SHUTDOWN));
     if (context == nullptr || !operation_id_valid(operation_id)) {
