@@ -76,7 +76,7 @@ typedef struct {
  * faixa normativa (p, 1024, ack 2) é aceito aqui e rejeitado por
  * command_validate().
  *
- * @pre line e out não podem ser NULL.
+ * @pre line e out não podem ser nullptr.
  * @post Em caso de erro, o conteúdo de *out permanece inalterado.
  *
  * @note A existência do índice lógico é verificada por command_validate().
@@ -108,7 +108,7 @@ mpmc_result_t command_parse(const char *line, command_t *out);
  *
  * system_errno é zero em todos os resultados.
  *
- * @pre command não é NULL.
+ * @pre command não é nullptr.
  * @note `consome 0` é inválido; `produz 0` é válido.
  * @par Concorrência
  * Reentrante, sem estado global.
