@@ -172,7 +172,7 @@ Regras comuns aos dois backends:
 | Segmento `S_i` | `p` | Exatamente 2048 bytes, buffer circular da estrutura `i` |
 | Conjunto de semáforos `M_i` | `p` | 3 semáforos da estrutura `i` |
 | Segmento de controle `C` | 1 | 2048 bytes; cabeçalho de controle e 64 registros de operação |
-| Conjunto de semáforos `K` | 1 | 65 semáforos: mutex global e 64 notificações por operação |
+| Conjunto de semáforos `K` | 1 | 66 semáforos: mutex global, vagas e 64 notificações por operação |
 
 `lifecycle.c` cria e inicializa `S_i`, `M_i` e os recursos globais de ACK.
 O módulo `ack.c` implementa o registro, a correlação, a espera e a finalização
@@ -219,7 +219,7 @@ capacidade é compartilhado pela constante interna `SHM_RING_CAPACITY` e pela
 inicialização, sem substituir a validação dos limites do layout.
 
 O endereço base também deve respeitar `alignof(shm_ring_t)`. Na associação real,
-`shmat(shmid, NULL, 0)` escolhe um endereço alinhado à página, suficiente para o
+`shmat(shmid, nullptr, 0)` escolhe um endereço alinhado à página, suficiente para o
 alinhamento de 8 bytes deste layout; veja
 [shmat(2)](https://man7.org/linux/man-pages/man2/shmat.2.html). Para áreas locais,
 `malloc()` fornece o alinhamento necessário. Um vetor de bytes embutido em outra
@@ -290,13 +290,15 @@ SIGTERM cancele a espera.
 
 Um segmento global de controle de 2048 bytes mantém até 64 operações simultâneas.
 Cada registro contém `operation_id`, PID proprietário, `remaining` (uint16_t) e
-`waiting` (bool). Um conjunto global contém um mutex e 64 semáforos de conclusão.
+`waiting` (bool). Um conjunto global contém mutex, contador de 64 vagas e 64 semáforos de conclusão.
 A capacidade de 64 é uma escolha de implementação, não um requisito do enunciado.
 Não há bitmaps nem versão de layout: o supervisor cria os recursos antes do fork.
 
 `shm_backend_ack_begin(op, n)` reserva uma posição sob o mutex, descarta a eventual
 notificação final antiga e registra `remaining=n` antes do primeiro envio. IDs
-repetidos são rejeitados; tabela cheia retorna `MPMC_ERR_NO_SPACE`.
+repetidos são rejeitados. Tabela cheia faz o produtor aguardar vaga sem manter
+o mutex; ack_end devolve a vaga e permite novas operações. Não há rejeição do
+65º comando nem crescimento da memória reservada para controle.
 
 `shm_backend_receive()` retira a mensagem, atualiza o total e publica a vaga antes
 de chamar a auxiliar privada de confirmação. Ela identifica a operação pelo ID e
@@ -309,7 +311,8 @@ token de conclusão, no mesmo vetor semop() que libera o mutex.
 marca `waiting`, libera o mutex e espera um token. Confirmações anteriores à espera
 não se perdem. A limpeza da indicação de espera readquire o mutex, repetindo EINTR
 somente nessa aquisição de limpeza, e preserva a interrupção da espera original.
-`ack_end()` rejeita uma posição com waiter ativo e libera as demais de forma idempotente.
+`ack_end()` rejeita uma posição com waiter ativo e libera as demais de forma idempotente,
+incrementando o contador de vagas uma única vez.
 
 Uma operação striped agrega consumos de todos os buffers pelo mesmo operation_id.
 Mensagens não carregam ack_required. O produtor só registra um lote para ack=1.
@@ -594,11 +597,11 @@ A união do diagnóstico é discriminada pela operação: envio usa PID e sinal,
 e registro de relatório usam PID, e espera usa os bits de `poll.revents`. Erro do
 próprio `poll()` usa revents zero e errno capturado; erro indicado no descritor usa
 os bits originais e system_errno zero. Operações de configuração de sinais e de
-cálculo do prazo não possuem dados específicos. O fallback de duração zero nos
-relatórios continua sendo uma degradação permitida, sem diagnóstico de shutdown.
+cálculo do prazo não possuem dados específicos. Falhas de medição conservam o relatório com a causa original e são
+apresentadas como indisponível, com diagnóstico e propagação do primeiro erro.
 
 Essa coordenação é exercitada com filhos controlados. A validação de shutdown
-durante todas as esperas reais de dados/espaço/ACK continua na integração de #20/#26.
+durante esperas reais de dados/espaço/ACK está na suíte test_shutdown_resources.py.
 
 A remoção de um segmento/filas não é substituto geral para supervisão dos filhos.
 O `waitpid()` deve ser usado para recolher processos. `IPC_RMID` é responsabilidade

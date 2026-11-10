@@ -25,7 +25,8 @@
  * "estrutura vazia"); é diagnóstico e não deve ser usado para decidir o fluxo.
  * Falhas de argumentos rejeitados pelo kernel preservam errno, mesmo quando
  * classificadas como MPMC_ERR_INVALID_ARG; EIDRM resulta em MPMC_ERR_SHUTDOWN.
- * MPMC_ERR_NO_SPACE é retornado pelo modo 1 quando as 64 posições de ACK estão ocupadas.
+ * No modo 1, registro ACK aguarda uma das 64 posições internas quando todas
+ * estiverem em uso; não rejeita um novo trabalho por capacidade da tabela.
  *
  * @par Falhas fatais no modo 1
  * ipc_send(), ipc_receive() e ipc_consumed_count() seguem a política de
@@ -82,8 +83,8 @@
  * - Erro e cancelamento: pelo estado de término coletado com waitpid() (código de saída
  *   ou sinal, em child_report_t). Código zero significa trabalho concluído por completo;
  *   código diferente de zero, falha ou consumo parcial; sinal, cancelamento ou morte.
- *   O mapeamento fino de mpmc_status_t para o código de saída é pendente (#16/#22); hoje
- *   o supervisor só distingue zero, diferente de zero e sinal.
+ *   O resultado estruturado contém a categoria e a quantidade efetiva; o código
+ *   de saída resume sucesso/falha e waitpid também identifica término por sinal.
  * - Quantidade efetiva consumida: por estrutura lógica, pelo backend. No modo 2, cada
  *   retirada publica um evento que ipc_poll_events() consolida no supervisor; no modo 1,
  *   o total fica em memória compartilhada. O supervisor lê o resultado
@@ -140,7 +141,7 @@ typedef struct ipc_context ipc_context_t;
  * @note Uma rejeição de argumentos pelo kernel durante a inicialização SHM também
  * retorna MPMC_ERR_INVALID_ARG, preservando o errno em system_errno.
  * @post A validação local da fachada não modifica *out em erro. Depois dela,
- * qualquer falha deixa *out igual a NULL, inclusive erro de argumento vindo do kernel.
+ * qualquer falha deixa *out igual a nullptr, inclusive erro de argumento vindo do kernel.
  * @par Rollback
  * Em falha parcial, os recursos já criados são removidos antes do retorno: o backend de
  * filas remove as filas criadas e o de memória compartilhada limpa as entradas visitadas; a
@@ -162,7 +163,7 @@ void ipc_quiesce(ipc_context_t *context);
 /**
  * @brief Informa a quantidade de estruturas lógicas disponíveis.
  * @param context Contexto inicializado.
- * @return Valor `p` informado a ipc_init(); retorna 0 se context for NULL.
+ * @return Valor `p` informado a ipc_init(); retorna 0 se context for nullptr.
  */
 size_t ipc_producer_count(const ipc_context_t *context);
 
@@ -204,10 +205,8 @@ mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message
  * @param out Recebe a mensagem removida se retornar MPMC_OK.
  * @param blocking Se true, aguarda um item; se false, não espera.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
- * - MPMC_OK: mensagem retirada e contada; no modo 2, confirmação publicada se
- *   solicitada. system_errno é zero. No modo 1, o registro e a espera de ACK
- *   estão implementados, mas a notificação automática no recebimento permanece
- *   pendente (#11).
+ * - MPMC_OK: mensagem retirada e contada, com confirmação processada pelo backend
+ *   quando solicitada; system_errno é zero.
  * - MPMC_ERR_INVALID_ARG: context/out nulo, com system_errno zero; ou argumento
  *   rejeitado por semop()/msgrcv()/msgsnd(), com errno preservado.
  * - MPMC_ERR_INVALID_INDEX: índice lógico fora de 1..p (decidido pela fachada, nos dois
@@ -223,8 +222,8 @@ mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message
  *   system_errno zero.
  * @details A contagem pertence ao backend. No modo 2, ele também sinaliza o produtor
  * quando a operação pediu ACK; o worker não duplica a confirmação. No modo 1,
- * blocking=false ainda pode aguardar o mutex. O mecanismo de ACK por operação está
- * implementado, mas a retirada ainda não chama a auxiliar de notificação (#11).
+ * blocking=false ainda pode aguardar o mutex. Ambos os backends confirmam cada
+ * retirada efetiva sem duplicar a confirmação no worker.
  * @warning No modo 1, falha de publicação ocorre depois da retirada e da contagem,
  * podendo deixar out preenchido; a operação não é desfeita e o contexto torna-se
  * inutilizável. Não repetir o recebimento; aplicar @ref shm_operation_failures.
@@ -232,7 +231,8 @@ mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message
  * mensagem sair da fila: ela não é devolvida, out pode estar preenchido e o consumo
  * pode não ter sido contado nem confirmado. O chamador não deve contá-la como
  * consumida nem repetir o ACK.
- * A recuperação dessa janela é pendente (ver docs/protocol.md).
+ * Recuperação de morte arbitrária nessa janela exige outro protocolo e não é
+ * garantida. O cancelamento normal preserva as publicações já iniciadas.
  */
 mpmc_result_t ipc_receive(
     ipc_context_t *context,
@@ -252,11 +252,14 @@ mpmc_result_t ipc_receive(
  * - MPMC_ERR_INVALID_ARG: context nulo, operation_id zero ou maior que LONG_MAX, ou
  *   expected fora de 1..1024 (decidido pela fachada, nos dois modos); system_errno é zero.
  * - MPMC_ERR_STATE: operation_id já registrada (modos 1 e 2); system_errno é zero.
- * - MPMC_ERR_NO_SPACE: tabela de 64 operações do modo 1 cheia; system_errno é zero.
+ * - MPMC_ERR_INTERRUPTED: cancelamento local, com errno zero, ou espera de vaga/mutex
+ *   interrompida por semop(), com EINTR preservado.
+ * - MPMC_ERR_SHUTDOWN: contexto quiescente, com errno zero, ou semáforo removido, com EIDRM.
  * - MPMC_ERR_SYS: falha de alocação do registro no modo 2; system_errno preserva errno.
  *   Falhas de semáforo no modo 1 também preservam errno.
  * @pre Deve ser chamada ANTES do primeiro envio da operação que espera ACKs. Se retornar
- * erro, nada foi registrado e ipc_ack_end() não deve ser chamada.
+ * erro, nada foi registrado e ipc_ack_end() não deve ser chamada. No modo SHM,
+ * pode aguardar vaga na tabela interna, sem manter o mutex.
  * @note operation_id maior que LONG_MAX é rejeitado pela fachada comum nos dois modos.
  */
 mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsigned expected);
@@ -380,7 +383,7 @@ mpmc_result_t ipc_consumed_count(ipc_context_t *context, size_t producer_id, uin
 
 /**
  * @brief Libera vínculos e estruturas locais do contexto em um worker.
- * @param context Cópia de contexto herdada pelo processo filho; NULL é permitido.
+ * @param context Cópia de contexto herdada pelo processo filho; nullptr é permitido.
  * @details Desanexa páginas com shmdt() e libera alocações *locais* quando
  * aplicável. Nunca executa IPC_RMID em recursos globais, pois eles continuam
  * pertencendo ao supervisor e sendo usados por outros workers. Não retorna erros; ver
@@ -404,7 +407,7 @@ void ipc_worker_cancel(void);
 
 /**
  * @brief Remove definitivamente os recursos IPC e libera o contexto do pai.
- * @param context Contexto pertencente ao supervisor; NULL é permitido.
+ * @param context Contexto pertencente ao supervisor; nullptr é permitido.
  * @details Executa IPC_RMID das estruturas globais criadas pela aplicação,
  * fecha recursos de controle, libera alocações e torna o ponteiro inválido.
  * Não retorna erros; ver "Erro primário versus liberação" no topo do arquivo.
