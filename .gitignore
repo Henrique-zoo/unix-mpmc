@@ -17,3 +17,6 @@ core.*
 *.swp
 .cache
 .DS_Store
+
+# Cache dos testes de integração em Python
+__pycache__/

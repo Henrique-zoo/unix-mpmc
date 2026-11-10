@@ -13,7 +13,7 @@ import time
 class Application:
     """Mantém somente o grupo de processos criado por este cenário."""
 
-    def __init__(self, binary, producers, mode):
+    def __init__(self, binary, producers, mode, environment=None):
         self.process = subprocess.Popen(
             [binary, str(producers), str(mode)],
             stdin=subprocess.PIPE,
@@ -21,7 +21,7 @@ class Application:
             stderr=subprocess.STDOUT,
             start_new_session=True,
             bufsize=0,
-            env={**os.environ, "NO_COLOR": "1"},
+            env={**os.environ, "NO_COLOR": "1", **(environment or {})},
         )
         self.selector = selectors.DefaultSelector()
         self.selector.register(self.process.stdout, selectors.EVENT_READ)
