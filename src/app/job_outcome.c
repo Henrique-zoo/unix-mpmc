@@ -1,7 +1,7 @@
 /**
  * @file job_outcome.c
  * @brief Texto do diagnóstico contextual de resultados de trabalhos.
- * @ingroup app
+ * @ingroup application
  * @see job_outcome.h para o contrato.
  */
 #include "job_outcome.h"
