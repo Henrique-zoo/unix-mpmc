@@ -93,9 +93,41 @@ def scenario(binary, mode, producers, commands, outcomes, counts, children, part
         app.close()
 
 
+def ack_after_last_message(binary, mode):
+    app = Application(binary, 1, mode)
+    try:
+        app.send("produz 1 10 1\nconsome 1 9 1\n")
+        app.wait_for("9 de 9 mensagens consumidas")
+        assert not re.search(r"operação 1 .*concluída", app.text), app.text
+        app.send("consome 1 1 1\n")
+        app.wait_for("concluída:", 3)
+        app.finish({1: 10}, 3)
+    finally:
+        app.close()
+
+
+def produced_before_consumed(binary, mode):
+    app = Application(binary, 3, mode)
+    try:
+        # ACK=2 conclui antes de existir consumidor; striped não divisível por p.
+        app.send("produz 0 8 2\n")
+        app.wait_for("8 de 8 mensagens produzidas")
+        app.send("produz 4 1 2\nconsome 0 1 2\n")
+        app.wait_for("inválido", 2)
+        app.send("consome 1 3 1\nconsome 2 3 1\nconsome 3 2 1\n")
+        app.wait_for("concluída:", 4)
+        app.send("consome 1 1 2\n")
+        app.wait_for("apenas 0 de 1 mensagens consumidas")
+        app.finish({1: 3, 2: 3, 3: 2}, 5)
+    finally:
+        app.close()
+
+
 def main():
     binary = os.path.abspath(sys.argv[1])
     for mode in (1, 2):
+        ack_after_last_message(binary, mode)
+        produced_before_consumed(binary, mode)
         scenario(
             binary, mode, 3,
             "consome 1 3 1\nconsome 2 3 1\nconsome 3 3 1\nproduz 0 9 1\n",
