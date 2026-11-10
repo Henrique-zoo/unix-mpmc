@@ -3,13 +3,14 @@
  * @brief Fachada independente de paradigma para comunicação entre workers.
  * @ingroup ipc
  *
- * @par Estado de implementação
- * A fachada existe (src/ipc/transport.c) e apenas despacha para o backend selecionado.
- * - Modo 2 (filas): todas as operações abaixo possuem implementação; os retornos
- *   documentados correspondem ao que msg_backend.c produz hoje.
- * - Modo 1 (memória compartilhada): ciclo de vida, envio, recebimento, contagens
- *   sincronizadas e registro/espera/finalização de ACK por operação estão implementados.
- *   ipc_receive() confirma automaticamente cada mensagem efetivamente retirada.
+ * @par Papel na arquitetura
+ * É a fronteira entre aplicação/workers e os backends. O supervisor a usa para
+ * ciclo de vida, eventos e totais; os workers, para dados e ACK. Seleciona o
+ * backend em ipc_init(), valida regras comuns, uniformiza erros locais e mantém
+ * os estados locais de cancelamento e quiescência. Não interpreta comandos nem
+ * cria processos. Dados, sincronização, ACK e contagem são executados pelo backend.
+ * @see @ref architecture para dependências e o percurso de um trabalho.
+ * @see @ref documentation_guide para a ordem de leitura dos contratos.
  *
  * @par Convenção de retorno
  * As operações que podem falhar retornam mpmc_result_t. `system_errno` carrega o errno
@@ -88,9 +89,10 @@
  * - Quantidade efetiva consumida: por estrutura lógica, pelo backend. No modo 2, cada
  *   retirada publica um evento que ipc_poll_events() consolida no supervisor; no modo 1,
  *   o total fica em memória compartilhada. O supervisor lê o resultado
- *   com ipc_consumed_count(). O consumer_result_t de um trabalho existe só no filho, e o
- *   código de saída (8 bits) não comporta 1024; a quantidade por trabalho é apresentada
- *   pelo próprio filho. Levá-la ao supervisor exigiria um canal novo, a acordar em #16.
+ *   com ipc_consumed_count(). O progresso por trabalho vem do frame final no pipe
+ *   próprio do filho, publicado pelo ponto de entrada após o fechamento local.
+ *   O supervisor valida e apresenta esse resultado, que não passa pelo código de
+ *   saída de 8 bits. Pipes de resultados pertencem à camada app, não ao backend.
  */
 #ifndef MPMC_IPC_TRANSPORT_H
 #define MPMC_IPC_TRANSPORT_H

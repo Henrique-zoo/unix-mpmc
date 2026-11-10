@@ -2,6 +2,14 @@
  * @file supervisor.h
  * @brief Gerenciamento de IPC global, filhos, métricas e encerramento.
  * @ingroup application
+ * @details Recebe comandos normalizados do REPL, cria o contexto pela fachada
+ * transport.h e despacha um filho por trabalho. O ponto de entrada do filho
+ * chama o worker, fecha seu contexto local e envia diagnósticos/progresso pelo
+ * pipe próprio. No pai, o supervisor drena esses canais e os eventos do backend,
+ * recolhe filhos com waitpid(), registra tempos e coordena o shutdown.
+ * A remoção global ocorre na destruição, após o recolhimento de todos os filhos.
+ * @see @ref architecture para o ciclo completo e a propriedade dos recursos.
+ * @see @ref flow_diagnostics para os observadores comum e específico.
  */
 #ifndef MPMC_APP_SUPERVISOR_H
 #define MPMC_APP_SUPERVISOR_H

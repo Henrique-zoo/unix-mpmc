@@ -2,6 +2,12 @@
  * @file consumer.h
  * @brief Lógica de execução de processos consumidores.
  * @ingroup workers
+ * @details Recebe um trabalho do ponto de entrada do filho no supervisor e
+ * executa retiradas pela fachada transport.h. Devolve contagem por trabalho
+ * e resultado; o backend registra o total por estrutura e emite o ACK devido.
+ * O chamador fecha o contexto local e envia o progresso ao processo pai.
+ * @see @ref architecture para a separação entre trabalho, backend e supervisor.
+ * @see @ref ipc_protocol para espera, consumo parcial e confirmação.
  * @note O worker usa exclusivamente a fachada ipc_* e não gerencia o ciclo de vida
  * do contexto herdado.
  */
@@ -43,7 +49,7 @@ typedef struct {
  * @param transport Backend IPC inicializado e herdado no filho.
  * @param job Configuração validada da operação de consumo.
  * @param out Resultado preenchido inclusive em consumo parcial.
- * @return Resultado igual a out->error.
+ * @return Estrutura mpmc_result_t igual a out->error quando out não é nulo.
  * O valor retornado é igual a out->error, e out->consumed_count nunca excede `message_count`:
  * - MPMC_OK: as `message_count` mensagens foram retiradas.
  * - MPMC_ERR_INVALID_ARG: transport, job ou out nulo, ou job inválido. Com out não nulo,
@@ -65,10 +71,10 @@ typedef struct {
  * e não consulta a solicitação de ACK, que não existe em message_t. O operation_id do
  * job identifica este trabalho consumidor e nunca altera o das mensagens retiradas.
  * @par Resultado para o supervisor
- * out vive no heap do filho. O supervisor sabe o desfecho pelo estado de término do filho
- * (código zero apenas com MPMC_OK) e o total por estrutura por ipc_poll_events() e
- * ipc_consumed_count(); a quantidade por trabalho é apresentada pelo próprio filho
- * (ver transport.h).
+ * out pertence à memória local do filho. O ponto de entrada copia contagem e
+ * resultado para o frame final do pipe; o supervisor os recebe e apresenta.
+ * O estado de término vem separadamente de waitpid(), e os totais por estrutura
+ * vêm de ipc_poll_events()/ipc_consumed_count(), não da soma desses frames.
  * @pre Chamada apenas pelo filho; job->producer_id pertence a 1..p.
  * @post Se algumas mensagens forem retiradas e ocorrer erro, não são
  * devolvidas artificialmente à estrutura. consumer_run() não chama ipc_worker_close()

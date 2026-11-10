@@ -7,9 +7,11 @@
  * Cabeçalho interno de src/workers/, sem equivalente em include/. Contém apenas
  * a função pura de roteamento: ela não usa IPC, não cria processos, não espera
  * ACK e não conhece metadados de mensagens nem o estado sequencial do produtor.
- * A ligação ao laço de envio de producer_run() e o ACK agregado pertencem à
- * issue #18. Testes de propriedades (issue #24) podem usar esta função
- * compilando com `-Isrc/workers`.
+ * producer_run_with_result() a usa a cada mensagem striped, conservando a mesma
+ * identidade e sequência em todos os destinos; o worker mantém um ACK para o
+ * trabalho inteiro. Testes de propriedades acessam esta interface privada com
+ * `-Isrc/workers`.
+ * @see producer.h para o contrato do trabalho e @ref architecture para as camadas.
  */
 #ifndef MPMC_WORKERS_PRODUCER_ROUTING_H
 #define MPMC_WORKERS_PRODUCER_ROUTING_H

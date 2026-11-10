@@ -13,6 +13,7 @@
  * Este módulo apenas representa a configuração, não sendo
  * responsável por interpretá-la, validá-la ou inicializar
  * recursos de comunicação entre processos.
+ * @see @ref architecture para a passagem da configuração de main() ao supervisor.
  */
 
 #ifndef MPMC_CONFIG_H
@@ -42,8 +43,8 @@
  * tenham sido validados. A responsabilidade pela validação pertence
  * ao código que constrói a configuração.
  *
- * @note A quantidade de estruturas IPC corresponde a producer_count,
- * independentemente do paradigma selecionado.
+ * @note producer_count corresponde às estruturas lógicas de dados nos dois
+ * paradigmas. Recursos auxiliares de ACK/eventos são definidos pelo backend.
  */
 typedef struct {
     size_t producer_count; /**< Quantidade positiva de estruturas lógicas de produtores. */

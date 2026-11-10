@@ -2,6 +2,11 @@
  * @file repl.h
  * @brief Ciclo de leitura, validação e despacho de comandos interativos.
  * @ingroup application
+ * @details Executa no pai, entre main() e o supervisor. Converte linhas em
+ * comandos por command.h e intercala entrada com drenagem/coleta do supervisor.
+ * Encaminha shutdown, EOF e sinais de término ao encerramento coordenado.
+ * O supervisor mantém a propriedade dos filhos e do contexto IPC.
+ * @see @ref architecture para os canais de entrada, despertar e resultados.
  */
 #ifndef MPMC_APP_REPL_H
 #define MPMC_APP_REPL_H

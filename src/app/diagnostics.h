@@ -1,6 +1,10 @@
 /** @file diagnostics.h
  * @brief Apresentação dos diagnósticos da aplicação.
  * @ingroup application
+ * @details Observador instalado por main() para erros locais do pai e registros
+ * entregues pelo supervisor a partir dos pipes. Agrupa a apresentação por chamada
+ * e etapa, incluindo cleanup; o emissor no filho pertence ao supervisor.
+ * @see @ref flow_diagnostics para o percurso do registro e as regras de cor.
  */
 #ifndef MPMC_APP_DIAGNOSTICS_H
 #define MPMC_APP_DIAGNOSTICS_H

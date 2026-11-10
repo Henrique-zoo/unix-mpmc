@@ -2,6 +2,10 @@
  * @file command.h
  * @brief Interpretação e validação dos comandos do REPL.
  * @ingroup application
+ * @details Recebe texto do REPL e devolve command_t, separando sintaxe de
+ * validação semântica contra a configuração. Não cria processos nem acessa IPC;
+ * o REPL entrega o comando válido ao supervisor.
+ * @see @ref architecture para o percurso do comando entre as camadas.
  */
 #ifndef MPMC_APP_COMMAND_H
 #define MPMC_APP_COMMAND_H

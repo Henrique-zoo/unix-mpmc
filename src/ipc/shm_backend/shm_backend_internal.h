@@ -5,6 +5,9 @@
  * @details Reúne os tipos usados pelos arquivos de implementação do backend.
  * O cabeçalho público shm_backend.h mantém shm_backend_t como tipo opaco para
  * a fachada de transporte; este arquivo descreve seu estado local completo.
+ * lifecycle.c, operations.c e ack.c usam estes tipos para compartilhar a mesma
+ * representação; shm_ring.h mantém o layout do buffer sem depender do contexto.
+ * @see @ref architecture para a divisão das responsabilidades internas.
  */
 #ifndef SHM_BACKEND_INTERNAL_H
 #define SHM_BACKEND_INTERNAL_H

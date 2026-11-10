@@ -1,5 +1,9 @@
 # Diagnósticos de operações e liberação {#flow_diagnostics}
 
+Leia a [arquitetura](architecture.md) e o [protocolo](protocol.md) antes de
+acompanhar a propagação dos erros. O [guia de leitura](reading_guide.md) reúne a ordem
+dos documentos e os cabeçalhos relevantes.
+
 O resultado `mpmc_result_t` continua sendo o contrato de controle de fluxo. Um
 observador adicional recebe **cada falha individual**, inclusive as secundárias
 que um único retorno não consegue representar. A aplicação instala esse observador

@@ -2,6 +2,10 @@
 
 @tableofcontents
 
+O [guia de leitura](reading_guide.md) situa as suítes após arquitetura, protocolo e
+diagnósticos. Para relacionar cada requisito a uma implementação e evidência,
+consulte a [rastreabilidade](traceability.md).
+
 ## Objetivo
 
 Testar o comportamento observável exigido pelo enunciado separadamente em memória
@@ -230,8 +234,8 @@ filhos usam `alarm(20)` e morrem por SIGALRM. Os filhos fecham só o estado loca
 todos (sem zumbis) e remove apenas seus recursos, o que se confere por `shmctl`/`semctl`; um
 backend espectador criado antes das rodadas continua íntegro no fim.
 **Limitações:** esta etapa não comprova o protocolo de ACK nem shutdown durante esperas reais;
-ACK concorrente, interrupção durante dados/espaço/ACK, falhas parciais e shutdown completo
-continuam na issue 26.
+ACK concorrente, interrupção durante dados/espaço/ACK, falhas parciais e shutdown
+completo são cobertos pelas suítes de ACK e pela matriz final do executável abaixo.
 
 `test_msg_stress` (U20, issue 57) exercita o backend MSG real sem ACK, supervisor, workers finais
 ou REPL, na mesma estrutura de `test_shm_stress`. Em cada uma de três rodadas (1, 2 e 3 filas) o
@@ -254,7 +258,8 @@ fila do teste é removida em seguida. Volume e padrão de envio são fixos (sem 
 só o estado local, o pai recolhe todos (sem zumbis) e remove apenas as filas que criou, o que se
 confere por `msgctl`; um backend espectador criado antes das rodadas continua íntegro no fim.
 **Limitações:** esta etapa não cobre ACK, consumo parcial de workers, striped, matriz de comandos
-pelo `stdin` nem shutdown durante esperas reais, que continuam integralmente na issue 25.
+pelo `stdin` nem shutdown durante esperas reais. Essas propriedades são verificadas
+por `test_application.py`, `test_shutdown_resources.py` e as suítes de ACK.
 
 Dois cenários adicionais usam processos filhos de teste, sem ACK, workers finais, supervisor
 ou REPL. Cada filho avisa o pai por pipe imediatamente antes de uma única operação bloqueante,

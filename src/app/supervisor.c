@@ -5,8 +5,10 @@
  *
  * @details Mantém os processos criados pelo REPL, recolhe filhos encerrados,
  * inicia shutdown e fornece um self-pipe não bloqueante para acordar o loop de
- * controle em resposta a SIGCHLD. A integração dos backends IPC permanece
- * como ponto de extensão em supervisor_poll_events().
+ * controle em resposta a SIGCHLD e publicações dos filhos. A drenagem do
+ * self-pipe precede a dos frames de resultados e eventos IPC; a coleta drena
+ * novamente os frames após waitpid() para observar publicações finais.
+ * @see supervisor.h para os contratos e @ref architecture para o fluxo entre processos.
  */
 #include "mpmc/app/supervisor.h"
 

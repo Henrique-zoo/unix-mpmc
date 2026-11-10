@@ -2,6 +2,13 @@
  * @file shm_backend.h
  * @brief Backend de buffer circular em memória compartilhada com semáforos.
  * @ingroup backends
+ * @details Implementa a fachada transport.h no modo 1. lifecycle.c adquire e
+ * libera recursos; operations.c sincroniza dados e contagens; shm_ring.c altera
+ * o buffer sob a proteção fornecida pelo chamador; ack.c controla os lotes.
+ * Somente a fachada e os testes usam esta interface diretamente. Backends
+ * comunicam erros aos observadores, sem depender da apresentação de app/.
+ * @see @ref architecture para a divisão interna e a propriedade pai/filho.
+ * @see @ref ipc_wire_formats para layouts e invariantes.
  * @note Estão implementados o ciclo de vida dos recursos SHM, o envio, o
  * recebimento, a leitura sincronizada dos totais e o mecanismo interno de ACK:
  * registro, correlação, espera e finalização por operação. O recebimento
@@ -26,7 +33,8 @@
  *
  * A inutilização é uma obrigação do chamador: o backend não registra uma marca
  * de falha, não rejeita automaticamente chamadas posteriores e não notifica
- * outros processos. A integração desse encerramento pertence à issue #20.
+ * outros processos. Na aplicação, os diagnósticos atravessam o pipe do worker;
+ * o supervisor observa a falha fatal e encaminha esse encerramento.
  * Recuperar um contexto após término de processo entre aquisição e publicação
  * não faz parte da garantia destas operações; nesse caso, o contexto também
  * deve ser descartado por encerramento coordenado.

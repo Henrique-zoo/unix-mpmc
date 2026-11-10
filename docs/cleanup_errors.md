@@ -2,6 +2,10 @@
 
 @tableofcontents
 
+Esta página aprofunda o reporter específico de SHM. Comece pelo
+[fluxo comum de diagnósticos](diagnostics.md); o [guia de leitura](reading_guide.md)
+situa este contrato no ciclo de vida do backend.
+
 O observador comum de @ref flow_diagnostics complementa os reporters específicos
 abaixo e é utilizado pela aplicação completa. Ele cobre também ACK, filas,
 transporte, workers e coordenação, incluindo chamadas com reporter específico nulo.

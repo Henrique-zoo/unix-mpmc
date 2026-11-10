@@ -2,6 +2,10 @@
  * @file worker_event.h
  * @brief Registros privados transmitidos pelos pipes dos workers.
  * @ingroup application
+ * @details Protocolo interno entre o ponto de entrada do filho e o supervisor:
+ * diagnósticos são publicados durante o trabalho e o resultado fecha a sequência.
+ * Não transporta mensagens de produção/consumo nem substitui o estado waitpid().
+ * @see @ref architecture para a função de cada canal entre pai e filhos.
  */
 #ifndef MPMC_WORKER_EVENT_H
 #define MPMC_WORKER_EVENT_H

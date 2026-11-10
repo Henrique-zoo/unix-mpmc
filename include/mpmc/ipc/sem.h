@@ -4,6 +4,9 @@
  * @ingroup sysv_primitives
  * @details Argumentos das chamadas de sistema são validados pelo kernel.
  * O wrapper verifica apenas saídas escritas em C e conversões que perderiam informação.
+ * O backend define os índices, valores iniciais e vetores de reserva/publicação;
+ * esta camada executa semget()/semctl()/semop() e traduz seus resultados.
+ * @see @ref architecture para a separação entre primitiva e política de sincronização.
  */
 #ifndef MPMC_IPC_SEM_H
 #define MPMC_IPC_SEM_H

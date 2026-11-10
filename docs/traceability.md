@@ -1,5 +1,9 @@
 # Rastreabilidade do enunciado {#traceability}
 
+O [guia de leitura](reading_guide.md) apresenta a sequência para compreender o projeto.
+Use esta página como índice de verificação da entrega e siga os módulos e testes
+de cada linha para aprofundar um requisito.
+
 A referência é o Trabalho Prático 02/2026, Sistemas Operacionais, UnB. Os nomes dos
 módulos/testes e o protocolo de controle são escolhas do projeto. A tabela abaixo
 aponta implementações e evidências existentes, não funcionalidades planejadas.

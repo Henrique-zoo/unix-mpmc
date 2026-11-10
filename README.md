@@ -164,6 +164,10 @@ concorrente, saturação, 65 trabalhos ACK, espera por vaga interrompida, p acim
 
 ## Documentação e enunciado
 
+Comece pelo [guia de leitura](docs/reading_guide.md): ele define a ordem dos documentos,
+os pontos de entrada no código e a navegação no Doxygen. Para compreender o fluxo,
+leia arquitetura, protocolo e diagnósticos nessa ordem.
+
 - [Arquitetura](docs/architecture.md)
 - [Protocolo e layouts](docs/protocol.md)
 - [Diagnósticos e propriedade dos dados](docs/diagnostics.md)

@@ -2,21 +2,40 @@
 
 @tableofcontents
 
+O [guia de leitura](reading_guide.md) organiza a documentação e os contratos públicos.
+Esta página descreve quem participa de cada etapa; os formatos e invariantes
+estão no [protocolo](protocol.md), e os erros no [fluxo de diagnósticos](diagnostics.md).
+
 ## Camadas e dependências
 
-O projeto adota uma arquitetura em camadas orientada a processos. As dependências apontam
-sempre para baixo:
+O projeto adota uma arquitetura em camadas orientada a processos. As setas abaixo
+representam chamadas e dependências; a posição de um módulo não determina em qual
+processo ele executa:
 
-1. `main.c` inicia a aplicação e interpreta `argc`/`argv`.
-2. `app/command` faz o parsing e a validação, sem side effects.
-3. `app/repl` gerencia a entrada interativa.
-4. `app/supervisor` realiza `fork`, `waitpid`, shutdown e métricas de processos.
-5. `workers/producer` e `workers/consumer` executam operações concretas nos filhos.
-6. `ipc/transport` oferece API estável para ambos os workers.
-7. `ipc/shm_backend` / `ipc/msg_backend` implementam as políticas de cada paradigma.
-8. `ipc/shm`, `ipc/sem` e `ipc/msg` encapsulam chamadas de sistema.
+```text
+main -> repl -> command
+  |       |
+  +-----> supervisor -> producer / consumer
+                |                |
+                +--> transport <-+
+                         |
+                         +-- shm_backend -> shm / sem
+                         |      |
+                         |      +-- shm_ring
+                         +-- msg_backend -> msg
+```
 
-`message.h` e `error.h` são tipos transversais e não dependem de outros módulos da aplicação.
+`command` é um auxiliar da aplicação, não uma etapa obrigatória entre todas as
+camadas. O supervisor usa o transporte para criar, consultar e destruir o contexto;
+o ponto de entrada que ele executa no filho chama o worker. Workers usam apenas a
+fachada de transporte, sem escolher paradigma ou chamar primitivas System V.
+`shm_ring` manipula memória já associada; a sincronização pertence às operações do
+backend. O backend MSG reúne dados, ACK e eventos em um único módulo.
+
+`config.h`, `message.h`, `error.h` e `diagnostic.h` são contratos comuns usados
+nas camadas pertinentes. Resultados e diagnósticos voltam aos chamadores e ao pai
+por retornos, callbacks e pipes; esse fluxo de informação não introduz dependência
+dos backends em `app/`.
 
 ## Matriz de responsabilidades
 
@@ -32,6 +51,63 @@ sempre para baixo:
 | `shm_backend` | Buffer circular, sincronização, ACKs e estatísticas compartilhadas | Imprimir prompt do REPL |
 | `msg_backend` | Filas de dados/controle, ACKs, publicação de estatísticas | Assumir memória compartilhada entre pai e filho |
 | `shm`, `sem`, `msg` | Wrappers finos com tratamento de `errno` | Conter regras de `produz`/`consome` |
+| `shm_ring` | Manipular cabeçalho e posições de um buffer já associado | Adquirir semáforos ou criar objetos IPC |
+| `error`, `diagnostic` | Representar resultados e comunicar falhas com contexto | Decidir a apresentação no terminal |
+| `app/diagnostics`, `app/job_outcome` | Apresentar falhas e formatar o resultado do trabalho | Implementar o protocolo de dados ou ACK |
+
+## Percurso de uma execução
+
+### Inicialização no processo principal
+
+1. `main()` valida `p` e o paradigma, instala o observador que apresenta erros e
+   chama `supervisor_create()`.
+2. O supervisor cria seu estado local e o self-pipe, e chama `ipc_init()`.
+3. O transporte seleciona um backend. O backend adquire os objetos globais por
+   `sysv_*` e, no SHM, inicializa o ring antes de disponibilizá-lo aos filhos.
+   Em falha parcial, o backend executa rollback e preserva a causa inicial.
+4. `main()` entrega o supervisor pronto a `repl_run()`.
+
+### Comando e trabalho no processo filho
+
+1. O REPL lê uma linha, chama `command_parse()` e `command_validate()` e entrega
+   o comando normalizado a `supervisor_dispatch()`. Comando inválido não cria filho.
+2. Para `produz`/`consome`, o supervisor prepara identidade e canal de resultados,
+   faz `fork()` e registra o filho no pai. O REPL continua atendendo entrada e eventos.
+3. No filho, o ponto de entrada instala o emissor de diagnósticos e o cancelamento
+   cooperativo. Ele chama `producer_run_with_result()` ou `consumer_run()`.
+4. O produtor constrói metadados e calcula o destino, incluindo striped, antes de
+   chamar `ipc_send()`. Com ACK, usa a sequência begin/envios/wait/end. O consumidor
+   chama `ipc_receive()` até completar a quantidade ou encontrar um erro.
+5. O transporte valida as regras comuns e despacha para o backend. No SHM, as
+   operações reservam semáforos, manipulam o ring e publicam item/vaga. No MSG,
+   enviam ou recebem envelopes pelas filas. O próprio backend contabiliza a
+   retirada e confirma o consumo ao produtor quando necessário.
+6. O ponto de entrada fecha somente o contexto local com `ipc_worker_close()`,
+   preserva as falhas do trabalho e do fechamento, envia o resultado final pelo
+   pipe e encerra o filho. O worker não fecha o contexto por conta própria.
+
+### Retorno ao pai e encerramento
+
+Os canais têm funções distintas:
+
+| Canal/estado | Informação | Quem usa |
+|---|---|---|
+| Dados e ACK do backend | Mensagens e confirmação de seu consumo | Workers, pela fachada `ipc_*` |
+| Contador SHM ou eventos MSG | Total acumulado por estrutura | Supervisor, por `ipc_poll_events()` e `ipc_consumed_count()` |
+| Pipe próprio de cada filho | Diagnósticos e resultado com progresso por trabalho | Filho publica; supervisor valida, drena e apresenta |
+| Self-pipe | Notificação para acordar o loop, sem resultado no byte | Tratadores e emissores notificam; REPL/supervisor drenam |
+| `waitpid()` | Término efetivo, código de saída ou sinal | Supervisor recolhe o filho e registra sua duração |
+
+O resultado final pode chegar antes de `waitpid()` indicar o término. Receber um
+resultado não dispensa a coleta do filho. Enquanto a entrada fica ociosa, o REPL
+continua dando oportunidade de drenagem e coleta ao supervisor.
+
+`shutdown`, EOF ou sinal de término encaminham o encerramento coordenado.
+O supervisor impede novos trabalhos, solicita cancelamento, mantém a drenagem
+durante o prazo e recolhe os filhos, com SIGKILL de reserva. Só depois de comprovar
+que nenhum filho permanece ativo marca o contexto como quiescente. `main()` pede
+o relatório e chama `supervisor_destroy()`, que delega a remoção global a
+`ipc_destroy()`. Os detalhes do prazo e das falhas estão nas seções seguintes.
 
 ## Modelo de processos e propriedade de recursos
 
@@ -204,10 +280,13 @@ repara o estado para continuar novas operações. Cada worker fecha seu estado l
 recolher todos os filhos o supervisor destrói os objetos globais. Não há tentativa
 de reparar contadores ou continuar usando o contexto após uma falha fatal.
 
-O módulo `ack.c` implementa o registro, a correlação por operação, a espera e a finalização dos ACKs SHM. O recebimento confirma cada retirada e publica somente a conclusão final; não há bitmap nem deduplicação por sequência. A implementação atual não mascara sinais
-entre aquisição e publicação. Término de processo nesse intervalo também exige
-descartar o contexto; recuperá-lo para continuar outras operações está fora do
-contrato da #10. `worker_close` e `destroy` tratam backend nulo como operação vazia,
+O módulo `ack.c` implementa o registro, a correlação por operação, a espera e a
+finalização dos ACKs SHM. O recebimento confirma cada retirada e publica somente
+a conclusão final; não há bitmap nem deduplicação por sequência. Workers reais
+tratam SIGTERM/SIGINT como pedido de cancelamento e concluem as publicações já
+iniciadas. Morte forçada entre aquisição e publicação exige descartar o contexto;
+recuperá-lo para continuar operações não faz parte do contrato.
+`worker_close` e `destroy` tratam backend nulo como operação vazia,
 retornando sucesso antes de consultar o contexto. A auxiliar privada exige backend
 não nulo; os chamadores garantem essa pré-condição, inclusive no rollback de `create`.
 
@@ -257,39 +336,24 @@ continua aceitando o próximo comando depois de qualquer erro recuperável.
 - Eventos concorrentes, e os avisos de término de filhos, não têm ordem global
   garantida; cada um ocupa uma linha inteira. Cada linha conta como aviso para o
   redesenho do prompt em terminais, e eventos pendentes são apresentados no `shutdown`.
-- Os eventos são enfileirados pelo supervisor (`supervisor_queue_outcome()`, declarada
-  apenas no cabeçalho privado, com capacidade finita) e apresentados em
-  `supervisor_reap()`. A propagação dos resultados reais dos workers até essa fila
-  pertence às issues #22 e #25.
+- Resultados reais são lidos dos pipes de cada filho e apresentados pelo
+  supervisor, inclusive antes do recolhimento. `supervisor_queue_outcome()` é
+  uma interface privada adicional para eventos controlados nos testes, com fila
+  finita; ela não armazena o fluxo de diagnósticos dos workers reais.
 
-## Decisões a revisar quando houver implementação
+## Garantias e limites da integração
 
-- Layout binário e capacidade de cada segmento de 2048 bytes.
-- Volume máximo de jobs simultâneos e limites de IPC do kernel.
-- Saída no terminal quando filhos e REPL imprimem simultaneamente.
-- Relação entre tempo de operação da aplicação e tempos de execução dos filhos.
+Os dois workers executam operações reais pela fachada. Diagnósticos e resultados
+por trabalho chegam ao supervisor pelos pipes; contagens por estrutura vêm dos
+backends. Falhas fatais observadas nesses canais comprometem o contexto e acionam
+o encerramento coordenado, sem continuar aceitando trabalhos.
 
-Consulte @ref ipc_protocol e @ref testing_plan.
-
-## Pendências de integração
-
-- #13 e #14: a correlação e o ciclo de vida de ACK do backend de filas estão fechados
-  (laço de envio com drenagem, `ack_abandon` pelo supervisor; ver @ref ipc_wire_formats).
-  Resta a janela entre retirada e evento. A integração atual usa sysv_msg_receive_typed() e os tipos de dados 1/2 para
-  distinguir operações sem/com ACK, recebendo por tipo zero para preservar FIFO.
-- #16: a fachada de transporte já despacha para os backends e seus contratos estão
-  fixados em `transport.h` (#45). Falta propagar resultados e diagnósticos de cleanup
-  em `ipc_worker_close`/`ipc_destroy` e completar a integração da aplicação. Os dados
-  e as contagens do modo 1 já são exercitados com IPC real; o ACK SHM já é emitido no recebimento real, com testes de lotes concorrentes e striped.
-- #17: o núcleo de producer_run() e o roteamento já existem e possuem testes com
-  transporte substituto. O ponto de entrada do filho executa os workers reais; a suíte pelo stdin
-  comprova ACKs, striped, saturação e consumo parcial nos dois backends.
-- #20: integrar o encerramento coordenado após falhas fatais de IPC, incluindo a
-  comunicação do erro do worker ao supervisor, a suspensão de novas operações e
-  leituras de totais no contexto comprometido e a coleta de todos os filhos antes
-  da remoção dos recursos. A #10 garante aquisição atômica sem reservas parciais;
-  recuperação após término de um worker com reutilização do contexto está fora
-  desse contrato.
+No modo MSG, dados, eventos e ACKs pertencem a filas diferentes. Publicações já
+devidas são concluídas no cancelamento cooperativo e no fechamento local, mas
+uma morte forçada entre retirada e publicação pode perder o evento/ACK. Não há
+transação do kernel abrangendo as duas filas. No SHM, a aquisição e a publicação
+de semáforos são atômicas individualmente; não formam uma transação com a alteração
+de memória. A recuperação de um contexto após morte arbitrária não é oferecida.
 
 Após recolher todos os filhos, o supervisor marca o contexto como quiescente. A
 fachada recusa novos envios/recebimentos/esperas e lê os totais SHM sem mutex:

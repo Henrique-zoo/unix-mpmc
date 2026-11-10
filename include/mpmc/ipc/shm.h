@@ -2,6 +2,11 @@
  * @file shm.h
  * @brief Wrappers mínimos sobre memória compartilhada System V.
  * @ingroup sysv_primitives
+ * @details Fornece ao backend criação, associação, desassociação, consulta e
+ * remoção de segmentos. Traduz falhas do kernel para mpmc_result_t sem conhecer
+ * o layout do ring, o tamanho exigido pelo projeto ou a política de propriedade.
+ * O backend decide quando adquirir/liberar os objetos e como usar a memória.
+ * @see @ref architecture para a fronteira entre primitivas e backends.
  */
 #ifndef MPMC_IPC_SHM_H
 #define MPMC_IPC_SHM_H
