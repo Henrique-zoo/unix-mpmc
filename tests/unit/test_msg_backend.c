@@ -197,7 +197,7 @@ static size_t all_queue_count;
 mpmc_result_t mpmc_test_msg_create(int *out_msqid) {
     ++create_calls;
 
-    if (fail_create_call != 0u && create_calls == fail_create_call) {
+    if (fail_create_call != 0 && create_calls == fail_create_call) {
         return (mpmc_result_t){
             .status = MPMC_ERR_SYS,
             .system_errno = ENOSPC,
@@ -227,7 +227,7 @@ mpmc_result_t mpmc_test_msg_remove(int msqid) {
 
     mpmc_result_t result;
 
-    if (fail_remove_call != 0u && remove_calls == fail_remove_call) {
+    if (fail_remove_call != 0 && remove_calls == fail_remove_call) {
         result = (mpmc_result_t){
             .status = MPMC_ERR_SYS,
             .system_errno = EACCES,
@@ -267,7 +267,7 @@ mpmc_result_t mpmc_test_msg_send(
     last_send_msqid = msqid;
 
     if (ack_control_active && ack_control_send_active && msqid == ack_control_data_queue) {
-        if (ack_control_send_would_block != 0u) {
+        if (ack_control_send_would_block != 0) {
             --ack_control_send_would_block;
             return (mpmc_result_t){
                 .status = MPMC_ERR_WOULD_BLOCK,
@@ -323,11 +323,11 @@ mpmc_result_t mpmc_test_msg_receive(
         return result;
     }
 
-    for (size_t index = 0u; index < ack_control_message_count; ++index) {
+    for (size_t index = 0; index < ack_control_message_count; ++index) {
         if (ack_control_messages[index].type != desired_type) continue;
         ack_control_message_t message = ack_control_messages[index];
-        for (size_t next = index + 1u; next < ack_control_message_count; ++next) {
-            ack_control_messages[next - 1u] = ack_control_messages[next];
+        for (size_t next = index + 1; next < ack_control_message_count; ++next) {
+            ack_control_messages[next - 1] = ack_control_messages[next];
         }
         --ack_control_message_count;
         if (message.size < 0 || (size_t)message.size > capacity) {
@@ -368,9 +368,9 @@ mpmc_result_t mpmc_test_msg_receive_typed(
  */
 int mpmc_test_nanosleep(const struct timespec *request, struct timespec *remaining) {
     if (ack_control_active) {
-        ack_control_check(request != NULL);
-        ack_control_check(request != NULL && request->tv_sec == 0);
-        ack_control_check(request != NULL && request->tv_nsec == 1000000);
+        ack_control_check(request != nullptr);
+        ack_control_check(request != nullptr && request->tv_sec == 0);
+        ack_control_check(request != nullptr && request->tv_nsec == 1000000);
         ++ack_control_sleep_calls;
         return 0;
     }
@@ -407,86 +407,86 @@ int mpmc_test_nanosleep(const struct timespec *request, struct timespec *remaini
  * @brief Confere argumentos inválidos do backend.
  */
 static void test_arguments(void) {
-    msg_backend_t *backend = NULL;
+    msg_backend_t *backend = nullptr;
 
-    CHECK_RESULT(msg_backend_create(NULL, 2u), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_create(nullptr, 2), MPMC_ERR_INVALID_ARG, 0);
 
     /* O sentinela só é comparado, nunca desreferenciado. */
     int marker = 0;
     msg_backend_t *sentinel = (msg_backend_t *)&marker;
 
     backend = sentinel;
-    CHECK_RESULT(msg_backend_create(&backend, 0u), MPMC_ERR_INVALID_ARG, 0);
-    CHECK(backend == NULL);
+    CHECK_RESULT(msg_backend_create(&backend, 0), MPMC_ERR_INVALID_ARG, 0);
+    CHECK(backend == nullptr);
 
     backend = sentinel;
     CHECK_RESULT(msg_backend_create(&backend, SIZE_MAX), MPMC_ERR_INVALID_ARG, 0);
-    CHECK(backend == NULL);
+    CHECK(backend == nullptr);
 
-    msg_backend_destroy(NULL);
-    msg_backend_worker_close(NULL);
+    msg_backend_destroy(nullptr);
+    msg_backend_worker_close(nullptr);
 
     message_t message = {
         .sender_pid = getpid(),
-        .sequence = 1u,
-        .operation_id = 1u,
+        .sequence = 1,
+        .operation_id = 1,
     };
-    message_t received = {0};
+    message_t received = {};
 
-    CHECK_RESULT(msg_backend_send(NULL, 1u, &message), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_send(nullptr, 1, &message), MPMC_ERR_INVALID_ARG, 0);
 
-    CHECK_RESULT(msg_backend_receive(NULL, 1u, &received, false), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_receive(nullptr, 1, &received, false), MPMC_ERR_INVALID_ARG, 0);
 
-    CHECK_RESULT(msg_backend_receive(NULL, 1u, NULL, false), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_receive(nullptr, 1, nullptr, false), MPMC_ERR_INVALID_ARG, 0);
 }
 
 /**
  * @brief Verifica que cada índice lógico acessa somente sua própria fila.
  */
 static void test_queue_isolation(void) {
-    msg_backend_t *backend = NULL;
-    mpmc_result_t result = msg_backend_create(&backend, 2u);
+    msg_backend_t *backend = nullptr;
+    mpmc_result_t result = msg_backend_create(&backend, 2);
 
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
-    CHECK(backend != NULL);
+    CHECK(backend != nullptr);
 
-    if (result.status != MPMC_OK || backend == NULL) return;
+    if (result.status != MPMC_OK || backend == nullptr) return;
 
     message_t first = {
         .sender_pid = getpid(),
-        .sequence = 1u,
+        .sequence = 1,
         .sent_at = {.tv_sec = 10, .tv_nsec = 100},
-        .operation_id = 10u,
+        .operation_id = 10,
     };
 
     message_t second = {
         .sender_pid = getpid(),
-        .sequence = 2u,
+        .sequence = 2,
         .sent_at = {.tv_sec = 20, .tv_nsec = 200},
-        .operation_id = 20u,
+        .operation_id = 20,
     };
 
-    message_t received = {0};
+    message_t received = {};
 
     /* Os índices válidos devem estar no intervalo 1..producer_count. */
-    CHECK_RESULT(msg_backend_send(backend, 0u, &first), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(msg_backend_send(backend, 3u, &first), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_send(backend, 0, &first), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_send(backend, 3, &first), MPMC_ERR_INVALID_ARG, 0);
 
-    CHECK_RESULT(msg_backend_receive(backend, 0u, &received, false), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(msg_backend_receive(backend, 3u, &received, false), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_receive(backend, 0, &received, false), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_receive(backend, 3, &received, false), MPMC_ERR_INVALID_ARG, 0);
 
     /* Ponteiros nulos devem ser rejeitados. */
-    CHECK_RESULT(msg_backend_send(backend, 1u, NULL), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(msg_backend_receive(backend, 1u, NULL, false), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_send(backend, 1, nullptr), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_receive(backend, 1, nullptr, false), MPMC_ERR_INVALID_ARG, 0);
 
     /* A mensagem enviada à fila 1 não deve aparecer na fila 2. */
-    CHECK_RESULT(msg_backend_send(backend, 1u, &first), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_send(backend, 1, &first), MPMC_OK, 0);
 
-    CHECK_RESULT(msg_backend_receive(backend, 2u, &received, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
+    CHECK_RESULT(msg_backend_receive(backend, 2, &received, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
 
     /* A mensagem deve continuar disponível na fila 1. */
-    result = msg_backend_receive(backend, 1u, &received, false);
+    result = msg_backend_receive(backend, 1, &received, false);
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
 
@@ -495,12 +495,12 @@ static void test_queue_isolation(void) {
     }
 
     /* A mensagem enviada à fila 2 não deve aparecer na fila 1. */
-    CHECK_RESULT(msg_backend_send(backend, 2u, &second), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_send(backend, 2, &second), MPMC_OK, 0);
 
-    CHECK_RESULT(msg_backend_receive(backend, 1u, &received, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
+    CHECK_RESULT(msg_backend_receive(backend, 1, &received, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
 
     /* A mensagem deve estar disponível na fila 2. */
-    result = msg_backend_receive(backend, 2u, &received, false);
+    result = msg_backend_receive(backend, 2, &received, false);
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
 
@@ -517,33 +517,33 @@ static void test_queue_isolation(void) {
  * pois somente a segunda operação possui registro de ACK.
  */
 static void test_fifo(void) {
-    msg_backend_t *backend = NULL;
-    mpmc_result_t result = msg_backend_create(&backend, 1u);
+    msg_backend_t *backend = nullptr;
+    mpmc_result_t result = msg_backend_create(&backend, 1);
 
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
-    CHECK(backend != NULL);
+    CHECK(backend != nullptr);
 
-    if (result.status != MPMC_OK || backend == NULL) return;
+    if (result.status != MPMC_OK || backend == nullptr) return;
 
     message_t first = {
         .sender_pid = getpid(),
-        .sequence = 1u,
+        .sequence = 1,
         .sent_at = {.tv_sec = 30, .tv_nsec = 100},
-        .operation_id = 30u,
+        .operation_id = 30,
     };
 
     message_t second = {
         .sender_pid = getpid(),
-        .sequence = 2u,
+        .sequence = 2,
         .sent_at = {.tv_sec = 31, .tv_nsec = 200},
-        .operation_id = 31u,
+        .operation_id = 31,
     };
 
-    message_t received = {0};
+    message_t received = {};
 
     /* Somente a segunda operação deve solicitar ACK. */
-    result = msg_backend_ack_begin(backend, 31u, 1u);
+    result = msg_backend_ack_begin(backend, 31, 1);
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
 
@@ -552,33 +552,33 @@ static void test_fifo(void) {
         return;
     }
 
-    result = msg_backend_send(backend, 1u, &first);
+    result = msg_backend_send(backend, 1, &first);
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
 
     if (result.status != MPMC_OK) {
-        (void)msg_backend_ack_end(backend, 31u);
+        (void)msg_backend_ack_end(backend, 31);
         msg_backend_destroy(backend);
         return;
     }
 
-    result = msg_backend_send(backend, 1u, &second);
+    result = msg_backend_send(backend, 1, &second);
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
 
     if (result.status != MPMC_OK) {
-        (void)msg_backend_ack_end(backend, 31u);
+        (void)msg_backend_ack_end(backend, 31);
         msg_backend_destroy(backend);
         return;
     }
 
     /* A primeira mensagem deve ser recebida primeiro. */
-    result = msg_backend_receive(backend, 1u, &received, false);
+    result = msg_backend_receive(backend, 1, &received, false);
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
 
     if (result.status != MPMC_OK) {
-        (void)msg_backend_ack_end(backend, 31u);
+        (void)msg_backend_ack_end(backend, 31);
         msg_backend_destroy(backend);
         return;
     }
@@ -586,12 +586,12 @@ static void test_fifo(void) {
     check_message(&received, &first);
 
     /* A segunda mensagem deve ser recebida em seguida. */
-    result = msg_backend_receive(backend, 1u, &received, false);
+    result = msg_backend_receive(backend, 1, &received, false);
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
 
     if (result.status != MPMC_OK) {
-        (void)msg_backend_ack_end(backend, 31u);
+        (void)msg_backend_ack_end(backend, 31);
         msg_backend_destroy(backend);
         return;
     }
@@ -614,17 +614,17 @@ static void test_fifo(void) {
     if (rc == 0) {
         if (ack_message_received) {
             alarm(2);
-            result = msg_backend_ack_wait(backend, 31u);
+            result = msg_backend_ack_wait(backend, 31);
             alarm(0);
 
             CHECK(result.status == MPMC_OK);
             CHECK(result.system_errno == 0);
         }
 
-        CHECK(sigaction(SIGALRM, &previous, NULL) == 0);
+        CHECK(sigaction(SIGALRM, &previous, nullptr) == 0);
     }
 
-    CHECK_RESULT(msg_backend_ack_end(backend, 31u), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_ack_end(backend, 31), MPMC_OK, 0);
 
     msg_backend_destroy(backend);
 }
@@ -633,29 +633,29 @@ static void test_fifo(void) {
  * @brief Verifica que o recebimento não bloqueante não espera por mensagens.
  */
 static void test_nonblocking_receive(void) {
-    msg_backend_t *backend = NULL;
-    mpmc_result_t result = msg_backend_create(&backend, 1u);
+    msg_backend_t *backend = nullptr;
+    mpmc_result_t result = msg_backend_create(&backend, 1);
 
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
-    CHECK(backend != NULL);
+    CHECK(backend != nullptr);
 
-    if (result.status != MPMC_OK || backend == NULL) return;
+    if (result.status != MPMC_OK || backend == nullptr) return;
 
-    message_t received = {0};
+    message_t received = {};
     message_t message = {
         .sender_pid = getpid(),
-        .sequence = 1u,
+        .sequence = 1,
         .sent_at = {.tv_sec = 40, .tv_nsec = 100},
-        .operation_id = 40u,
+        .operation_id = 40,
     };
 
     /* A fila vazia deve retornar WOULD_BLOCK imediatamente. */
-    CHECK_RESULT(msg_backend_receive(backend, 1u, &received, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
+    CHECK_RESULT(msg_backend_receive(backend, 1, &received, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
 
-    CHECK_RESULT(msg_backend_send(backend, 1u, &message), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_send(backend, 1, &message), MPMC_OK, 0);
 
-    result = msg_backend_receive(backend, 1u, &received, false);
+    result = msg_backend_receive(backend, 1, &received, false);
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
 
@@ -677,13 +677,13 @@ static void test_nonblocking_receive(void) {
     }
 
     alarm(2);
-    result = msg_backend_receive(backend, 1u, &received, false);
+    result = msg_backend_receive(backend, 1, &received, false);
     alarm(0);
 
     CHECK(result.status == MPMC_ERR_WOULD_BLOCK);
     CHECK(result.system_errno == ENOMSG);
 
-    CHECK(sigaction(SIGALRM, &previous, NULL) == 0);
+    CHECK(sigaction(SIGALRM, &previous, nullptr) == 0);
 
     msg_backend_destroy(backend);
 }
@@ -708,28 +708,28 @@ static void check_message(const message_t *received, const message_t *expected) 
  * quando a capacidade da fila é atingida.
  */
 static void test_send_uses_blocking_mode(void) {
-    msg_backend_t *backend = NULL;
-    mpmc_result_t result = msg_backend_create(&backend, 1u);
+    msg_backend_t *backend = nullptr;
+    mpmc_result_t result = msg_backend_create(&backend, 1);
 
     CHECK(result.status == MPMC_OK);
-    CHECK(backend != NULL);
+    CHECK(backend != nullptr);
 
-    if (result.status != MPMC_OK || backend == NULL) return;
+    if (result.status != MPMC_OK || backend == nullptr) return;
 
     message_t message = {
         .sender_pid = getpid(),
-        .sequence = 1u,
-        .operation_id = 50u,
+        .sequence = 1,
+        .operation_id = 50,
     };
 
-    send_calls = 0u;
+    send_calls = 0;
     last_send_nowait = true;
 
-    result = msg_backend_send(backend, 1u, &message);
+    result = msg_backend_send(backend, 1, &message);
 
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
-    CHECK(send_calls == 1u);
+    CHECK(send_calls == 1);
     CHECK(!last_send_nowait);
 
     msg_backend_destroy(backend);
@@ -741,32 +741,32 @@ static void test_send_uses_blocking_mode(void) {
  * e verifica se todos os recursos criados anteriormente foram removidos.
  */
 static void test_queue_cleanup(void) {
-    for (unsigned fail_call = 1u; fail_call <= 5u; ++fail_call) {
-        msg_backend_t *backend = NULL;
+    for (unsigned fail_call = 1; fail_call <= 5; ++fail_call) {
+        msg_backend_t *backend = nullptr;
 
-        create_calls = 0u;
+        create_calls = 0;
         fail_create_call = fail_call;
-        created_queue_count = 0u;
-        removed_queue_count = 0u;
+        created_queue_count = 0;
+        removed_queue_count = 0;
         track_queue_cleanup = true;
 
-        mpmc_result_t result = msg_backend_create(&backend, 3u);
+        mpmc_result_t result = msg_backend_create(&backend, 3);
 
         track_queue_cleanup = false;
-        fail_create_call = 0u;
+        fail_create_call = 0;
 
-        size_t expected_created = fail_call - 1u;
+        size_t expected_created = fail_call - 1;
 
         CHECK(result.status == MPMC_ERR_SYS);
         CHECK(result.system_errno == ENOSPC);
-        CHECK(backend == NULL);
+        CHECK(backend == nullptr);
 
         CHECK(create_calls == fail_call);
         CHECK(created_queue_count == expected_created);
         CHECK(removed_queue_count == expected_created);
 
         if (created_queue_count == expected_created && removed_queue_count == expected_created) {
-            for (size_t index = 0u; index < expected_created; ++index) {
+            for (size_t index = 0; index < expected_created; ++index) {
                 CHECK(removed_queue_ids[index] == created_queue_ids[index]);
                 CHECK(removed_queue_results[index].status == MPMC_OK);
                 CHECK(removed_queue_results[index].system_errno == 0);
@@ -777,10 +777,10 @@ static void test_queue_cleanup(void) {
          * Proteção adicional para não deixar filas no kernel
          * caso alguma verificação de remoção falhe.
          */
-        for (size_t index = 0u; index < created_queue_count; ++index) {
+        for (size_t index = 0; index < created_queue_count; ++index) {
             bool removed = false;
 
-            for (size_t removed_index = 0u; removed_index < removed_queue_count; ++removed_index) {
+            for (size_t removed_index = 0; removed_index < removed_queue_count; ++removed_index) {
                 if (removed_queue_ids[removed_index] == created_queue_ids[index]
                     && removed_queue_results[removed_index].status == MPMC_OK) {
                     removed = true;
@@ -801,21 +801,21 @@ static void test_queue_cleanup(void) {
  * filho e verifica que ele só consegue concluir o envio após um consumo.
  */
 static void test_send_backpressure(void) {
-    msg_backend_t *backend = NULL;
-    mpmc_result_t result = msg_backend_create(&backend, 1u);
+    msg_backend_t *backend = nullptr;
+    mpmc_result_t result = msg_backend_create(&backend, 1);
 
     CHECK(result.status == MPMC_OK);
-    CHECK(backend != NULL);
+    CHECK(backend != nullptr);
 
-    if (result.status != MPMC_OK || backend == NULL) return;
+    if (result.status != MPMC_OK || backend == nullptr) return;
 
     message_t message = {
         .sender_pid = getpid(),
-        .sequence = 1u,
-        .operation_id = 60u,
+        .sequence = 1,
+        .operation_id = 60,
     };
 
-    result = msg_backend_send(backend, 1u, &message);
+    result = msg_backend_send(backend, 1, &message);
 
     CHECK(result.status == MPMC_OK);
     CHECK(last_send_msqid >= 0);
@@ -832,11 +832,11 @@ static void test_send_backpressure(void) {
      * Preenche a fila diretamente até que o kernel informe
      * que não há mais espaço disponível.
      */
-    for (size_t index = 0u; index < 100000u; ++index) {
+    for (size_t index = 0; index < 100000; ++index) {
         message_t filler = {
             .sender_pid = getpid(),
-            .sequence = index + 2u,
-            .operation_id = 60u,
+            .sequence = index + 2,
+            .operation_id = 60,
         };
 
         result = sysv_msg_send(queue_id, 1, &filler, sizeof(filler), true);
@@ -889,11 +889,11 @@ static void test_send_backpressure(void) {
 
         message_t pending = {
             .sender_pid = getpid(),
-            .sequence = 100001u,
-            .operation_id = 60u,
+            .sequence = 100001,
+            .operation_id = 60,
         };
 
-        result = msg_backend_send(backend, 1u, &pending);
+        result = msg_backend_send(backend, 1, &pending);
         msg_backend_worker_close(backend);
 
         _exit(result.status == MPMC_OK ? 0 : 1);
@@ -910,7 +910,7 @@ static void test_send_backpressure(void) {
 
     if (bytes_read != sizeof(ready)) {
         (void)kill(child, SIGTERM);
-        (void)waitpid(child, NULL, 0);
+        (void)waitpid(child, nullptr, 0);
         msg_backend_destroy(backend);
         return;
     }
@@ -937,7 +937,7 @@ static void test_send_backpressure(void) {
     if (waited == -1) {
         CHECK(false);
         (void)kill(child, SIGTERM);
-        (void)waitpid(child, NULL, 0);
+        (void)waitpid(child, nullptr, 0);
         msg_backend_destroy(backend);
         return;
     }
@@ -945,9 +945,9 @@ static void test_send_backpressure(void) {
     /*
      * Consome uma mensagem para liberar espaço na fila.
      */
-    message_t received = {0};
+    message_t received = {};
 
-    result = msg_backend_receive(backend, 1u, &received, false);
+    result = msg_backend_receive(backend, 1, &received, false);
 
     CHECK(result.status == MPMC_OK);
 
@@ -970,40 +970,40 @@ static void test_send_backpressure(void) {
  * se as demais filas também recebem uma tentativa de remoção.
  */
 static void test_queue_cleanup_remove_failure(void) {
-    msg_backend_t *backend = NULL;
+    msg_backend_t *backend = nullptr;
 
-    create_calls = 0u;
-    fail_create_call = 5u;
+    create_calls = 0;
+    fail_create_call = 5;
 
-    remove_calls = 0u;
-    fail_remove_call = 2u;
+    remove_calls = 0;
+    fail_remove_call = 2;
 
-    created_queue_count = 0u;
-    removed_queue_count = 0u;
+    created_queue_count = 0;
+    removed_queue_count = 0;
     track_queue_cleanup = true;
 
-    mpmc_result_t result = msg_backend_create(&backend, 3u);
+    mpmc_result_t result = msg_backend_create(&backend, 3);
 
     track_queue_cleanup = false;
-    fail_create_call = 0u;
-    fail_remove_call = 0u;
+    fail_create_call = 0;
+    fail_remove_call = 0;
 
     CHECK(result.status == MPMC_ERR_SYS);
     CHECK(result.system_errno == ENOSPC);
-    CHECK(backend == NULL);
+    CHECK(backend == nullptr);
 
     /* Três filas de dados e uma fila de eventos foram criadas. */
-    CHECK(created_queue_count == 4u);
+    CHECK(created_queue_count == 4);
 
     /* Todas as quatro filas devem receber uma tentativa de remoção. */
-    CHECK(remove_calls == 4u);
-    CHECK(removed_queue_count == 4u);
+    CHECK(remove_calls == 4);
+    CHECK(removed_queue_count == 4);
 
-    if (created_queue_count == 4u && removed_queue_count == 4u) {
-        for (size_t index = 0u; index < 4u; ++index) {
+    if (created_queue_count == 4 && removed_queue_count == 4) {
+        for (size_t index = 0; index < 4; ++index) {
             CHECK(removed_queue_ids[index] == created_queue_ids[index]);
 
-            if (index == 1u) {
+            if (index == 1) {
                 CHECK(removed_queue_results[index].status == MPMC_ERR_SYS);
                 CHECK(removed_queue_results[index].system_errno == EACCES);
             } else {
@@ -1014,7 +1014,7 @@ static void test_queue_cleanup_remove_failure(void) {
 
         /* Única limpeza: a fila cuja remoção foi simulada como falha ainda existe.
          */
-        for (size_t index = 0u; index < created_queue_count; ++index) {
+        for (size_t index = 0; index < created_queue_count; ++index) {
             if (removed_queue_results[index].status != MPMC_OK) {
                 result = sysv_msg_remove(created_queue_ids[index]);
                 CHECK(result.status == MPMC_OK);
@@ -1030,31 +1030,31 @@ static void test_queue_cleanup_remove_failure(void) {
  * índice seguinte ao último (p + 1) deve ser rejeitado.
  */
 static void test_three_queues(void) {
-    msg_backend_t *backend = NULL;
-    mpmc_result_t result = msg_backend_create(&backend, 3u);
+    msg_backend_t *backend = nullptr;
+    mpmc_result_t result = msg_backend_create(&backend, 3);
 
     CHECK(result.status == MPMC_OK);
-    CHECK(backend != NULL);
+    CHECK(backend != nullptr);
 
-    if (result.status != MPMC_OK || backend == NULL) return;
+    if (result.status != MPMC_OK || backend == nullptr) return;
 
-    message_t sent[4] = {0};
+    message_t sent[4] = {};
 
-    for (size_t id = 1u; id <= 3u; ++id) {
+    for (size_t id = 1; id <= 3; ++id) {
         sent[id] = (message_t){
             .sender_pid = getpid(),
             .sequence = id,
             .sent_at = {.tv_sec = 50 + (time_t)id, .tv_nsec = 100},
-            .operation_id = 100u + id,
+            .operation_id = 100 + id,
         };
 
         CHECK_RESULT(msg_backend_send(backend, id, &sent[id]), MPMC_OK, 0);
     }
 
-    CHECK_RESULT(msg_backend_send(backend, 4u, &sent[1]), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_send(backend, 4, &sent[1]), MPMC_ERR_INVALID_ARG, 0);
 
-    for (size_t id = 3u; id >= 1u; --id) {
-        message_t received = {0};
+    for (size_t id = 3; id >= 1; --id) {
+        message_t received = {};
 
         result = msg_backend_receive(backend, id, &received, false);
         CHECK(result.status == MPMC_OK);
@@ -1079,21 +1079,21 @@ static void test_three_queues(void) {
  * deixar recursos System V após a suíte.
  */
 static void check_no_orphan_queues(void) {
-    size_t leaked = 0u;
+    size_t leaked = 0;
 
     /* Um registro cheio descartaria identificadores e esconderia vazamentos. */
     CHECK(all_queue_count < ALL_QUEUES_MAX);
 
-    for (size_t index = 0u; index < all_queue_count; ++index) {
+    for (size_t index = 0; index < all_queue_count; ++index) {
         struct msqid_ds info;
 
         if (msgctl(all_queue_ids[index], IPC_STAT, &info) == 0) {
             ++leaked;
-            (void)msgctl(all_queue_ids[index], IPC_RMID, NULL);
+            (void)msgctl(all_queue_ids[index], IPC_RMID, nullptr);
         }
     }
 
-    CHECK(leaked == 0u);
+    CHECK(leaked == 0);
 }
 
 /**
@@ -1104,19 +1104,19 @@ static void check_no_orphan_queues(void) {
  * enviada.
  */
 static void test_blocking_receive(void) {
-    msg_backend_t *backend = NULL;
-    mpmc_result_t result = msg_backend_create(&backend, 1u);
+    msg_backend_t *backend = nullptr;
+    mpmc_result_t result = msg_backend_create(&backend, 1);
 
     CHECK(result.status == MPMC_OK);
-    CHECK(backend != NULL);
+    CHECK(backend != nullptr);
 
-    if (result.status != MPMC_OK || backend == NULL) return;
+    if (result.status != MPMC_OK || backend == nullptr) return;
 
     message_t message = {
         .sender_pid = getpid(),
-        .sequence = 1u,
+        .sequence = 1,
         .sent_at = {.tv_sec = 70, .tv_nsec = 100},
-        .operation_id = 70u,
+        .operation_id = 70,
     };
 
     pid_t child = fork();
@@ -1128,8 +1128,8 @@ static void test_blocking_receive(void) {
     }
 
     if (child == 0) {
-        message_t received = {0};
-        mpmc_result_t child_result = msg_backend_receive(backend, 1u, &received, true);
+        message_t received = {};
+        mpmc_result_t child_result = msg_backend_receive(backend, 1, &received, true);
         bool matches = child_result.status == MPMC_OK;
 
         matches = matches && received.sequence == message.sequence;
@@ -1155,7 +1155,7 @@ static void test_blocking_receive(void) {
     CHECK(waited == 0);
 
     if (waited == 0) {
-        result = msg_backend_send(backend, 1u, &message);
+        result = msg_backend_send(backend, 1, &message);
         CHECK(result.status == MPMC_OK);
 
         if (result.status != MPMC_OK) {
@@ -1181,35 +1181,35 @@ static void test_blocking_receive(void) {
  * que a tentativa seguinte, sem bloqueio, informa fila vazia.
  */
 static void test_fifo_order(void) {
-    msg_backend_t *backend = NULL;
-    mpmc_result_t result = msg_backend_create(&backend, 1u);
+    msg_backend_t *backend = nullptr;
+    mpmc_result_t result = msg_backend_create(&backend, 1);
 
     CHECK(result.status == MPMC_OK);
-    CHECK(backend != NULL);
+    CHECK(backend != nullptr);
 
-    if (result.status != MPMC_OK || backend == NULL) return;
+    if (result.status != MPMC_OK || backend == nullptr) return;
 
-    for (size_t index = 1u; index <= 8u; ++index) {
+    for (size_t index = 1; index <= 8; ++index) {
         message_t message = {
             .sender_pid = getpid(),
             .sequence = index,
             .sent_at = {.tv_sec = 60, .tv_nsec = (long)index},
-            .operation_id = 80u,
+            .operation_id = 80,
         };
 
-        CHECK_RESULT(msg_backend_send(backend, 1u, &message), MPMC_OK, 0);
+        CHECK_RESULT(msg_backend_send(backend, 1, &message), MPMC_OK, 0);
     }
 
-    for (size_t index = 1u; index <= 8u; ++index) {
+    for (size_t index = 1; index <= 8; ++index) {
         message_t expected = {
             .sender_pid = getpid(),
             .sequence = index,
             .sent_at = {.tv_sec = 60, .tv_nsec = (long)index},
-            .operation_id = 80u,
+            .operation_id = 80,
         };
-        message_t received = {0};
+        message_t received = {};
 
-        result = msg_backend_receive(backend, 1u, &received, false);
+        result = msg_backend_receive(backend, 1, &received, false);
         CHECK(result.status == MPMC_OK);
         CHECK(result.system_errno == 0);
 
@@ -1218,9 +1218,9 @@ static void test_fifo_order(void) {
         }
     }
 
-    message_t extra = {0};
+    message_t extra = {};
 
-    CHECK_RESULT(msg_backend_receive(backend, 1u, &extra, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
+    CHECK_RESULT(msg_backend_receive(backend, 1, &extra, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
 
     msg_backend_destroy(backend);
 }
@@ -1234,29 +1234,29 @@ static void test_fifo_order(void) {
  * anterior era real.
  */
 static void test_would_block_publishes_nothing(void) {
-    msg_backend_t *backend = NULL;
-    mpmc_result_t result = msg_backend_create(&backend, 1u);
+    msg_backend_t *backend = nullptr;
+    mpmc_result_t result = msg_backend_create(&backend, 1);
 
     CHECK(result.status == MPMC_OK);
-    CHECK(backend != NULL);
+    CHECK(backend != nullptr);
 
-    if (result.status != MPMC_OK || backend == NULL) return;
+    if (result.status != MPMC_OK || backend == nullptr) return;
 
-    message_t out = {0};
+    message_t out = {};
     uint64_t count = UINT64_MAX;
 
-    CHECK_RESULT(msg_backend_receive(backend, 1u, &out, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
+    CHECK_RESULT(msg_backend_receive(backend, 1, &out, false), MPMC_ERR_WOULD_BLOCK, ENOMSG);
     CHECK_RESULT(msg_backend_poll_events(backend), MPMC_OK, 0);
-    CHECK_RESULT(msg_backend_consumed_count(backend, 1u, &count), MPMC_OK, 0);
-    CHECK(count == 0u);
+    CHECK_RESULT(msg_backend_consumed_count(backend, 1, &count), MPMC_OK, 0);
+    CHECK(count == 0);
 
-    message_t message = {.sender_pid = getpid(), .sequence = 1u, .operation_id = 90u};
+    message_t message = {.sender_pid = getpid(), .sequence = 1, .operation_id = 90};
 
-    CHECK_RESULT(msg_backend_send(backend, 1u, &message), MPMC_OK, 0);
-    CHECK_RESULT(msg_backend_receive(backend, 1u, &out, false), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_send(backend, 1, &message), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_receive(backend, 1, &out, false), MPMC_OK, 0);
     CHECK_RESULT(msg_backend_poll_events(backend), MPMC_OK, 0);
-    CHECK_RESULT(msg_backend_consumed_count(backend, 1u, &count), MPMC_OK, 0);
-    CHECK(count == 1u);
+    CHECK_RESULT(msg_backend_consumed_count(backend, 1, &count), MPMC_OK, 0);
+    CHECK(count == 1);
 
     msg_backend_destroy(backend);
 }
@@ -1269,43 +1269,43 @@ static void test_would_block_publishes_nothing(void) {
  * contá-las como consumo.
  */
 static void test_contract_violations(void) {
-    msg_backend_t *backend = NULL;
-    mpmc_result_t result = msg_backend_create(&backend, 1u);
+    msg_backend_t *backend = nullptr;
+    mpmc_result_t result = msg_backend_create(&backend, 1);
 
     CHECK(result.status == MPMC_OK);
-    CHECK(backend != NULL);
+    CHECK(backend != nullptr);
 
-    if (result.status != MPMC_OK || backend == NULL) return;
+    if (result.status != MPMC_OK || backend == nullptr) return;
 
-    message_t message = {.sender_pid = getpid(), .sequence = 1u, .operation_id = 91u};
-    message_t out = {0};
+    message_t message = {.sender_pid = getpid(), .sequence = 1, .operation_id = 91};
+    message_t out = {};
     uint64_t count = UINT64_MAX;
 
     /* Um envio e uma retirada válidos revelam o identificador da fila de dados.
      */
-    CHECK_RESULT(msg_backend_send(backend, 1u, &message), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_send(backend, 1, &message), MPMC_OK, 0);
 
     int queue_id = last_send_msqid;
 
     CHECK(queue_id >= 0);
-    CHECK_RESULT(msg_backend_receive(backend, 1u, &out, false), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_receive(backend, 1, &out, false), MPMC_OK, 0);
 
     if (queue_id >= 0) {
-        unsigned char too_short[4] = {0};
+        unsigned char too_short[4] = {};
 
         /* Corpo menor que sizeof(message_t). */
         CHECK_RESULT(sysv_msg_send(queue_id, 1, too_short, sizeof(too_short), true), MPMC_OK, 0);
-        CHECK_RESULT(msg_backend_receive(backend, 1u, &out, false), MPMC_ERR_STATE, 0);
+        CHECK_RESULT(msg_backend_receive(backend, 1, &out, false), MPMC_ERR_STATE, 0);
 
         /* Tipo diferente de 1 e 2. */
         CHECK_RESULT(sysv_msg_send(queue_id, 3, &message, sizeof(message), true), MPMC_OK, 0);
-        CHECK_RESULT(msg_backend_receive(backend, 1u, &out, false), MPMC_ERR_STATE, 0);
+        CHECK_RESULT(msg_backend_receive(backend, 1, &out, false), MPMC_ERR_STATE, 0);
     }
 
     /* Somente a primeira retirada, válida, foi contada. */
     CHECK_RESULT(msg_backend_poll_events(backend), MPMC_OK, 0);
-    CHECK_RESULT(msg_backend_consumed_count(backend, 1u, &count), MPMC_OK, 0);
-    CHECK(count == 1u);
+    CHECK_RESULT(msg_backend_consumed_count(backend, 1, &count), MPMC_OK, 0);
+    CHECK(count == 1);
 
     msg_backend_destroy(backend);
 }
@@ -1316,111 +1316,111 @@ static void test_contract_violations(void) {
  */
 static void test_ack_control_operations(void) {
     size_t queue_start = all_queue_count;
-    msg_backend_t *backend = NULL;
-    mpmc_result_t result = msg_backend_create(&backend, 1u);
+    msg_backend_t *backend = nullptr;
+    mpmc_result_t result = msg_backend_create(&backend, 1);
     CHECK(result.status == MPMC_OK);
-    CHECK(backend != NULL);
-    if (result.status != MPMC_OK || backend == NULL) return;
+    CHECK(backend != nullptr);
+    if (result.status != MPMC_OK || backend == nullptr) return;
 
-    CHECK(all_queue_count == queue_start + 3u);
-    if (all_queue_count < queue_start + 3u) {
+    CHECK(all_queue_count == queue_start + 3);
+    if (all_queue_count < queue_start + 3) {
         msg_backend_destroy(backend);
         return;
     }
 
-    ack_control_queue = all_queue_ids[queue_start + 2u];
+    ack_control_queue = all_queue_ids[queue_start + 2];
     ack_control_data_queue = all_queue_ids[queue_start];
-    ack_control_message_count = 0u;
-    ack_control_receive_calls = 0u;
-    ack_control_sleep_calls = 0u;
+    ack_control_message_count = 0;
+    ack_control_receive_calls = 0;
+    ack_control_sleep_calls = 0;
     ack_control_receive_failure = (mpmc_result_t){.status = MPMC_OK};
     ack_control_active = true;
 
-    CHECK_RESULT(msg_backend_ack_begin(NULL, 101u, 1u), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(msg_backend_ack_begin(backend, 0u, 1u), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(msg_backend_ack_begin(backend, UINT64_MAX, 1u), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(msg_backend_ack_begin(backend, 100u, 0u), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(msg_backend_ack_begin(backend, 100u, 1025u), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(msg_backend_ack_wait(backend, 999u), MPMC_ERR_STATE, 0);
+    CHECK_RESULT(msg_backend_ack_begin(nullptr, 101, 1), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 0, 1), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, UINT64_MAX, 1), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 100, 0), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 100, 1025), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(msg_backend_ack_wait(backend, 999), MPMC_ERR_STATE, 0);
 
-    CHECK_RESULT(msg_backend_ack_begin(backend, 101u, 2u), MPMC_OK, 0);
-    CHECK_RESULT(msg_backend_ack_begin(backend, 101u, 2u), MPMC_ERR_STATE, 0);
-    CHECK_RESULT(msg_backend_ack_begin(backend, 202u, 1u), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 101, 2), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 101, 2), MPMC_ERR_STATE, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 202, 1), MPMC_OK, 0);
 
     /* A fila cheia força uma drenagem seletiva antes do segundo envio. */
-    ack_control_push(101, 101u, (ssize_t)sizeof(uint64_t));
-    ack_control_push(202, 202u, (ssize_t)sizeof(uint64_t));
+    ack_control_push(101, 101, (ssize_t)sizeof(uint64_t));
+    ack_control_push(202, 202, (ssize_t)sizeof(uint64_t));
     ack_control_send_active = true;
-    ack_control_send_would_block = 1u;
+    ack_control_send_would_block = 1;
     unsigned sends_before = send_calls;
-    message_t message = {.sender_pid = getpid(), .sequence = 1u, .operation_id = 101u};
-    result = msg_backend_send(backend, 1u, &message);
+    message_t message = {.sender_pid = getpid(), .sequence = 1, .operation_id = 101};
+    result = msg_backend_send(backend, 1, &message);
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
-    CHECK(send_calls == sends_before + 2u);
+    CHECK(send_calls == sends_before + 2);
     CHECK(last_send_type == 2);
     CHECK(last_send_nowait);
-    CHECK(ack_control_sleep_calls == 1u);
-    CHECK(ack_control_message_count == 1u);
-    CHECK(ack_control_messages[0].operation_id == 202u);
+    CHECK(ack_control_sleep_calls == 1);
+    CHECK(ack_control_message_count == 1);
+    CHECK(ack_control_messages[0].operation_id == 202);
 
     /* Confirmação recebida antes da espera permanece contabilizada no registro.
      */
-    ack_control_push(101, 101u, (ssize_t)sizeof(uint64_t));
-    result = msg_backend_ack_wait(backend, 101u);
+    ack_control_push(101, 101, (ssize_t)sizeof(uint64_t));
+    result = msg_backend_ack_wait(backend, 101);
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
     unsigned receives_after_wait = ack_control_receive_calls;
-    CHECK_RESULT(msg_backend_ack_wait(backend, 101u), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_ack_wait(backend, 101), MPMC_OK, 0);
     CHECK(ack_control_receive_calls == receives_after_wait);
 
     /* A confirmação de outra operação não foi consumida pelo wait anterior. */
-    result = msg_backend_ack_wait(backend, 202u);
+    result = msg_backend_ack_wait(backend, 202);
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
 
     /* O encerramento drena ACKs excedentes e remove só o registro solicitado. */
-    ack_control_push(101, 101u, (ssize_t)sizeof(uint64_t));
-    CHECK_RESULT(msg_backend_ack_end(backend, 101u), MPMC_OK, 0);
-    CHECK(ack_control_message_count == 0u);
-    CHECK_RESULT(msg_backend_ack_wait(backend, 101u), MPMC_ERR_STATE, 0);
-    CHECK_RESULT(msg_backend_ack_end(backend, 101u), MPMC_OK, 0);
+    ack_control_push(101, 101, (ssize_t)sizeof(uint64_t));
+    CHECK_RESULT(msg_backend_ack_end(backend, 101), MPMC_OK, 0);
+    CHECK(ack_control_message_count == 0);
+    CHECK_RESULT(msg_backend_ack_wait(backend, 101), MPMC_ERR_STATE, 0);
+    CHECK_RESULT(msg_backend_ack_end(backend, 101), MPMC_OK, 0);
 
     /* Sem registro ativo, a mensagem não solicita ACK e mantém envio bloqueante.
      */
-    message.sequence = 2u;
-    CHECK_RESULT(msg_backend_send(backend, 1u, &message), MPMC_OK, 0);
+    message.sequence = 2;
+    CHECK_RESULT(msg_backend_send(backend, 1, &message), MPMC_OK, 0);
     CHECK(last_send_type == 1);
     CHECK(!last_send_nowait);
     ack_control_send_active = false;
 
     /* Uma interrupção não apaga o progresso nem o registro da operação. */
-    CHECK_RESULT(msg_backend_ack_begin(backend, 303u, 1u), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 303, 1), MPMC_OK, 0);
     ack_control_receive_failure = (mpmc_result_t){
         .status = MPMC_ERR_INTERRUPTED,
         .system_errno = EINTR,
     };
-    CHECK_RESULT(msg_backend_ack_wait(backend, 303u), MPMC_ERR_INTERRUPTED, EINTR);
-    ack_control_push(303, 303u, (ssize_t)sizeof(uint64_t));
-    CHECK_RESULT(msg_backend_ack_wait(backend, 303u), MPMC_OK, 0);
-    CHECK_RESULT(msg_backend_ack_end(backend, 303u), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_ack_wait(backend, 303), MPMC_ERR_INTERRUPTED, EINTR);
+    ack_control_push(303, 303, (ssize_t)sizeof(uint64_t));
+    CHECK_RESULT(msg_backend_ack_wait(backend, 303), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_ack_end(backend, 303), MPMC_OK, 0);
 
     /* Corpo inválido não conta como ACK; a operação pode receber um ACK válido
      * depois. */
-    CHECK_RESULT(msg_backend_ack_begin(backend, 404u, 1u), MPMC_OK, 0);
-    ack_control_push(404, 404u, (ssize_t)sizeof(uint32_t));
-    CHECK_RESULT(msg_backend_ack_wait(backend, 404u), MPMC_ERR_STATE, 0);
-    ack_control_push(404, 404u, (ssize_t)sizeof(uint64_t));
-    CHECK_RESULT(msg_backend_ack_wait(backend, 404u), MPMC_OK, 0);
-    CHECK_RESULT(msg_backend_ack_end(backend, 404u), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 404, 1), MPMC_OK, 0);
+    ack_control_push(404, 404, (ssize_t)sizeof(uint32_t));
+    CHECK_RESULT(msg_backend_ack_wait(backend, 404), MPMC_ERR_STATE, 0);
+    ack_control_push(404, 404, (ssize_t)sizeof(uint64_t));
+    CHECK_RESULT(msg_backend_ack_wait(backend, 404), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_ack_end(backend, 404), MPMC_OK, 0);
 
     /* Liberação também remove o registro se detectar ACK pendente malformado. */
-    CHECK_RESULT(msg_backend_ack_begin(backend, 505u, 1u), MPMC_OK, 0);
-    ack_control_push(505, 505u, (ssize_t)sizeof(uint32_t));
-    CHECK_RESULT(msg_backend_ack_end(backend, 505u), MPMC_ERR_STATE, 0);
-    CHECK_RESULT(msg_backend_ack_wait(backend, 505u), MPMC_ERR_STATE, 0);
+    CHECK_RESULT(msg_backend_ack_begin(backend, 505, 1), MPMC_OK, 0);
+    ack_control_push(505, 505, (ssize_t)sizeof(uint32_t));
+    CHECK_RESULT(msg_backend_ack_end(backend, 505), MPMC_ERR_STATE, 0);
+    CHECK_RESULT(msg_backend_ack_wait(backend, 505), MPMC_ERR_STATE, 0);
 
-    CHECK_RESULT(msg_backend_ack_end(backend, 202u), MPMC_OK, 0);
+    CHECK_RESULT(msg_backend_ack_end(backend, 202), MPMC_OK, 0);
     ack_control_active = false;
     ack_control_send_active = false;
     ack_control_queue = -1;
@@ -1449,14 +1449,14 @@ int main(void) {
     test_send_backpressure();
     test_queue_cleanup_remove_failure();
 
-    msg_backend_t *parent = NULL;
-    mpmc_result_t result = msg_backend_create(&parent, 2u);
-    if (result.status != MPMC_OK || parent == NULL) {
+    msg_backend_t *parent = nullptr;
+    mpmc_result_t result = msg_backend_create(&parent, 2);
+    if (result.status != MPMC_OK || parent == nullptr) {
         return failed("msg_backend_create falhou");
     }
 
-    message_t first = {.sender_pid = getpid(), .sequence = 1u, .operation_id = 1u};
-    message_t second = {.sender_pid = getpid(), .sequence = 2u, .operation_id = 2u};
+    message_t first = {.sender_pid = getpid(), .sequence = 1, .operation_id = 1};
+    message_t second = {.sender_pid = getpid(), .sequence = 2, .operation_id = 2};
 
     pid_t child_one = fork();
     if (child_one == -1) {
@@ -1465,7 +1465,7 @@ int main(void) {
     }
     if (child_one == 0) {
         message_t received;
-        result = msg_backend_receive(parent, 1u, &received, true);
+        result = msg_backend_receive(parent, 1, &received, true);
         msg_backend_worker_close(parent);
         _exit(result.status == MPMC_OK ? 0 : 1);
     }
@@ -1473,32 +1473,32 @@ int main(void) {
     pid_t child_two = fork();
     if (child_two == -1) {
         (void)kill(child_one, SIGTERM);
-        (void)waitpid(child_one, NULL, 0);
+        (void)waitpid(child_one, nullptr, 0);
         msg_backend_destroy(parent);
         return failed("segundo fork falhou");
     }
     if (child_two == 0) {
         message_t received;
-        result = msg_backend_receive(parent, 1u, &received, true);
+        result = msg_backend_receive(parent, 1, &received, true);
         msg_backend_worker_close(parent);
         _exit(result.status == MPMC_OK ? 0 : 1);
     }
 
     /* Os consumidores ja existem quando o produtor registra sua operacao de ACK.
      */
-    if (msg_backend_ack_begin(parent, 2u, 1u).status != MPMC_OK
-        || msg_backend_send(parent, 1u, &first).status != MPMC_OK
-        || msg_backend_send(parent, 1u, &second).status != MPMC_OK) {
+    if (msg_backend_ack_begin(parent, 2, 1).status != MPMC_OK
+        || msg_backend_send(parent, 1, &first).status != MPMC_OK
+        || msg_backend_send(parent, 1, &second).status != MPMC_OK) {
         (void)kill(child_one, SIGTERM);
         (void)kill(child_two, SIGTERM);
-        (void)waitpid(child_one, NULL, 0);
-        (void)waitpid(child_two, NULL, 0);
+        (void)waitpid(child_one, nullptr, 0);
+        (void)waitpid(child_two, nullptr, 0);
         msg_backend_destroy(parent);
         return failed("registro de ACK ou envio de mensagens falhou");
     }
 
     int status;
-    for (size_t index = 0u; index < 2u; ++index) {
+    for (size_t index = 0; index < 2; ++index) {
         if (wait(&status) == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
             msg_backend_destroy(parent);
             return failed("consumidor filho falhou ou evento nao foi publicado");
@@ -1515,14 +1515,14 @@ int main(void) {
     }
 
     uint64_t count = UINT64_MAX;
-    result = msg_backend_consumed_count(parent, 1u, &count);
-    if (result.status != MPMC_OK || count != 2u) {
+    result = msg_backend_consumed_count(parent, 1, &count);
+    if (result.status != MPMC_OK || count != 2) {
         msg_backend_destroy(parent);
         return failed("pai nao consolidou o total de dois consumidores distintos");
     }
 
-    result = msg_backend_consumed_count(parent, 2u, &count);
-    if (result.status != MPMC_OK || count != 0u) {
+    result = msg_backend_consumed_count(parent, 2, &count);
+    if (result.status != MPMC_OK || count != 0) {
         msg_backend_destroy(parent);
         return failed("contador de estrutura independente falhou");
     }
@@ -1535,19 +1535,19 @@ int main(void) {
         return failed("instalacao do timeout de ACK falhou");
     }
     alarm(2);
-    result = msg_backend_ack_wait(parent, 2u);
+    result = msg_backend_ack_wait(parent, 2);
     alarm(0);
     bool confirmed = result.status == MPMC_OK;
     bool ignored = false;
-    if (confirmed && msg_backend_ack_begin(parent, 1u, 1u).status == MPMC_OK) {
+    if (confirmed && msg_backend_ack_begin(parent, 1, 1).status == MPMC_OK) {
         alarm(1);
-        result = msg_backend_ack_wait(parent, 1u);
+        result = msg_backend_ack_wait(parent, 1);
         alarm(0);
         ignored = result.status == MPMC_ERR_INTERRUPTED && result.system_errno == EINTR;
     }
-    (void)sigaction(SIGALRM, &previous, NULL);
-    msg_backend_ack_end(parent, 2u);
-    msg_backend_ack_end(parent, 1u);
+    (void)sigaction(SIGALRM, &previous, nullptr);
+    msg_backend_ack_end(parent, 2);
+    msg_backend_ack_end(parent, 1);
     if (!confirmed || !ignored) {
         msg_backend_destroy(parent);
         return failed("ACK ausente ou emitido para operacao sem registro");
@@ -1558,7 +1558,7 @@ int main(void) {
 
     printf("%u verificações adicionais de filas, %u falhas\n", checks, failures);
 
-    if (failures != 0u) return 1;
+    if (failures != 0) return 1;
 
     puts("Message backend event tests passed.");
     return 0;

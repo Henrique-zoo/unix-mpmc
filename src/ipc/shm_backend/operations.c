@@ -34,7 +34,7 @@ mpmc_result_t shm_backend_send(
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (backend == NULL || message == NULL) {
+    if (backend == nullptr || message == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
@@ -48,7 +48,7 @@ mpmc_result_t shm_backend_send(
 
     shm_segment_t *segment = &backend->segments[producer_id - 1];
 
-    assert(segment->ring != NULL);
+    assert(segment->ring != nullptr);
     assert(segment->semid >= 0);
 
     struct sembuf acquire[] = {
@@ -104,7 +104,7 @@ mpmc_result_t shm_backend_receive(
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (backend == NULL || out == NULL) {
+    if (backend == nullptr || out == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
@@ -118,7 +118,7 @@ mpmc_result_t shm_backend_receive(
 
     shm_segment_t *segment = &backend->segments[producer_id - 1];
 
-    assert(segment->ring != NULL);
+    assert(segment->ring != nullptr);
     assert(segment->semid >= 0);
 
     short flags = blocking ? 0 : IPC_NOWAIT;
@@ -177,7 +177,7 @@ mpmc_result_t shm_backend_consumed_count(
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (backend == NULL || out_count == NULL) {
+    if (backend == nullptr || out_count == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
@@ -191,7 +191,7 @@ mpmc_result_t shm_backend_consumed_count(
 
     shm_segment_t *segment = &backend->segments[producer_id - 1];
 
-    assert(segment->ring != NULL);
+    assert(segment->ring != nullptr);
     assert(segment->semid >= 0);
 
     mpmc_result_t result = sysv_sem_change(segment->semid, SHM_SEM_MUTEX, -1, false);

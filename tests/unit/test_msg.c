@@ -150,12 +150,12 @@ static void arm_alarm(long millis) {
     memset(&action, 0, sizeof action);
     action.sa_handler = on_alarm;
     sigemptyset(&action.sa_mask);
-    sigaction(SIGALRM, &action, NULL);
+    sigaction(SIGALRM, &action, nullptr);
 
     memset(&timer, 0, sizeof timer);
     timer.it_value.tv_sec = millis / 1000;
     timer.it_value.tv_usec = (millis % 1000) * 1000;
-    setitimer(ITIMER_REAL, &timer, NULL);
+    setitimer(ITIMER_REAL, &timer, nullptr);
 }
 
 /**
@@ -175,7 +175,7 @@ static void arm_alarm(long millis) {
  */
 static mpmc_result_t fill_queue(int msqid) {
     char block[1024];
-    mpmc_result_t error = (mpmc_result_t){.status = MPMC_OK};
+    mpmc_result_t error = {.status = MPMC_OK};
 
     memset(block, 0x5A, sizeof block);
     for (int i = 0; i < 1000 && error.status == MPMC_OK; ++i) {
@@ -191,7 +191,7 @@ static void test_create_remove(void) {
     int a = -1;
     int b = -1;
 
-    CHECK_ERROR(sysv_msg_create(NULL), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_ERROR(sysv_msg_create(nullptr), MPMC_ERR_INVALID_ARG, 0);
     CHECK_STATUS(sysv_msg_create(&a), MPMC_OK);
     CHECK_STATUS(sysv_msg_create(&b), MPMC_OK);
     CHECK(a >= 0 && b >= 0 && a != b, "IDs inválidos ou repetidos (%d, %d)", a, b);
@@ -224,12 +224,12 @@ static void test_kernel_and_local_arguments(void) {
 
     CHECK_ERROR(sysv_msg_send(msqid, 0, &body, 1, true), MPMC_ERR_INVALID_ARG, EINVAL);
     CHECK_ERROR(sysv_msg_send(msqid, -1, &body, 1, true), MPMC_ERR_INVALID_ARG, EINVAL);
-    CHECK_ERROR(sysv_msg_send(msqid, 1, NULL, 1, true), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_ERROR(sysv_msg_send(msqid, 1, nullptr, 1, true), MPMC_ERR_INVALID_ARG, 0);
     CHECK_ERROR(sysv_msg_send(msqid, 1, &body, SIZE_MAX, true), MPMC_ERR_INVALID_ARG, 0);
 
     CHECK_STATUS(sysv_msg_send(msqid, 1, &body, 1, true), MPMC_OK);
-    CHECK_ERROR(sysv_msg_receive(msqid, 0, &out, 1, true, NULL), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_ERROR(sysv_msg_receive(msqid, 0, NULL, 1, true, &size), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_ERROR(sysv_msg_receive(msqid, 0, &out, 1, true, nullptr), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_ERROR(sysv_msg_receive(msqid, 0, nullptr, 1, true, &size), MPMC_ERR_INVALID_ARG, 0);
     CHECK_ERROR(
         sysv_msg_receive_typed(msqid, 0, &out, SIZE_MAX, true, &size, &type),
         MPMC_ERR_INVALID_ARG,
@@ -272,8 +272,8 @@ static void test_zero_size_message(void) {
     int msqid = new_queue();
     ssize_t size = -1;
 
-    CHECK_STATUS(sysv_msg_send(msqid, 3, NULL, 0, false), MPMC_OK);
-    CHECK_STATUS(sysv_msg_receive(msqid, 3, NULL, 0, false, &size), MPMC_OK);
+    CHECK_STATUS(sysv_msg_send(msqid, 3, nullptr, 0, false), MPMC_OK);
+    CHECK_STATUS(sysv_msg_receive(msqid, 3, nullptr, 0, false, &size), MPMC_OK);
     CHECK(size == 0, "corpo vazio deveria retornar 0 bytes, obteve %zd", size);
 
     drop_queue(msqid);
@@ -397,7 +397,7 @@ static void test_blocking_receive_interrupted(void) {
  */
 static void test_blocking_send_interrupted(void) {
     int msqid = new_queue();
-    char block[1024] = {0};
+    char block[1024] = {};
 
     CHECK_STATUS(fill_queue(msqid), MPMC_ERR_WOULD_BLOCK);
 
@@ -412,14 +412,14 @@ static void test_blocking_send_interrupted(void) {
  */
 static void test_blocking_receive_wakes_on_send_from_child(void) {
     int msqid = new_queue();
-    char got[8] = {0};
+    char got[8] = {};
     ssize_t size = 0;
     int wstatus = 0;
     pid_t child = fork();
 
     CHECK(child >= 0, "fork falhou");
     if (child == 0) {
-        nanosleep(&(struct timespec){.tv_nsec = 100000000L}, NULL);
+        nanosleep(&(struct timespec){.tv_nsec = 100000000L}, nullptr);
         _exit(sysv_msg_send(msqid, 4, "filho", 5, false).status == MPMC_OK ? 0 : 1);
     }
 
@@ -443,7 +443,7 @@ static size_t kernel_limit(const char *path, size_t fallback) {
     FILE *file = fopen(path, "r");
     unsigned long value = 0;
 
-    if (file == NULL) return fallback;
+    if (file == nullptr) return fallback;
     if (fscanf(file, "%lu", &value) != 1 || value == 0) {
         value = fallback;
     }
@@ -470,8 +470,8 @@ static void test_message_size_limit(void) {
     unsigned char *got = malloc(msgmax + 1);
     ssize_t size = 0;
 
-    CHECK(sent != NULL && got != NULL, "malloc falhou");
-    if (sent == NULL || got == NULL) {
+    CHECK(sent != nullptr && got != nullptr, "malloc falhou");
+    if (sent == nullptr || got == nullptr) {
         free(sent);
         free(got);
         drop_queue(msqid);
@@ -503,7 +503,7 @@ static void test_message_size_limit(void) {
  */
 static void test_blocked_send_wakes_on_receive_from_child(void) {
     int msqid = new_queue();
-    char block[1024] = {0};
+    char block[1024] = {};
     struct timespec start;
     struct timespec end;
     int wstatus = 0;
@@ -517,7 +517,7 @@ static void test_blocked_send_wakes_on_receive_from_child(void) {
         char buffer[1024];
         ssize_t size = 0;
 
-        nanosleep(&(struct timespec){.tv_nsec = 100000000L}, NULL);
+        nanosleep(&(struct timespec){.tv_nsec = 100000000L}, nullptr);
         _exit(
             sysv_msg_receive(msqid, 0, buffer, sizeof buffer, false, &size).status == MPMC_OK ? 0
                                                                                               : 1
@@ -625,8 +625,8 @@ static void test_receive_returns_type(void) {
     CHECK(got == 0xA5 && size == -1 && type == -1, "saidas alteradas em E2BIG");
     CHECK_STATUS(sysv_msg_receive(msqid, 0, large, sizeof large, true, &size), MPMC_OK);
 
-    CHECK_STATUS(sysv_msg_send(msqid, 7, NULL, 0, false), MPMC_OK);
-    CHECK_STATUS(sysv_msg_receive_typed(msqid, 0, NULL, 0, true, &size, &type), MPMC_OK);
+    CHECK_STATUS(sysv_msg_send(msqid, 7, nullptr, 0, false), MPMC_OK);
+    CHECK_STATUS(sysv_msg_receive_typed(msqid, 0, nullptr, 0, true, &size, &type), MPMC_OK);
     CHECK(size == 0 && type == 7, "tipo perdido na mensagem sem corpo");
     drop_queue(msqid);
 }

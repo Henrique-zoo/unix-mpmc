@@ -166,7 +166,7 @@ mpmc_result_t mpmc_test_sem_remove(int semid);
  * na chamada escolhida por fail_sem_create. system_errno é zero em sucesso.
  */
 mpmc_result_t mpmc_test_sem_create(unsigned count, int *out_semid) {
-    CHECK(count == SHM_SEM_COUNT && out_semid != NULL);
+    CHECK(count == SHM_SEM_COUNT && out_semid != nullptr);
     unsigned position = sem_create_calls++;
     if (sem_create_calls == fail_sem_create) {
         return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = ENOSPC};
@@ -232,20 +232,20 @@ mpmc_result_t mpmc_test_sem_remove(int semid) {
  * de ACK usam os wrappers System V reais em uma suíte separada.
  */
 mpmc_result_t mpmc_test_ack_resources_create(shm_backend_t *backend) {
-    CHECK(backend != NULL);
+    CHECK(backend != nullptr);
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
 mpmc_result_t mpmc_test_ack_resources_cleanup(shm_backend_t *backend, bool remove_global) {
-    CHECK(backend != NULL);
+    CHECK(backend != nullptr);
     (void)remove_global;
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
 static void track_allocation(void *pointer) {
-    if (pointer == NULL) return;
+    if (pointer == nullptr) return;
     for (size_t i = 0; i < MAX_SEGMENTS; ++i) {
-        if (allocations[i] == NULL) {
+        if (allocations[i] == nullptr) {
             allocations[i] = pointer;
             ++live_allocations;
             return;
@@ -264,7 +264,7 @@ static void track_allocation(void *pointer) {
 void *mpmc_test_shm_malloc(size_t size) {
     if (++allocation_calls == fail_allocation) {
         errno = ENOMEM;
-        return NULL;
+        return nullptr;
     }
     void *pointer = malloc(size);
     track_allocation(pointer);
@@ -282,7 +282,7 @@ void *mpmc_test_shm_malloc(size_t size) {
 void *mpmc_test_shm_calloc(size_t count, size_t size) {
     if (++allocation_calls == fail_allocation) {
         errno = ENOMEM;
-        return NULL;
+        return nullptr;
     }
     void *pointer = calloc(count, size);
     track_allocation(pointer);
@@ -297,11 +297,11 @@ void *mpmc_test_shm_calloc(size_t count, size_t size) {
  * preservação de erros anteriores. Ponteiro desconhecido registra falha e não é liberado.
  */
 void mpmc_test_shm_free(void *pointer) {
-    if (pointer == NULL) return;
+    if (pointer == nullptr) return;
     ++free_calls;
     for (size_t i = 0; i < MAX_SEGMENTS; ++i) {
         if (allocations[i] == pointer) {
-            allocations[i] = NULL;
+            allocations[i] = nullptr;
             --live_allocations;
             free(pointer);
             errno = EIO;
@@ -325,7 +325,7 @@ void mpmc_test_shm_free(void *pointer) {
  */
 mpmc_result_t mpmc_test_shm_create(size_t size, int *out_shmid) {
     CHECK(size == MPMC_SHM_SEGMENT_BYTES);
-    CHECK(out_shmid != NULL);
+    CHECK(out_shmid != nullptr);
     if (++create_calls == fail_create) {
         return (mpmc_result_t){
             .status = MPMC_ERR_SYS,
@@ -353,7 +353,7 @@ mpmc_result_t mpmc_test_shm_create(size_t size, int *out_shmid) {
  */
 mpmc_result_t mpmc_test_shm_attach(int shmid, void **out_address) {
     CHECK(shmid >= 0 && shmid < MAX_SEGMENTS);
-    CHECK(out_address != NULL);
+    CHECK(out_address != nullptr);
     if (shmid < 0 || shmid >= MAX_SEGMENTS) return (mpmc_result_t){.status = MPMC_ERR_STATE};
     CHECK(segments[shmid].created);
     if (++attach_calls == fail_attach) {
@@ -503,9 +503,9 @@ static void check_error(
  * o backend recebido para verificar a liberação das alocações rastreadas.
  */
 static shm_backend_t *new_backend(void) {
-    shm_backend_t *backend = NULL;
-    check_result(shm_backend_create(&backend, PRODUCER_COUNT, NULL), MPMC_OK, 0);
-    CHECK(backend != NULL);
+    shm_backend_t *backend = nullptr;
+    check_result(shm_backend_create(&backend, PRODUCER_COUNT, nullptr), MPMC_OK, 0);
+    CHECK(backend != nullptr);
     return backend;
 }
 
@@ -514,17 +514,17 @@ static shm_backend_t *new_backend(void) {
  */
 static void test_null_and_invalid_arguments(void) {
     reset_case();
-    error_log_t log = {0};
+    error_log_t log = {};
     const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
-    check_result(shm_backend_destroy(NULL, &reporter), MPMC_OK, 0);
-    check_result(shm_backend_worker_close(NULL, &reporter), MPMC_OK, 0);
-    check_result(shm_backend_destroy(NULL, NULL), MPMC_OK, 0);
-    check_result(shm_backend_worker_close(NULL, NULL), MPMC_OK, 0);
-    check_result(shm_backend_create(NULL, PRODUCER_COUNT, &reporter), MPMC_ERR_INVALID_ARG, 0);
+    check_result(shm_backend_destroy(nullptr, &reporter), MPMC_OK, 0);
+    check_result(shm_backend_worker_close(nullptr, &reporter), MPMC_OK, 0);
+    check_result(shm_backend_destroy(nullptr, nullptr), MPMC_OK, 0);
+    check_result(shm_backend_worker_close(nullptr, nullptr), MPMC_OK, 0);
+    check_result(shm_backend_create(nullptr, PRODUCER_COUNT, &reporter), MPMC_ERR_INVALID_ARG, 0);
     char sentinel;
     shm_backend_t *backend = (shm_backend_t *)(void *)&sentinel;
     check_result(shm_backend_create(&backend, 0, &reporter), MPMC_ERR_INVALID_ARG, 0);
-    CHECK(backend == NULL);
+    CHECK(backend == nullptr);
     CHECK(allocation_calls == 0 && log.count == 0);
     CHECK(sem_create_calls == 0 && sem_remove_calls == 0 && detach_calls == 0);
 }
@@ -538,11 +538,11 @@ static void test_success(void) {
     for (size_t i = 0; i < PRODUCER_COUNT; ++i) {
         memset(segments[i].data, 0xA5, sizeof segments[i].data);
     }
-    error_log_t log = {0};
+    error_log_t log = {};
     const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
-    shm_backend_t *backend = NULL;
+    shm_backend_t *backend = nullptr;
     check_result(shm_backend_create(&backend, PRODUCER_COUNT, &reporter), MPMC_OK, 0);
-    CHECK(backend != NULL);
+    CHECK(backend != nullptr);
     CHECK(create_calls == PRODUCER_COUNT && attach_calls == PRODUCER_COUNT);
     CHECK(sem_create_calls == PRODUCER_COUNT && sem_set_calls == 3 * PRODUCER_COUNT);
     for (size_t i = 0; i < PRODUCER_COUNT; ++i) {
@@ -573,13 +573,13 @@ static void test_success(void) {
 static void test_allocation_failures(void) {
     for (unsigned position = 1; position <= 2; ++position) {
         reset_case();
-        error_log_t log = {0};
+        error_log_t log = {};
         const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
         fail_allocation = position;
         char sentinel;
         shm_backend_t *backend = (shm_backend_t *)(void *)&sentinel;
         check_result(shm_backend_create(&backend, PRODUCER_COUNT, &reporter), MPMC_ERR_SYS, ENOMEM);
-        CHECK(backend == NULL && live_allocations == 0);
+        CHECK(backend == nullptr && live_allocations == 0);
         CHECK(allocation_calls == position && free_calls == position - 1);
         CHECK(create_calls == 0 && detach_calls == 0 && remove_calls == 0);
         CHECK(log.count == 0);
@@ -593,20 +593,20 @@ static void test_rollback_at_each_position(void) {
     for (unsigned operation = 0; operation < 2; ++operation) {
         for (unsigned position = 1; position <= PRODUCER_COUNT; ++position) {
             reset_case();
-            error_log_t log = {0};
+            error_log_t log = {};
             const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
             if (operation == 0) {
                 fail_create = position;
             } else {
                 fail_attach = position;
             }
-            shm_backend_t *backend = NULL;
+            shm_backend_t *backend = nullptr;
             check_result(
                 shm_backend_create(&backend, PRODUCER_COUNT, &reporter),
                 MPMC_ERR_SYS,
                 operation == 0 ? ENOSPC : EACCES
             );
-            CHECK(backend == NULL && live_allocations == 0);
+            CHECK(backend == nullptr && live_allocations == 0);
             CHECK(create_calls == position);
             CHECK(attach_calls == position - (operation == 0 ? 1 : 0));
             CHECK(detach_calls == position - 1);
@@ -630,15 +630,15 @@ static void test_semaphore_initialization_failures(void) {
                 fail_sem_create = position;
             else
                 fail_sem_set = (position - 1) * SHM_SEM_COUNT + stage;
-            error_log_t log = {0};
+            error_log_t log = {};
             const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
-            shm_backend_t *backend = NULL;
+            shm_backend_t *backend = nullptr;
             check_result(
                 shm_backend_create(&backend, PRODUCER_COUNT, &reporter),
                 stage == 0 ? MPMC_ERR_SYS : MPMC_ERR_INVALID_ARG,
                 stage == 0 ? ENOSPC : ERANGE
             );
-            CHECK(backend == NULL && live_allocations == 0);
+            CHECK(backend == nullptr && live_allocations == 0);
             CHECK(create_calls == position && attach_calls == position);
             CHECK(detach_calls == position && remove_calls == position);
             CHECK(sem_remove_calls == position - (stage == 0 ? 1 : 0));
@@ -655,7 +655,7 @@ static void test_semaphore_initialization_failures(void) {
 static void test_semaphore_cleanup_errors(void) {
     reset_case();
     shm_backend_t *backend = new_backend();
-    error_log_t log = {0};
+    error_log_t log = {};
     const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
     sem_remove_errors[0] = (mpmc_result_t){.status = MPMC_ERR_SHUTDOWN, .system_errno = EIDRM};
     remove_errors[0] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EPERM};
@@ -671,12 +671,12 @@ static void test_semaphore_cleanup_errors(void) {
     reset_case();
     fail_sem_set = 4;
     sem_remove_errors[0] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EACCES};
-    log = (error_log_t){0};
-    backend = NULL;
+    log = (error_log_t){};
+    backend = nullptr;
     check_result(
         shm_backend_create(&backend, PRODUCER_COUNT, &reporter), MPMC_ERR_INVALID_ARG, ERANGE
     );
-    CHECK(backend == NULL && live_allocations == 0 && log.count == 1);
+    CHECK(backend == nullptr && live_allocations == 0 && log.count == 1);
     CHECK(sem_remove_calls == 2 && remove_calls == 2);
     check_error(&log, 0, SHM_CLEANUP_SEM_REMOVE, 1, sem_remove_errors[0]);
 }
@@ -687,7 +687,7 @@ static void test_semaphore_cleanup_errors(void) {
 static void test_multiple_destroy_errors(void) {
     reset_case();
     shm_backend_t *backend = new_backend();
-    error_log_t log = {0};
+    error_log_t log = {};
     const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
     detach_errors[0] = (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG, .system_errno = EINVAL};
     remove_errors[1] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EPERM};
@@ -707,7 +707,7 @@ static void test_multiple_destroy_errors(void) {
 static void test_removed_resource_result(void) {
     reset_case();
     shm_backend_t *backend = new_backend();
-    error_log_t log = {0};
+    error_log_t log = {};
     const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
     remove_errors[0] = (mpmc_result_t){.status = MPMC_ERR_SHUTDOWN, .system_errno = EIDRM};
 
@@ -724,7 +724,7 @@ static void test_worker_close(void) {
     for (unsigned inject_errors = 0; inject_errors < 2; ++inject_errors) {
         reset_case();
         shm_backend_t *backend = new_backend();
-        error_log_t log = {0};
+        error_log_t log = {};
         const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
         if (inject_errors != 0) {
             detach_errors[0] =
@@ -757,7 +757,7 @@ static void test_worker_close(void) {
 static void test_rollback_diagnostics_preserve_original_error(void) {
     for (unsigned operation = 0; operation < 2; ++operation) {
         reset_case();
-        error_log_t log = {0};
+        error_log_t log = {};
         const shm_cleanup_reporter_t reporter = {.on_error = collect_error, .user_data = &log};
         if (operation == 0) {
             fail_create = PRODUCER_COUNT;
@@ -767,16 +767,16 @@ static void test_rollback_diagnostics_preserve_original_error(void) {
         detach_errors[0] = (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG, .system_errno = EINVAL};
         remove_errors[1] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EPERM};
         remove_errors[2] = (mpmc_result_t){.status = MPMC_ERR_SHUTDOWN, .system_errno = EIDRM};
-        shm_backend_t *backend = NULL;
+        shm_backend_t *backend = nullptr;
         check_result(
             shm_backend_create(&backend, PRODUCER_COUNT, &reporter),
             MPMC_ERR_SYS,
             operation == 0 ? ENOSPC : EACCES
         );
-        CHECK(backend == NULL && live_allocations == 0);
+        CHECK(backend == nullptr && live_allocations == 0);
         CHECK(detach_calls == PRODUCER_COUNT - 1);
         CHECK(remove_calls == PRODUCER_COUNT - (operation == 0 ? 1 : 0));
-        CHECK(log.count == (operation == 0 ? 2u : 3u));
+        CHECK(log.count == (operation == 0 ? 2 : 3));
         CHECK(allocation_calls == 2 && free_calls == 2);
         check_error(&log, 0, SHM_CLEANUP_DETACH, 1, detach_errors[0]);
         check_error(&log, 1, SHM_CLEANUP_REMOVE, 2, remove_errors[1]);
@@ -793,12 +793,12 @@ static void test_optional_reporter(void) {
     for (unsigned use_reporter = 0; use_reporter < 2; ++use_reporter) {
         reset_case();
         shm_backend_t *backend = new_backend();
-        error_log_t log = {0};
-        const shm_cleanup_reporter_t reporter = {.on_error = NULL, .user_data = &log};
+        error_log_t log = {};
+        const shm_cleanup_reporter_t reporter = {.on_error = nullptr, .user_data = &log};
         detach_errors[0] = (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG, .system_errno = EINVAL};
         remove_errors[1] = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EPERM};
         check_result(
-            shm_backend_destroy(backend, use_reporter != 0 ? &reporter : NULL),
+            shm_backend_destroy(backend, use_reporter != 0 ? &reporter : nullptr),
             MPMC_ERR_INVALID_ARG,
             EINVAL
         );

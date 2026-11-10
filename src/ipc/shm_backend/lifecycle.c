@@ -48,11 +48,11 @@ mpmc_result_t shm_backend_create(
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (out == NULL)
+    if (out == nullptr)
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
-    *out = NULL;
+    *out = nullptr;
 
     if (producer_count == 0)
         return mpmc_diagnostic_end(
@@ -61,7 +61,7 @@ mpmc_result_t shm_backend_create(
 
     shm_backend_t *backend = malloc(sizeof(*backend));
 
-    if (backend == NULL) {
+    if (backend == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope,
             (mpmc_result_t){
@@ -74,13 +74,13 @@ mpmc_result_t shm_backend_create(
     *backend = (shm_backend_t){
         .producer_count = producer_count,
         .ack_control_shmid = -1,
-        .ack_control = NULL,
+        .ack_control = nullptr,
         .ack_semid = -1,
     };
 
     backend->segments = calloc(producer_count, sizeof(*backend->segments));
 
-    if (backend->segments == NULL) {
+    if (backend->segments == nullptr) {
         int saved_errno = errno;
         free(backend);
 
@@ -102,7 +102,7 @@ mpmc_result_t shm_backend_create(
         *segment = (shm_segment_t){
             .shmid = -1,
             .semid = -1,
-            .ring = NULL,
+            .ring = nullptr,
         };
 
         result = sysv_shm_create(MPMC_SHM_SEGMENT_BYTES, &segment->shmid);
@@ -156,7 +156,7 @@ mpmc_result_t shm_backend_worker_close(
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
 
-    if (backend == NULL)
+    if (backend == nullptr)
         return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 
     return mpmc_diagnostic_end(
@@ -173,7 +173,7 @@ mpmc_result_t shm_backend_destroy(shm_backend_t *backend, const shm_cleanup_repo
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
 
-    if (backend == NULL)
+    if (backend == nullptr)
         return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 
     return mpmc_diagnostic_end(
@@ -211,7 +211,7 @@ static void record_cleanup_error(
         *first = current;
     }
 
-    if (reporter != NULL && reporter->on_error != NULL) {
+    if (reporter != nullptr && reporter->on_error != nullptr) {
         const shm_cleanup_error_t error = {
             .operation = operation,
             .producer_id = producer_id,
@@ -271,11 +271,11 @@ static mpmc_result_t shm_backend_cleanup(
         result = ack_result;
     }
 
-    if (backend->segments != NULL) {
+    if (backend->segments != nullptr) {
         for (size_t i = 0; i < segment_count; i++) {
             shm_segment_t *segment = &backend->segments[i];
 
-            if (segment->ring != NULL) {
+            if (segment->ring != nullptr) {
                 uint64_t before = mpmc_diagnostic_count();
                 mpmc_result_t current = sysv_shm_detach(segment->ring);
                 mpmc_diagnostic_observe("sysv_shm_detach", current, before);
