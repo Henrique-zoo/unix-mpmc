@@ -1,7 +1,7 @@
 /**
  * @file job_outcome.h
  * @brief Apresentação contextual do resultado de um trabalho (produz/consome).
- * @ingroup app
+ * @ingroup application
  *
  * @details
  * Cabeçalho interno de src/app/, sem equivalente em include/. Reúne o tipo que
@@ -12,8 +12,8 @@
  * incompleto como conclusão bem-sucedida.
  *
  * O módulo não imprime nada e não conhece o REPL: devolve texto em buffer do
- * chamador. A propagação dos resultados reais dos workers até aqui pertence às
- * issues #22 e #25; por ora os eventos são controlados pelos testes.
+ * chamador. Workers reais publicam resultados e diagnósticos pelos pipes
+ * drenados pelo supervisor; as fixtures também podem fornecer eventos controlados.
  */
 #ifndef MPMC_APP_JOB_OUTCOME_H
 #define MPMC_APP_JOB_OUTCOME_H
@@ -53,7 +53,7 @@ typedef struct {
 
 /**
  * @brief Indica se o evento representa conclusão bem-sucedida.
- * @param outcome Evento a avaliar; NULL resulta em false.
+ * @param outcome Evento a avaliar; nullptr resulta em false.
  * @return true somente para JOB_OUTCOME_COMPLETED com `effective == requested`.
  * Parcial, cancelado, erro e falha de criação nunca são sucesso.
  */
@@ -62,10 +62,10 @@ bool job_outcome_is_success(const job_outcome_t *outcome);
 /**
  * @brief Formata o diagnóstico de um evento, sem prefixo `mpmc: ` nem newline.
  * @param outcome Evento a apresentar.
- * @param[out] buffer Recebe o texto terminado em NUL; pode ser NULL se `capacity` for 0.
+ * @param[out] buffer Recebe o texto terminado em NUL; pode ser nullptr se `capacity` for 0.
  * @param capacity Tamanho de `buffer` em bytes.
  * @return Comprimento que o texto completo teria, como snprintf(); -1 se `outcome`
- * for NULL, se `buffer` for NULL com `capacity` maior que zero ou se o `kind` for
+ * for nullptr, se `buffer` for nullptr com `capacity` maior que zero ou se o `kind` for
  * desconhecido. Com `capacity` insuficiente, o texto é truncado e continua
  * terminado em NUL.
  * @details

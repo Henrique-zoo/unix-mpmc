@@ -57,8 +57,8 @@ Um `EIDRM` de `shmctl(IPC_RMID)` ou `semctl(IPC_RMID)` aparece como
 `MPMC_ERR_SHUTDOWN`, com a causa original.
 O cleanup não converte essas categorias novamente para `MPMC_ERR_SYS`.
 
-Operações bem-sucedidas não geram chamadas da callback. Um `reporter == NULL` ou
-`reporter->on_error == NULL` desabilita os diagnósticos individuais, mantendo o
+Operações bem-sucedidas não geram chamadas da callback. Um `reporter == nullptr` ou
+`reporter->on_error == nullptr` desabilita os diagnósticos individuais, mantendo o
 resultado de retorno. Sem observador comum instalado, erros secundários do rollback não são guardados.
 
 ## Duração dos dados e propriedade
@@ -113,18 +113,18 @@ static void collect_cleanup_error(const shm_cleanup_error_t *error, void *user_d
 }
 
 int main(void) {
-    cleanup_log_t log = {0};
+    cleanup_log_t log = {};
     const shm_cleanup_reporter_t reporter = {
         .on_error = collect_cleanup_error,
         .user_data = &log,
     };
-    shm_backend_t *backend = NULL;
+    shm_backend_t *backend = nullptr;
     mpmc_result_t result = shm_backend_create(&backend, 2, &reporter);
 
     if (result.status == MPMC_OK) {
         /* Usar o backend antes de encerrar. */
         result = shm_backend_destroy(backend, &reporter);
-        backend = NULL;
+        backend = nullptr;
     }
 
     /* O erro principal é independente dos diagnósticos de cleanup. */
