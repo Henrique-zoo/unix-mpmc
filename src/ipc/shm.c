@@ -23,7 +23,7 @@ mpmc_result_t sysv_shm_create(size_t size, int *out_shmid) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
 
-    if (out_shmid == NULL)
+    if (out_shmid == nullptr)
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
@@ -45,11 +45,11 @@ mpmc_result_t sysv_shm_attach(int shmid, void **out_addr) {
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
     diagnostic_scope.resource_id = shmid;
 
-    if (out_addr == NULL)
+    if (out_addr == nullptr)
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
-    void *address = shmat(shmid, NULL, 0);
+    void *address = shmat(shmid, nullptr, 0);
 
     if (address == (void *)-1)
         return mpmc_diagnostic_end(&diagnostic_scope, shm_error_result(errno));
@@ -82,7 +82,7 @@ mpmc_result_t sysv_shm_remove(int shmid) {
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
     diagnostic_scope.resource_id = shmid;
 
-    if (shmctl(shmid, IPC_RMID, NULL) == -1)
+    if (shmctl(shmid, IPC_RMID, nullptr) == -1)
         return mpmc_diagnostic_end(&diagnostic_scope, shm_error_result(errno));
 
     return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});

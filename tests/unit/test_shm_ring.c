@@ -68,7 +68,7 @@ int main(void) {
 /** @brief Confere estado vazio, alinhamento e ocupação máxima do segmento. */
 static void test_initialization(void) {
     shm_ring_t *ring = new_ring();
-    if (ring == NULL) return;
+    if (ring == nullptr) return;
 
     check_state(ring, 0, 0);
     CHECK((uintptr_t)ring % alignof(shm_ring_t) == 0);
@@ -83,7 +83,7 @@ static void test_initialization(void) {
 /** @brief Preenche todas as posições, esvazia e reutiliza o buffer sem perder mensagens. */
 static void test_full_and_empty(void) {
     shm_ring_t *ring = new_ring();
-    if (ring == NULL) return;
+    if (ring == nullptr) return;
 
     for (uint32_t sequence = 1; sequence <= EXPECTED_CAPACITY; ++sequence) {
         shm_ring_push(ring, make_message(sequence));
@@ -108,7 +108,7 @@ static void test_full_and_empty(void) {
 /** @brief Confere FIFO quando a escrita volta ao início com mensagens ainda pendentes. */
 static void test_wrap_with_pending_messages(void) {
     shm_ring_t *ring = new_ring();
-    if (ring == NULL) return;
+    if (ring == nullptr) return;
 
     const uint32_t removed = 17;
     for (uint32_t sequence = 1; sequence <= EXPECTED_CAPACITY; ++sequence) {
@@ -141,7 +141,7 @@ static void test_wrap_with_pending_messages(void) {
  */
 static void test_many_wraps(void) {
     shm_ring_t *ring = new_ring();
-    if (ring == NULL) return;
+    if (ring == nullptr) return;
 
     uint32_t produced = 0;
     uint32_t consumed = 0;
@@ -166,7 +166,7 @@ static void test_many_wraps(void) {
 static void test_independent_buffers(void) {
     shm_ring_t *first = new_ring();
     shm_ring_t *second = new_ring();
-    if (first == NULL || second == NULL) {
+    if (first == nullptr || second == nullptr) {
         free_ring(first);
         free_ring(second);
         return;
@@ -192,8 +192,8 @@ static void test_independent_buffers(void) {
  */
 static shm_ring_t *new_ring(void) {
     unsigned char *memory = malloc(GUARD_BYTES + MPMC_SHM_SEGMENT_BYTES + GUARD_BYTES);
-    CHECK(memory != NULL);
-    if (memory == NULL) return NULL;
+    CHECK(memory != nullptr);
+    if (memory == nullptr) return nullptr;
 
     memset(memory, GUARD_PATTERN, GUARD_BYTES + MPMC_SHM_SEGMENT_BYTES + GUARD_BYTES);
     shm_ring_t *ring = (void *)(memory + GUARD_BYTES);
@@ -201,7 +201,7 @@ static shm_ring_t *new_ring(void) {
     CHECK(ring->capacity == EXPECTED_CAPACITY);
     if (ring->capacity != EXPECTED_CAPACITY) {
         free(memory);
-        return NULL;
+        return nullptr;
     }
     return ring;
 }
@@ -211,7 +211,7 @@ static shm_ring_t *new_ring(void) {
  * @param ring Buffer ainda pertencente ao teste; NULL é aceito.
  */
 static void free_ring(shm_ring_t *ring) {
-    if (ring == NULL) return;
+    if (ring == nullptr) return;
     check_guards(ring);
     free((unsigned char *)ring - GUARD_BYTES);
 }
@@ -223,12 +223,12 @@ static void free_ring(shm_ring_t *ring) {
  */
 static message_t make_message(uint32_t sequence) {
     return (message_t){
-        .sender_pid = (pid_t)(1000U + sequence % 97U),
+        .sender_pid = (pid_t)(1000 + sequence % 97),
         .sequence = sequence,
         .sent_at =
             {
-                .tv_sec = (time_t)(1700000000U + sequence),
-                .tv_nsec = (long)(sequence * 1021U % 1000000000U),
+                .tv_sec = (time_t)(1700000000 + sequence),
+                .tv_nsec = (long)(sequence * 1021 % 1000000000),
             },
         .operation_id = UINT64_C(0x100000000) + sequence,
     };

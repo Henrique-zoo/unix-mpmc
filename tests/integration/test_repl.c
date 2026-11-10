@@ -67,16 +67,16 @@ static long wait_for(int master, size_t from, const char *needle) {
 
     for (;;) {
         const char *found = strstr(output + from, needle);
-        if (found != NULL) {
+        if (found != nullptr) {
             return (long)(found - output);
         }
         long remaining = deadline - now_ms();
-        if (remaining <= 0 || output_length + 1u >= sizeof output) {
+        if (remaining <= 0 || output_length + 1 >= sizeof output) {
             return -1;
         }
 
         struct pollfd fd = {.fd = master, .events = POLLIN, .revents = 0};
-        int ready = poll(&fd, 1u, (int)remaining);
+        int ready = poll(&fd, 1, (int)remaining);
         if (ready == -1 && errno == EINTR) {
             continue;
         }
@@ -84,10 +84,10 @@ static long wait_for(int master, size_t from, const char *needle) {
             return -1;
         }
 
-        ssize_t bytes = read(master, output + output_length, sizeof output - output_length - 1u);
+        ssize_t bytes = read(master, output + output_length, sizeof output - output_length - 1);
         if (bytes <= 0) {
             /* No Linux, ler do mestre depois que o filho fecha o escravo retorna EIO. */
-            return strstr(output + from, needle) != NULL
+            return strstr(output + from, needle) != nullptr
                 ? (long)(strstr(output + from, needle) - output)
                 : -1;
         }
@@ -120,7 +120,7 @@ static void send_text(int master, const char *text) {
 static void fail(pid_t child, const char *message) {
     fprintf(stderr, "FALHA: %s\n--- saída ---\n%s\n", message, output);
     kill(child, SIGKILL);
-    waitpid(child, NULL, 0);
+    waitpid(child, nullptr, 0);
     exit(EXIT_FAILURE);
 }
 
@@ -148,7 +148,7 @@ static void run_child(const char *binary, const char *slave_path) {
     if (slave > STDERR_FILENO) {
         close(slave);
     }
-    execl(binary, binary, "2", "1", (char *)NULL);
+    execl(binary, binary, "2", "1", (char *)nullptr);
     _exit(127);
 }
 
@@ -172,7 +172,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
     const char *slave_path = ptsname(master);
-    if (slave_path == NULL) {
+    if (slave_path == nullptr) {
         perror("ptsname");
         return EXIT_FAILURE;
     }
@@ -187,12 +187,12 @@ int main(int argc, char *argv[]) {
         run_child(binary, slave_path);
     }
 
-    if (wait_for(master, 0u, ">> ") < 0) {
+    if (wait_for(master, 0, ">> ") < 0) {
         fail(child, "prompt inicial não apareceu");
     }
 
     send_text(master, "produz 1 1 2\n");
-    long notice = wait_for(master, 0u, "terminou");
+    long notice = wait_for(master, 0, "terminou");
     if (notice < 0) {
         fail(child, "aviso de término do filho não apareceu");
     }
@@ -202,13 +202,13 @@ int main(int argc, char *argv[]) {
     if (line_end < 0) {
         fail(child, "o aviso de término não foi concluído");
     }
-    size_t after_notice = (size_t)line_end + 1u;
+    size_t after_notice = (size_t)line_end + 1;
     if (wait_for(master, after_notice, ">> ") < 0) {
         fail(child, "o prompt não foi redesenhado após o aviso assíncrono");
     }
 
     send_text(master, "shutdown\n");
-    if (wait_for(master, 0u, "Tempo total") < 0) {
+    if (wait_for(master, 0, "Tempo total") < 0) {
         fail(child, "relatório final não apareceu após shutdown");
     }
 
@@ -216,7 +216,7 @@ int main(int argc, char *argv[]) {
     const long deadline = now_ms() + STEP_TIMEOUT_MS;
     pid_t reaped;
     while ((reaped = waitpid(child, &status, WNOHANG)) == 0 && now_ms() < deadline) {
-        nanosleep(&(struct timespec){.tv_nsec = 10L * 1000L * 1000L}, NULL);
+        nanosleep(&(struct timespec){.tv_nsec = 10L * 1000L * 1000L}, nullptr);
     }
     if (reaped != child) {
         fail(child, "mpmc não terminou após shutdown");

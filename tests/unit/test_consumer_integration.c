@@ -50,8 +50,8 @@ static void on_sigusr1(int signal_number) {
 }
 
 static bool send_messages(ipc_context_t *context, size_t index, unsigned count, uint64_t op) {
-    for (unsigned n = 0u; n < count; ++n) {
-        message_t message = {.sender_pid = getpid(), .sequence = n + 1u, .operation_id = op};
+    for (unsigned n = 0; n < count; ++n) {
+        message_t message = {.sender_pid = getpid(), .sequence = n + 1, .operation_id = op};
         if (clock_gettime(CLOCK_REALTIME, &message.sent_at) != 0
             || ipc_send(context, index, &message).status != MPMC_OK) {
             return false;
@@ -77,67 +77,67 @@ static consumer_result_t run_consumer(
     mpmc_result_t *result
 ) {
     consumer_job_t job = {
-        .producer_id = index, .message_count = count, .ack_mode = mode, .operation_id = 900u};
-    consumer_result_t out = {.consumed_count = 99u};
+        .producer_id = index, .message_count = count, .ack_mode = mode, .operation_id = 900};
+    consumer_result_t out = {.consumed_count = 99};
     *result = consumer_run(context, &job, &out);
     return out;
 }
 
 static void test_zero_available(ipc_context_t *context) {
     mpmc_result_t result;
-    consumer_result_t out = run_consumer(context, 1u, 3u, CONSUMER_NONBLOCKING, &result);
+    consumer_result_t out = run_consumer(context, 1, 3, CONSUMER_NONBLOCKING, &result);
     CHECK(
         result.status == MPMC_ERR_WOULD_BLOCK && out.error.status == result.status,
         "empty structure must report WOULD_BLOCK"
     );
-    CHECK(out.consumed_count == 0u, "zero available must consume zero");
+    CHECK(out.consumed_count == 0, "zero available must consume zero");
     CHECK(
         result.system_errno == (current_mode == 1 ? EAGAIN : ENOMSG),
         "backend errno must be preserved"
     );
-    CHECK(backend_total(context, 1u) == 0u, "backend total must stay zero");
+    CHECK(backend_total(context, 1) == 0, "backend total must stay zero");
 }
 
 static void test_partial_and_no_reinsert(ipc_context_t *context) {
     mpmc_result_t result;
-    CHECK(send_messages(context, 1u, 2u, 10u), "setup send");
-    consumer_result_t out = run_consumer(context, 1u, 5u, CONSUMER_NONBLOCKING, &result);
+    CHECK(send_messages(context, 1, 2, 10), "setup send");
+    consumer_result_t out = run_consumer(context, 1, 5, CONSUMER_NONBLOCKING, &result);
     CHECK(
-        result.status == MPMC_ERR_WOULD_BLOCK && out.consumed_count == 2u,
+        result.status == MPMC_ERR_WOULD_BLOCK && out.consumed_count == 2,
         "partial result must report the 2 messages actually consumed"
     );
-    CHECK(backend_total(context, 1u) == 2u, "backend total must equal consumed_count");
-    out = run_consumer(context, 1u, 1u, CONSUMER_NONBLOCKING, &result);
+    CHECK(backend_total(context, 1) == 2, "backend total must equal consumed_count");
+    out = run_consumer(context, 1, 1, CONSUMER_NONBLOCKING, &result);
     CHECK(
-        result.status == MPMC_ERR_WOULD_BLOCK && out.consumed_count == 0u,
+        result.status == MPMC_ERR_WOULD_BLOCK && out.consumed_count == 0,
         "consumed messages must not be reinserted"
     );
 }
 
 static void test_complete_leaves_remainder(ipc_context_t *context) {
     mpmc_result_t result;
-    CHECK(send_messages(context, 2u, 6u, 11u), "setup send");
-    consumer_result_t out = run_consumer(context, 2u, 4u, CONSUMER_BLOCKING, &result);
-    CHECK(result.status == MPMC_OK && out.consumed_count == 4u, "blocking n completo");
-    out = run_consumer(context, 2u, 2u, CONSUMER_NONBLOCKING, &result);
+    CHECK(send_messages(context, 2, 6, 11), "setup send");
+    consumer_result_t out = run_consumer(context, 2, 4, CONSUMER_BLOCKING, &result);
+    CHECK(result.status == MPMC_OK && out.consumed_count == 4, "blocking n completo");
+    out = run_consumer(context, 2, 2, CONSUMER_NONBLOCKING, &result);
     CHECK(
-        result.status == MPMC_OK && out.consumed_count == 2u,
+        result.status == MPMC_OK && out.consumed_count == 2,
         "remainder must still be available after a complete consume"
     );
-    CHECK(backend_total(context, 2u) == 6u, "backend total after complete consumes");
+    CHECK(backend_total(context, 2) == 6, "backend total after complete consumes");
 }
 
 static void test_blocking_interrupted(ipc_context_t *context) {
     mpmc_result_t result;
     message_t message;
-    CHECK(send_messages(context, 1u, 5u, 12u), "setup send");
-    run_consumer(context, 1u, 2u, CONSUMER_BLOCKING, &result);
+    CHECK(send_messages(context, 1, 5, 12), "setup send");
+    run_consumer(context, 1, 2, CONSUMER_BLOCKING, &result);
     CHECK(
-        ipc_receive(context, 1u, &message, false).status == MPMC_OK && message.sequence == 3u,
+        ipc_receive(context, 1, &message, false).status == MPMC_OK && message.sequence == 3,
         "messages are consumed once and in order (next is #3)"
     );
-    const uint64_t before = backend_total(context, 1u); /* 2 + 2 + 1 */
-    CHECK(before == 5u, "total before the interrupted consume");
+    const uint64_t before = backend_total(context, 1); /* 2 + 2 + 1 */
+    CHECK(before == 5, "total before the interrupted consume");
 
     int fds[2];
     if (pipe(fds) != 0) {
@@ -155,21 +155,21 @@ static void test_blocking_interrupted(ipc_context_t *context) {
     if (pid == 0) {
         struct sigaction action = {.sa_handler = on_sigusr1};
         sigemptyset(&action.sa_mask);
-        (void)sigaction(SIGUSR1, &action, NULL);
-        (void)sigprocmask(SIG_SETMASK, &old_set, NULL);
+        (void)sigaction(SIGUSR1, &action, nullptr);
+        (void)sigprocmask(SIG_SETMASK, &old_set, nullptr);
         mpmc_result_t child_result;
         /* 2 mensagens restantes; pede 4 e bloqueia esperando as demais. */
-        consumer_result_t out = run_consumer(context, 1u, 4u, CONSUMER_BLOCKING, &child_result);
+        consumer_result_t out = run_consumer(context, 1, 4, CONSUMER_BLOCKING, &child_result);
         child_report_t report = {
             child_result.status, child_result.system_errno, out.consumed_count};
         ssize_t written = write(fds[1], &report, sizeof report);
         ipc_worker_close(context); /* liberação local do filho */
         _exit(written == (ssize_t)sizeof report ? 0 : 1);
     }
-    (void)sigprocmask(SIG_SETMASK, &old_set, NULL);
+    (void)sigprocmask(SIG_SETMASK, &old_set, nullptr);
     CHECK(pid > 0, "fork");
     /* O sinal pode chegar antes do bloqueio; reenviar até o filho responder. */
-    child_report_t report = {0};
+    child_report_t report = {};
     bool got_report = false;
     for (int attempt = 0; attempt < 200 && !got_report; ++attempt) {
         (void)kill(pid, SIGUSR1);
@@ -183,29 +183,29 @@ static void test_blocking_interrupted(ipc_context_t *context) {
     if (!got_report) {
         (void)kill(pid, SIGKILL);
     }
-    (void)waitpid(pid, NULL, 0);
+    (void)waitpid(pid, nullptr, 0);
     close(fds[0]);
     close(fds[1]);
     CHECK(
         report.status == MPMC_ERR_INTERRUPTED && report.system_errno == EINTR,
         "interrupted blocking consume must return INTERRUPTED/EINTR"
     );
-    CHECK(report.consumed_count == 2u, "interruption keeps the partial count");
-    CHECK(backend_total(context, 1u) == before + 2u, "backend total matches after interruption");
+    CHECK(report.consumed_count == 2, "interruption keeps the partial count");
+    CHECK(backend_total(context, 1) == before + 2, "backend total matches after interruption");
 }
 
 static void test_worker_close_keeps_supervisor(ipc_context_t *context) {
     message_t message;
-    CHECK(send_messages(context, 2u, 1u, 13u), "setup send");
+    CHECK(send_messages(context, 2, 1, 13), "setup send");
     pid_t pid = fork();
     if (pid == 0) {
         ipc_worker_close(context);
         _exit(0);
     }
     CHECK(pid > 0, "fork");
-    (void)waitpid(pid, NULL, 0);
+    (void)waitpid(pid, nullptr, 0);
     CHECK(
-        ipc_receive(context, 2u, &message, false).status == MPMC_OK,
+        ipc_receive(context, 2, &message, false).status == MPMC_OK,
         "supervisor must still use the resources after a worker's "
         "ipc_worker_close()"
     );
@@ -213,15 +213,15 @@ static void test_worker_close_keeps_supervisor(ipc_context_t *context) {
 
 static void test_backend_acks(ipc_context_t *context) {
     mpmc_result_t result;
-    CHECK(ipc_ack_begin(context, 50u, 3u).status == MPMC_OK, "ack_begin");
-    CHECK(send_messages(context, 1u, 3u, 50u), "setup send");
-    consumer_result_t out = run_consumer(context, 1u, 3u, CONSUMER_BLOCKING, &result);
-    CHECK(result.status == MPMC_OK && out.consumed_count == 3u, "consume the acked operation");
+    CHECK(ipc_ack_begin(context, 50, 3).status == MPMC_OK, "ack_begin");
+    CHECK(send_messages(context, 1, 3, 50), "setup send");
+    consumer_result_t out = run_consumer(context, 1, 3, CONSUMER_BLOCKING, &result);
+    CHECK(result.status == MPMC_OK && out.consumed_count == 3, "consume the acked operation");
     CHECK(
-        ipc_ack_wait(context, 50u).status == MPMC_OK,
+        ipc_ack_wait(context, 50).status == MPMC_OK,
         "ACKs must arrive from the backend; the consumer worker publishes none"
     );
-    (void)ipc_ack_end(context, 50u);
+    (void)ipc_ack_end(context, 50);
 }
 
 /* Lote pequeno: cabe em qualquer msg_qbytes razoável sem exigir um consumidor
@@ -244,7 +244,7 @@ static long elapsed_ms(const struct timespec *start) {
  * fechar).
  */
 static void test_nonblocking_with_full_event_queue(ipc_context_t *context) {
-    const uint64_t before = backend_total(context, 2u);
+    const uint64_t before = backend_total(context, 2);
     int fds[2];
     if (pipe(fds) != 0) {
         CHECK(false, "pipe");
@@ -253,8 +253,8 @@ static void test_nonblocking_with_full_event_queue(ipc_context_t *context) {
     pid_t pid = fork();
     if (pid == 0) {
         child_report_t report = {.status = MPMC_OK};
-        for (unsigned round = 0u; round < EVENT_BACKLOG_ROUNDS; ++round) {
-            if (!send_messages(context, 2u, EVENT_BACKLOG_BATCH, 20u)) {
+        for (unsigned round = 0; round < EVENT_BACKLOG_ROUNDS; ++round) {
+            if (!send_messages(context, 2, EVENT_BACKLOG_BATCH, 20)) {
                 report.status = -1;
                 break;
             }
@@ -262,7 +262,7 @@ static void test_nonblocking_with_full_event_queue(ipc_context_t *context) {
             (void)clock_gettime(CLOCK_MONOTONIC, &start);
             mpmc_result_t result;
             consumer_result_t out =
-                run_consumer(context, 2u, EVENT_BACKLOG_BATCH, CONSUMER_NONBLOCKING, &result);
+                run_consumer(context, 2, EVENT_BACKLOG_BATCH, CONSUMER_NONBLOCKING, &result);
             report.consumed_count += out.consumed_count;
             if (result.status != MPMC_OK || elapsed_ms(&start) > NONBLOCKING_CALL_LIMIT_MS) {
                 report.status = result.status != MPMC_OK ? (int)result.status : -2;
@@ -295,7 +295,7 @@ static void test_nonblocking_with_full_event_queue(ipc_context_t *context) {
         (void)ipc_poll_events(context); /* o supervisor drena enquanto o filho encerra */
         reaped = waitpid(pid, &wait_status, WNOHANG);
         if (reaped == 0) {
-            (void)poll(NULL, 0, 10);
+            (void)poll(nullptr, 0, 10);
         }
     }
     CHECK(
@@ -305,7 +305,7 @@ static void test_nonblocking_with_full_event_queue(ipc_context_t *context) {
     close(fds[0]);
     close(fds[1]);
     CHECK(
-        backend_total(context, 2u) == before + EVENT_BACKLOG_BATCH * EVENT_BACKLOG_ROUNDS,
+        backend_total(context, 2) == before + EVENT_BACKLOG_BATCH * EVENT_BACKLOG_ROUNDS,
         "no consumption may be lost when Q_evt was full"
     );
 }
@@ -313,8 +313,8 @@ static void test_nonblocking_with_full_event_queue(ipc_context_t *context) {
 int main(void) {
     (void)alarm(WATCHDOG_SECONDS);
     for (current_mode = 1; current_mode <= 2; ++current_mode) {
-        ipc_context_t *context = NULL;
-        if (ipc_init(&context, 2u, (ipc_mode_t)current_mode).status != MPMC_OK) {
+        ipc_context_t *context = nullptr;
+        if (ipc_init(&context, 2, (ipc_mode_t)current_mode).status != MPMC_OK) {
             fprintf(stderr, "consumer integration: ipc_init failed (mode %d)\n", current_mode);
             return 1;
         }

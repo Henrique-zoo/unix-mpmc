@@ -16,7 +16,7 @@
  * @{ */
 
 /** @brief Tamanho obrigatório de cada segmento de memória compartilhada. */
-#define MPMC_SHM_SEGMENT_BYTES 2048U
+static constexpr size_t MPMC_SHM_SEGMENT_BYTES = 2048;
 
 /** @brief Menor quantidade válida de mensagens por comando. */
 #define MPMC_MIN_MESSAGES 1U
@@ -47,7 +47,7 @@ typedef struct {
 } message_t;
 
 static_assert(sizeof(message_t) == 32, "message_t deve ter 32 bytes (docs/protocol.md)");
-static_assert(_Alignof(message_t) == 8, "message_t deve ter alinhamento 8");
+static_assert(alignof(message_t) == 8, "message_t deve ter alinhamento 8");
 static_assert(offsetof(message_t, sender_pid) == 0, "offset de sender_pid");
 static_assert(offsetof(message_t, sequence) == 4, "offset de sequence");
 static_assert(offsetof(message_t, sent_at) == 8, "offset de sent_at");

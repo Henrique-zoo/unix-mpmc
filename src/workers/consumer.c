@@ -15,21 +15,21 @@ mpmc_result_t consumer_run(
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (out == NULL) {
+    if (out == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
     }
 
     *out = (consumer_result_t){.error = {.status = MPMC_ERR_INVALID_ARG}};
-    if (transport == NULL || job == NULL || job->message_count < MPMC_MIN_MESSAGES
+    if (transport == nullptr || job == nullptr || job->message_count < MPMC_MIN_MESSAGES
         || job->message_count > MPMC_MAX_MESSAGES
         || (job->ack_mode != CONSUMER_BLOCKING && job->ack_mode != CONSUMER_NONBLOCKING)) {
         return mpmc_diagnostic_end(&diagnostic_scope, out->error);
     }
 
     size_t producer_count = ipc_producer_count(transport);
-    if (producer_count == 0u || job->producer_id == 0u || job->producer_id > producer_count) {
+    if (producer_count == 0 || job->producer_id == 0 || job->producer_id > producer_count) {
         return mpmc_diagnostic_end(&diagnostic_scope, out->error);
     }
 

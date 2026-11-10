@@ -60,11 +60,11 @@ static double monotonic_seconds(void) {
 
 static void sleep_ms(long milliseconds) {
     struct timespec delay = {.tv_sec = 0, .tv_nsec = milliseconds * 1000000L};
-    nanosleep(&delay, NULL);
+    nanosleep(&delay, nullptr);
 }
 
 static bool send_messages(ipc_context_t *context, size_t index, unsigned count, uint64_t op) {
-    for (unsigned n = 1u; n <= count; ++n) {
+    for (unsigned n = 1; n <= count; ++n) {
         message_t message = {.sender_pid = getpid(), .sequence = n, .operation_id = op};
         if (ipc_send(context, index, &message).status != MPMC_OK) {
             return false;
@@ -100,12 +100,12 @@ static void test_blocking_waits_then_completes(ipc_context_t *context) {
     pid_t pid = fork();
     if (pid == 0) {
         close(fds[0]);
-        (void)alarm(20u);
+        (void)alarm(20);
         consumer_job_t job = {
-            .producer_id = 1u,
-            .message_count = 5u,
+            .producer_id = 1,
+            .message_count = 5,
             .ack_mode = CONSUMER_BLOCKING,
-            .operation_id = 77u,
+            .operation_id = 77,
         };
         consumer_result_t out;
         mpmc_result_t result = consumer_run(context, &job, &out);
@@ -117,14 +117,14 @@ static void test_blocking_waits_then_completes(ipc_context_t *context) {
 
     sleep_ms(WAIT_MS);
     CHECK(still_running(pid), "empty structure: blocking consumer must keep waiting");
-    CHECK(send_messages(context, 1u, 3u, 5u), "send 3 of 5");
+    CHECK(send_messages(context, 1, 3, 5), "send 3 of 5");
     sleep_ms(WAIT_MS);
     CHECK(still_running(pid), "3 of 5 available: must not return a partial result");
-    CHECK(send_messages(context, 1u, 2u, 5u), "send the last 2");
+    CHECK(send_messages(context, 1, 2, 5), "send the last 2");
 
-    report_t report = {.consumed = 999u, .status = -1};
+    report_t report = {.consumed = 999, .status = -1};
     CHECK(read_report(fds[0], &report, 3000), "must complete soon after the 5th item");
-    CHECK(report.consumed == 5u && report.status == MPMC_OK, "5 consumed with MPMC_OK");
+    CHECK(report.consumed == 5 && report.status == MPMC_OK, "5 consumed with MPMC_OK");
     CHECK(exited_ok(pid), "blocking consumer exits cleanly");
     close(fds[0]);
 }
@@ -133,41 +133,41 @@ static void test_blocking_waits_then_completes(ipc_context_t *context) {
  * ------------------------------------------------------------------------ */
 static void test_nonblocking_partial_count(ipc_context_t *context) {
     consumer_job_t job = {
-        .producer_id = 1u,
-        .message_count = 5u,
+        .producer_id = 1,
+        .message_count = 5,
         .ack_mode = CONSUMER_NONBLOCKING,
-        .operation_id = 78u,
+        .operation_id = 78,
     };
     consumer_result_t out;
-    uint64_t before = 0u;
+    uint64_t before = 0;
     (void)ipc_poll_events(context);
-    CHECK(ipc_consumed_count(context, 1u, &before).status == MPMC_OK, "total before");
+    CHECK(ipc_consumed_count(context, 1, &before).status == MPMC_OK, "total before");
 
     double started = monotonic_seconds();
     mpmc_result_t result = consumer_run(context, &job, &out);
     CHECK(monotonic_seconds() - started < PROMPT_SECONDS, "empty: must return immediately");
     CHECK(
-        result.status == MPMC_ERR_WOULD_BLOCK && out.consumed_count == 0u,
+        result.status == MPMC_ERR_WOULD_BLOCK && out.consumed_count == 0,
         "empty: WOULD_BLOCK with zero consumed"
     );
 
-    CHECK(send_messages(context, 1u, 3u, 5u), "send 3");
+    CHECK(send_messages(context, 1, 3, 5), "send 3");
     started = monotonic_seconds();
     result = consumer_run(context, &job, &out);
     CHECK(monotonic_seconds() - started < PROMPT_SECONDS, "partial: must return immediately");
     CHECK(
-        result.status == MPMC_ERR_WOULD_BLOCK && out.consumed_count == 3u,
+        result.status == MPMC_ERR_WOULD_BLOCK && out.consumed_count == 3,
         "3 of 5: WOULD_BLOCK with consumed_count 3"
     );
 
-    uint64_t after = 0u;
+    uint64_t after = 0;
     (void)ipc_poll_events(context);
-    CHECK(ipc_consumed_count(context, 1u, &after).status == MPMC_OK, "total after");
-    CHECK(after == before + 3u, "backend total grows by exactly the partial count");
+    CHECK(ipc_consumed_count(context, 1, &after).status == MPMC_OK, "total after");
+    CHECK(after == before + 3, "backend total grows by exactly the partial count");
 
-    CHECK(send_messages(context, 1u, 5u, 5u), "send 5");
+    CHECK(send_messages(context, 1, 5, 5), "send 5");
     result = consumer_run(context, &job, &out);
-    CHECK(result.status == MPMC_OK && out.consumed_count == 5u, "5 of 5: complete");
+    CHECK(result.status == MPMC_OK && out.consumed_count == 5, "5 of 5: complete");
 }
 
 /* Critério 4 (modo 2)
@@ -175,15 +175,15 @@ static void test_nonblocking_partial_count(ipc_context_t *context) {
 static void test_ack_correlation_with_partial_and_concurrent(ipc_context_t *context) {
     enum { PER = 100, FIRST_OP = 1000 };
     pid_t producers[2];
-    for (unsigned k = 0u; k < 2u; ++k) {
+    for (unsigned k = 0; k < 2; ++k) {
         producers[k] = fork();
         if (producers[k] == 0) {
-            (void)alarm(30u);
+            (void)alarm(30);
             producer_job_t job = {
-                .producer_id = k + 1u,
+                .producer_id = k + 1,
                 .message_count = PER,
                 .ack_mode = PRODUCER_ACK_WAIT,
-                .operation_id = FIRST_OP + k * 1000u,
+                .operation_id = FIRST_OP + k * 1000,
             };
             _exit(producer_run(context, &job).status == MPMC_OK ? 0 : 1);
         }
@@ -192,16 +192,16 @@ static void test_ack_correlation_with_partial_and_concurrent(ipc_context_t *cont
 
     /* Consumo parcial; o operation_id do consumidor coincide com o de OUTRO
      * produtor. */
-    for (size_t index = 1u; index <= 2u; ++index) {
+    for (size_t index = 1; index <= 2; ++index) {
         consumer_job_t job = {
             .producer_id = index,
-            .message_count = 40u,
+            .message_count = 40,
             .ack_mode = CONSUMER_NONBLOCKING,
-            .operation_id = index == 1u ? 2000u : 1000u,
+            .operation_id = index == 1 ? 2000 : 1000,
         };
         consumer_result_t out;
         mpmc_result_t result = consumer_run(context, &job, &out);
-        CHECK(result.status == MPMC_OK && out.consumed_count == 40u, "partial 40 of 100");
+        CHECK(result.status == MPMC_OK && out.consumed_count == 40, "partial 40 of 100");
     }
     sleep_ms(WAIT_MS);
     CHECK(
@@ -210,30 +210,30 @@ static void test_ack_correlation_with_partial_and_concurrent(ipc_context_t *cont
     );
 
     pid_t consumers[4];
-    unsigned spawned = 0u;
-    for (size_t index = 1u; index <= 2u; ++index) {
-        for (unsigned h = 0u; h < 2u; ++h) {
+    unsigned spawned = 0;
+    for (size_t index = 1; index <= 2; ++index) {
+        for (unsigned h = 0; h < 2; ++h) {
             pid_t pid = fork();
             if (pid == 0) {
-                (void)alarm(30u);
+                (void)alarm(30);
                 consumer_job_t job = {
                     .producer_id = index,
-                    .message_count = 30u,
+                    .message_count = 30,
                     .ack_mode = CONSUMER_BLOCKING,
-                    .operation_id = FIRST_OP + h * 1000u,
+                    .operation_id = FIRST_OP + h * 1000,
                 };
                 consumer_result_t out;
                 mpmc_result_t result = consumer_run(context, &job, &out);
-                _exit(result.status == MPMC_OK && out.consumed_count == 30u ? 0 : 1);
+                _exit(result.status == MPMC_OK && out.consumed_count == 30 ? 0 : 1);
             }
             consumers[spawned++] = pid;
         }
     }
-    unsigned consumers_ok = 0u;
-    for (unsigned c = 0u; c < spawned; ++c) {
-        consumers_ok += exited_ok(consumers[c]) ? 1u : 0u;
+    unsigned consumers_ok = 0;
+    for (unsigned c = 0; c < spawned; ++c) {
+        consumers_ok += exited_ok(consumers[c]) ? 1 : 0;
     }
-    CHECK(consumers_ok == 4u, "concurrent blocking consumers complete their shares");
+    CHECK(consumers_ok == 4, "concurrent blocking consumers complete their shares");
     CHECK(
         exited_ok(producers[0]) && exited_ok(producers[1]),
         "each producer receives exactly its own ACKs and finishes"
@@ -251,18 +251,18 @@ static void test_ack_correlation_with_partial_and_concurrent(ipc_context_t *cont
  */
 static void test_nonblocking_with_full_ack_queue(ipc_context_t *context) {
     enum { BATCH = 32, ROUNDS = 96, OPS = 3, ROUNDS_PER_OP = ROUNDS / OPS };
-    for (uint64_t op = 1u; op <= OPS; ++op) {
-        CHECK(ipc_ack_begin(context, 500u + op, BATCH * ROUNDS_PER_OP).status == MPMC_OK, "begin");
+    for (uint64_t op = 1; op <= OPS; ++op) {
+        CHECK(ipc_ack_begin(context, 500 + op, BATCH * ROUNDS_PER_OP).status == MPMC_OK, "begin");
     }
     (void)ipc_poll_events(context);
-    uint64_t before = 0u;
-    CHECK(ipc_consumed_count(context, 1u, &before).status == MPMC_OK, "total before");
+    uint64_t before = 0;
+    CHECK(ipc_consumed_count(context, 1, &before).status == MPMC_OK, "total before");
     pid_t children[ROUNDS];
-    unsigned spawned = 0u;
+    unsigned spawned = 0;
     bool all_prompt = true;
-    for (unsigned round = 0u; round < ROUNDS; ++round) {
-        const uint64_t op = 501u + round / ROUNDS_PER_OP;
-        if (!send_messages(context, 1u, BATCH, op)) {
+    for (unsigned round = 0; round < ROUNDS; ++round) {
+        const uint64_t op = 501 + round / ROUNDS_PER_OP;
+        if (!send_messages(context, 1, BATCH, op)) {
             CHECK(false, "send batch");
             break;
         }
@@ -274,12 +274,12 @@ static void test_nonblocking_with_full_ack_queue(ipc_context_t *context) {
         pid_t pid = fork();
         if (pid == 0) {
             close(fds[0]);
-            (void)alarm(60u);
+            (void)alarm(60);
             consumer_job_t job = {
-                .producer_id = 1u,
+                .producer_id = 1,
                 .message_count = BATCH,
                 .ack_mode = CONSUMER_NONBLOCKING,
-                .operation_id = 900u,
+                .operation_id = 900,
             };
             consumer_result_t out;
             mpmc_result_t result = consumer_run(context, &job, &out);
@@ -291,13 +291,13 @@ static void test_nonblocking_with_full_ack_queue(ipc_context_t *context) {
             _exit(0);
         }
         close(fds[1]);
-        report_t report = {0};
+        report_t report = {};
         const bool answered = read_report(fds[0], &report, 3000);
         close(fds[0]);
         if (!answered) {
             CHECK(false, "non-blocking consumer must return even with Q_ack full");
             kill(pid, SIGKILL);
-            (void)waitpid(pid, NULL, 0);
+            (void)waitpid(pid, nullptr, 0);
             all_prompt = false;
             break;
         }
@@ -308,52 +308,52 @@ static void test_nonblocking_with_full_ack_queue(ipc_context_t *context) {
         children[spawned++] = pid;
     }
     if (!all_prompt) {
-        for (unsigned c = 0u; c < spawned; ++c) {
+        for (unsigned c = 0; c < spawned; ++c) {
             kill(children[c], SIGKILL);
-            (void)waitpid(children[c], NULL, 0);
+            (void)waitpid(children[c], nullptr, 0);
         }
         return;
     }
 
     /* Drenar como produtor dono: todo ACK devido tem de chegar (nenhum perdido).
      */
-    for (uint64_t op = 1u; op <= OPS; ++op) {
+    for (uint64_t op = 1; op <= OPS; ++op) {
         CHECK(
-            ipc_ack_wait(context, 500u + op).status == MPMC_OK,
+            ipc_ack_wait(context, 500 + op).status == MPMC_OK,
             "every ACK, including the deferred ones, must reach the producer"
         );
-        CHECK(ipc_ack_end(context, 500u + op).status == MPMC_OK, "ack_end");
+        CHECK(ipc_ack_end(context, 500 + op).status == MPMC_OK, "ack_end");
     }
     /* No fechamento os filhos também entregam os eventos de consumo acumulados;
      * como supervisor, este processo drena Q_evt enquanto os recolhe. */
-    unsigned closed_ok = 0u;
-    unsigned reaped = 0u;
+    unsigned closed_ok = 0;
+    unsigned reaped = 0;
     const double deadline = monotonic_seconds() + 30.0;
     bool done[ROUNDS] = {false};
     while (reaped < spawned && monotonic_seconds() < deadline) {
         (void)ipc_poll_events(context);
-        for (unsigned c = 0u; c < spawned; ++c) {
+        for (unsigned c = 0; c < spawned; ++c) {
             int status = 0;
             if (!done[c] && waitpid(children[c], &status, WNOHANG) == children[c]) {
                 done[c] = true;
                 ++reaped;
-                closed_ok += WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 1u : 0u;
+                closed_ok += WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 1 : 0;
             }
         }
         sleep_ms(2);
     }
     CHECK(closed_ok == spawned, "consumers finish closing after the ACKs are drained");
     (void)ipc_poll_events(context);
-    uint64_t total = 0u;
-    CHECK(ipc_consumed_count(context, 1u, &total).status == MPMC_OK, "total");
+    uint64_t total = 0;
+    CHECK(ipc_consumed_count(context, 1, &total).status == MPMC_OK, "total");
     CHECK(total == before + (uint64_t)BATCH * ROUNDS, "backend total grows by everything consumed");
 }
 
 int main(void) {
     (void)alarm(WATCHDOG_SECONDS);
     for (current_mode = 1; current_mode <= 2; ++current_mode) {
-        ipc_context_t *context = NULL;
-        if (ipc_init(&context, 2u, (ipc_mode_t)current_mode).status != MPMC_OK) {
+        ipc_context_t *context = nullptr;
+        if (ipc_init(&context, 2, (ipc_mode_t)current_mode).status != MPMC_OK) {
             fprintf(stderr, "consumer acceptance: ipc_init failed (mode %d)\n", current_mode);
             return 1;
         }

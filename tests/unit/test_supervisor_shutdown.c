@@ -204,7 +204,7 @@ int mpmc_shutdown_test_sigaction(
     const struct sigaction *action,
     struct sigaction *previous
 ) {
-    if (fixture.shutdown_active && action != NULL) {
+    if (fixture.shutdown_active && action != nullptr) {
         ++fixture.action_calls;
         if (fixture.action_calls == 1 && fixture.fail_install) {
             fixture.fail_install = false;
@@ -324,15 +324,15 @@ int mpmc_shutdown_test_close(int fd) {
 int mpmc_shutdown_test_poll(struct pollfd *fds, nfds_t count, int timeout) {
     ++fixture.poll_calls;
     CHECK(count == 1 && timeout > 0 && timeout <= 2000);
-    if (fixture.poll_calls == 1u) fixture.first_timeout = timeout;
-    if (fixture.poll_calls == 2u) fixture.second_timeout = timeout;
+    if (fixture.poll_calls == 1) fixture.first_timeout = timeout;
+    if (fixture.poll_calls == 2) fixture.second_timeout = timeout;
     command_t command = {.kind = COMMAND_PRODUCE};
-    CHECK(supervisor_dispatch(fixture.supervisor, &command, NULL).status == MPMC_ERR_SHUTDOWN);
+    CHECK(supervisor_dispatch(fixture.supervisor, &command, nullptr).status == MPMC_ERR_SHUTDOWN);
     switch (fixture.wait_mode) {
         case WAIT_NATIVE:
             return poll(fds, count, timeout);
         case WAIT_INTERRUPT:
-            if (fixture.poll_calls == 1u) {
+            if (fixture.poll_calls == 1) {
                 fixture.elapsed_ns += 1200000000;
                 errno = EINTR;
                 return -1;
@@ -369,7 +369,7 @@ mpmc_result_t mpmc_shutdown_test_ipc_init(
     (void)mode;
     ++fixture.init_calls;
     if (fixture.fail_init) {
-        *out = NULL;
+        *out = nullptr;
         errno = EIO;
         return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EIO};
     }
@@ -437,7 +437,7 @@ mpmc_result_t mpmc_shutdown_test_ipc_consumed_count(
 /** @brief Verifica término cooperativo, restauração de sinais e idempotência. */
 static void test_cooperative(void) {
     supervisor_t *supervisor = prepare(false, 2);
-    struct sigaction action = {0}, previous, restored;
+    struct sigaction action = {}, previous, restored;
     action.sa_handler = previous_child_handler;
     sigemptyset(&action.sa_mask);
     CHECK(sigaction(SIGCHLD, &action, &previous) == 0);
@@ -446,17 +446,17 @@ static void test_cooperative(void) {
     sigaddset(&child_signal, SIGCHLD);
     CHECK(sigprocmask(SIG_BLOCK, &child_signal, &old_mask) == 0);
 
-    CHECK(run_shutdown(supervisor, NULL).status == MPMC_OK);
+    CHECK(run_shutdown(supervisor, nullptr).status == MPMC_OK);
     CHECK(fixture.kill_calls == 0);
     check_reports(supervisor, 2, SIGTERM);
-    CHECK(sigaction(SIGCHLD, NULL, &restored) == 0);
+    CHECK(sigaction(SIGCHLD, nullptr, &restored) == 0);
     CHECK(restored.sa_handler == previous_child_handler);
-    CHECK(sigprocmask(SIG_SETMASK, NULL, &restored_mask) == 0);
+    CHECK(sigprocmask(SIG_SETMASK, nullptr, &restored_mask) == 0);
     CHECK(sigismember(&restored_mask, SIGCHLD) == 1);
-    CHECK(sigaction(SIGCHLD, &previous, NULL) == 0);
-    CHECK(sigprocmask(SIG_SETMASK, &old_mask, NULL) == 0);
+    CHECK(sigaction(SIGCHLD, &previous, nullptr) == 0);
+    CHECK(sigprocmask(SIG_SETMASK, &old_mask, nullptr) == 0);
 
-    CHECK(run_shutdown(supervisor, NULL).status == MPMC_OK);
+    CHECK(run_shutdown(supervisor, nullptr).status == MPMC_OK);
     CHECK(supervisor_report_count(supervisor) == 2);
     finish(supervisor);
 }
@@ -466,7 +466,7 @@ static void test_native_deadline(void) {
     supervisor_t *supervisor = prepare(true, 2);
     fixture.external = create_child();
     CHECK(fixture.external > 0);
-    CHECK(run_shutdown(supervisor, NULL).status == MPMC_OK);
+    CHECK(run_shutdown(supervisor, nullptr).status == MPMC_OK);
     CHECK(fixture.term_calls == 2 && fixture.kill_calls == 2);
     CHECK(fixture.poll_calls == 1 && fixture.first_timeout > 0);
     check_reports(supervisor, 2, SIGKILL);
@@ -479,7 +479,7 @@ static void test_interrupted_deadline(void) {
     supervisor_t *supervisor = prepare(true, 1);
     fixture.fake_clock = true;
     fixture.wait_mode = WAIT_INTERRUPT;
-    CHECK(run_shutdown(supervisor, NULL).status == MPMC_OK);
+    CHECK(run_shutdown(supervisor, nullptr).status == MPMC_OK);
     CHECK(fixture.poll_calls == 2);
     CHECK(fixture.first_timeout == 2000 && fixture.second_timeout == 800);
     check_reports(supervisor, 1, SIGKILL);
@@ -496,10 +496,10 @@ static void test_wait_errors(void) {
         if (scenario == 2) fixture.wait_mode = WAIT_BAD_PIPE;
         if (scenario == 3) fixture.fail_term = true;
         const int expected[] = {EIO, EBADF, 0, EPERM};
-        mpmc_result_t result = run_shutdown(supervisor, NULL);
+        mpmc_result_t result = run_shutdown(supervisor, nullptr);
         CHECK(result.status == MPMC_ERR_SYS && result.system_errno == expected[scenario]);
         check_reports(supervisor, 1, SIGKILL);
-        CHECK(run_shutdown(supervisor, NULL).status == MPMC_OK);
+        CHECK(run_shutdown(supervisor, nullptr).status == MPMC_OK);
         finish(supervisor);
     }
 }
@@ -510,10 +510,10 @@ static void test_kill_failure(void) {
     fixture.fake_clock = true;
     fixture.wait_mode = WAIT_EXPIRE;
     fixture.fail_kill = true;
-    mpmc_result_t result = run_shutdown(supervisor, NULL);
+    mpmc_result_t result = run_shutdown(supervisor, nullptr);
     CHECK(result.status == MPMC_ERR_SYS && result.system_errno == EPERM);
     CHECK(supervisor_report_count(supervisor) == 0);
-    CHECK(run_shutdown(supervisor, NULL).status == MPMC_OK);
+    CHECK(run_shutdown(supervisor, nullptr).status == MPMC_OK);
     check_reports(supervisor, 1, SIGKILL);
     finish(supervisor);
 }
@@ -693,8 +693,8 @@ static void test_optional_reporter(void) {
         supervisor_t *supervisor = prepare(true, 1);
         fixture.fail_clock = true;
         const supervisor_shutdown_reporter_t destination = {
-            .on_error = scenario == 0 ? NULL : collect_error,
-            .user_data = NULL,
+            .on_error = scenario == 0 ? nullptr : collect_error,
+            .user_data = nullptr,
         };
         mpmc_result_t result = run_shutdown(supervisor, &destination);
         CHECK(result.status == MPMC_ERR_SYS && result.system_errno == EIO);
@@ -727,11 +727,11 @@ static void test_natural_exit(void) {
     supervisor_t *supervisor = prepare(false, 0);
     struct sigaction action = {.sa_handler = previous_child_handler};
     sigemptyset(&action.sa_mask);
-    CHECK(sigaction(SIGCHLD, &action, NULL) == 0);
+    CHECK(sigaction(SIGCHLD, &action, nullptr) == 0);
     sigset_t child_signal, pending;
     sigemptyset(&child_signal);
     sigaddset(&child_signal, SIGCHLD);
-    CHECK(sigprocmask(SIG_BLOCK, &child_signal, NULL) == 0);
+    CHECK(sigprocmask(SIG_BLOCK, &child_signal, nullptr) == 0);
     CHECK(sigpending(&pending) == 0);
     if (sigismember(&pending, SIGCHLD)) {
         int received;
@@ -744,7 +744,7 @@ static void test_natural_exit(void) {
         .message_count = 1,
         .ack_mode = 2,
     };
-    CHECK(supervisor_dispatch(supervisor, &command, NULL).status == MPMC_OK);
+    CHECK(supervisor_dispatch(supervisor, &command, nullptr).status == MPMC_OK);
     int received;
     CHECK(sigwait(&child_signal, &received) == 0 && received == SIGCHLD);
     CHECK(run_shutdown(supervisor, &reporter).status == MPMC_OK);
@@ -765,13 +765,13 @@ static void test_partial_initialization(void) {
         fixture.fail_clock = scenario == 0;
         fixture.fail_pipe = scenario == 1;
         fixture.fail_init = scenario == 2;
-        supervisor_t *supervisor = NULL;
+        supervisor_t *supervisor = nullptr;
         mpmc_result_t result = supervisor_create(&supervisor, 1, IPC_SHARED_MEMORY);
         CHECK(result.status == MPMC_ERR_SYS);
         CHECK(result.system_errno == (scenario == 1 ? EMFILE : EIO));
-        CHECK(supervisor == NULL && fixture.destroy_calls == 0 && !fixture.ipc.live);
-        CHECK(fixture.init_calls == (scenario == 2 ? 1u : 0u));
-        CHECK(fixture.pipe_closes == (scenario == 2 ? 2u : 0u));
+        CHECK(supervisor == nullptr && fixture.destroy_calls == 0 && !fixture.ipc.live);
+        CHECK(fixture.init_calls == (scenario == 2 ? 1 : 0));
+        CHECK(fixture.pipe_closes == (scenario == 2 ? 2 : 0));
         if (scenario == 2) {
             CHECK(fcntl(fixture.event_pipe[0], F_GETFD) == -1 && errno == EBADF);
             CHECK(fcntl(fixture.event_pipe[1], F_GETFD) == -1 && errno == EBADF);
@@ -807,7 +807,7 @@ static void test_failed_dispatch(void) {
  * @return Zero se todas as verificações passarem; um em falha.
  */
 int main(void) {
-    struct sigaction action = {0}, previous;
+    struct sigaction action = {}, previous;
     action.sa_handler = watchdog;
     sigemptyset(&action.sa_mask);
     CHECK(sigaction(SIGALRM, &action, &previous) == 0);
@@ -816,7 +816,7 @@ int main(void) {
     sigaddset(&alarm_signal, SIGALRM);
     CHECK(sigprocmask(SIG_UNBLOCK, &alarm_signal, &old_mask) == 0);
     alarm(20);
-    CHECK(run_shutdown(NULL, NULL).status == MPMC_ERR_INVALID_ARG);
+    CHECK(run_shutdown(nullptr, nullptr).status == MPMC_ERR_INVALID_ARG);
     test_cooperative();
     test_native_deadline();
     test_interrupted_deadline();
@@ -835,8 +835,8 @@ int main(void) {
     test_partial_initialization();
     test_failed_dispatch();
     alarm(0);
-    CHECK(sigaction(SIGALRM, &previous, NULL) == 0);
-    CHECK(sigprocmask(SIG_SETMASK, &old_mask, NULL) == 0);
+    CHECK(sigaction(SIGALRM, &previous, nullptr) == 0);
+    CHECK(sigprocmask(SIG_SETMASK, &old_mask, nullptr) == 0);
     printf("%u verificações de shutdown, %u falhas\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
@@ -875,13 +875,13 @@ static pid_t create_child(void) {
     pid_t pid = fork();
     if (pid == 0) {
         close(ready[0]);
-        struct sigaction action = {0};
+        struct sigaction action = {};
         action.sa_handler = fixture.ignore_term ? SIG_IGN : SIG_DFL;
         sigemptyset(&action.sa_mask);
-        if (sigaction(SIGTERM, &action, NULL) == -1) _exit(2);
+        if (sigaction(SIGTERM, &action, nullptr) == -1) _exit(2);
         sigset_t empty;
         sigemptyset(&empty);
-        if (sigprocmask(SIG_SETMASK, &empty, NULL) == -1) _exit(2);
+        if (sigprocmask(SIG_SETMASK, &empty, nullptr) == -1) _exit(2);
         const char byte = 'r';
         if (write(ready[1], &byte, 1) != 1) _exit(2);
         close(ready[1]);
@@ -913,7 +913,7 @@ static pid_t create_child(void) {
 static supervisor_t *prepare(bool ignore_term, unsigned count) {
     reset_fixture();
     fixture.ignore_term = ignore_term;
-    supervisor_t *supervisor = NULL;
+    supervisor_t *supervisor = nullptr;
     CHECK(supervisor_create(&supervisor, 1, IPC_SHARED_MEMORY).status == MPMC_OK);
     fixture.supervisor = supervisor;
     command_t command = {
@@ -923,7 +923,7 @@ static supervisor_t *prepare(bool ignore_term, unsigned count) {
         .ack_mode = 2,
     };
     for (unsigned index = 0; index < count; ++index) {
-        CHECK(supervisor_dispatch(supervisor, &command, NULL).status == MPMC_OK);
+        CHECK(supervisor_dispatch(supervisor, &command, nullptr).status == MPMC_OK);
     }
     return supervisor;
 }
@@ -948,8 +948,8 @@ static void check_reports(supervisor_t *supervisor, unsigned count, int signal_n
  * @param supervisor Instância cujos trabalhos já deveriam estar recolhidos.
  */
 static void finish(supervisor_t *supervisor) {
-    CHECK(sigaction(SIGCHLD, &fixture.original_action, NULL) == 0);
-    CHECK(sigprocmask(SIG_SETMASK, &fixture.original_mask, NULL) == 0);
+    CHECK(sigaction(SIGCHLD, &fixture.original_action, nullptr) == 0);
+    CHECK(sigprocmask(SIG_SETMASK, &fixture.original_mask, nullptr) == 0);
     for (size_t index = 0; index < fixture.child_count; ++index) {
         pid_t pid = fixture.children[index];
         int status;
@@ -973,8 +973,8 @@ static void finish(supervisor_t *supervisor) {
 /** @brief Reinicializa a fixture e guarda a configuração de sinais do chamador. */
 static void reset_fixture(void) {
     fixture = (typeof(fixture)){.event_pipe = {-1, -1}, .parent_pid = getpid()};
-    CHECK(sigaction(SIGCHLD, NULL, &fixture.original_action) == 0);
-    CHECK(sigprocmask(SIG_SETMASK, NULL, &fixture.original_mask) == 0);
+    CHECK(sigaction(SIGCHLD, nullptr, &fixture.original_action) == 0);
+    CHECK(sigprocmask(SIG_SETMASK, nullptr, &fixture.original_mask) == 0);
 }
 
 /**
@@ -999,7 +999,7 @@ static mpmc_result_t run_shutdown(
  * @param user_data Endereço da fixture ou NULL, ambos permitidos pelo contrato.
  */
 static void collect_error(const supervisor_shutdown_error_t *error, void *user_data) {
-    CHECK(user_data == &fixture || user_data == NULL);
+    CHECK(user_data == &fixture || user_data == nullptr);
     CHECK(getpid() == fixture.parent_pid);
     CHECK(fixture.error_count < sizeof fixture.errors / sizeof fixture.errors[0]);
     if (fixture.error_count < sizeof fixture.errors / sizeof fixture.errors[0]) {

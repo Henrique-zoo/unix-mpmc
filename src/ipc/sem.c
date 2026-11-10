@@ -26,7 +26,7 @@ mpmc_result_t sysv_sem_create(unsigned count, int *out_semid) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
 
-    if (count > (unsigned)INT_MAX || out_semid == NULL) {
+    if (count > (unsigned)INT_MAX || out_semid == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );

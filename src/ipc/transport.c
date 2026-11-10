@@ -32,7 +32,7 @@ static mpmc_result_t local_error(mpmc_status_t status) {
  * decide antes do despacho para que o chamador veja o mesmo erro nos dois modos.
  */
 static bool logical_index_valid(const ipc_context_t *context, size_t producer_id) {
-    return producer_id >= 1u && producer_id <= context->producer_count;
+    return producer_id >= 1 && producer_id <= context->producer_count;
 }
 
 /**
@@ -41,20 +41,20 @@ static bool logical_index_valid(const ipc_context_t *context, size_t producer_id
  * para que um trabalho não seja aceito num paradigma e recusado no outro.
  */
 static bool operation_id_valid(uint64_t operation_id) {
-    return operation_id != 0u && operation_id <= (uint64_t)LONG_MAX;
+    return operation_id != 0 && operation_id <= (uint64_t)LONG_MAX;
 }
 
 mpmc_result_t ipc_init(ipc_context_t **out, size_t producer_count, ipc_mode_t mode) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (out == NULL || producer_count == 0u
+    if (out == nullptr || producer_count == 0
         || (mode != IPC_SHARED_MEMORY && mode != IPC_MESSAGE_QUEUE)) {
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INVALID_ARG));
     }
-    *out = NULL;
-    ipc_context_t *context = calloc(1u, sizeof(*context));
-    if (context == NULL) {
+    *out = nullptr;
+    ipc_context_t *context = calloc(1, sizeof(*context));
+    if (context == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno}
         );
@@ -68,7 +68,7 @@ mpmc_result_t ipc_init(ipc_context_t **out, size_t producer_count, ipc_mode_t mo
     if (mode == IPC_MESSAGE_QUEUE) {
         result = msg_backend_create(&context->message_backend, producer_count);
     } else {
-        result = shm_backend_create(&context->shared_backend, producer_count, NULL);
+        result = shm_backend_create(&context->shared_backend, producer_count, nullptr);
     }
     if (result.status != MPMC_OK) {
         free(context);
@@ -83,7 +83,7 @@ void ipc_quiesce(ipc_context_t *context) {
 }
 
 size_t ipc_producer_count(const ipc_context_t *context) {
-    return context == NULL ? 0u : context->producer_count;
+    return context == nullptr ? 0 : context->producer_count;
 }
 
 mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message_t *message) {
@@ -92,7 +92,7 @@ mpmc_result_t ipc_send(ipc_context_t *context, size_t producer_id, const message
 
     if (context != nullptr && context->quiescent)
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_SHUTDOWN));
-    if (context == NULL || message == NULL)
+    if (context == nullptr || message == nullptr)
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INVALID_ARG));
     if (!logical_index_valid(context, producer_id))
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INVALID_INDEX));
@@ -115,7 +115,7 @@ mpmc_result_t ipc_receive(
 
     if (context != nullptr && context->quiescent)
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_SHUTDOWN));
-    if (context == NULL || out == NULL)
+    if (context == nullptr || out == nullptr)
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INVALID_ARG));
     if (!logical_index_valid(context, producer_id))
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INVALID_INDEX));
@@ -133,7 +133,7 @@ mpmc_result_t ipc_ack_begin(ipc_context_t *context, uint64_t operation_id, unsig
 
     if (context != nullptr && context->quiescent)
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_SHUTDOWN));
-    if (context == NULL || !operation_id_valid(operation_id) || expected < MPMC_MIN_MESSAGES
+    if (context == nullptr || !operation_id_valid(operation_id) || expected < MPMC_MIN_MESSAGES
         || expected > MPMC_MAX_MESSAGES) {
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INVALID_ARG));
     }
@@ -151,7 +151,7 @@ mpmc_result_t ipc_ack_wait(ipc_context_t *context, uint64_t operation_id) {
 
     if (context != nullptr && context->quiescent)
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_SHUTDOWN));
-    if (context == NULL || !operation_id_valid(operation_id)) {
+    if (context == nullptr || !operation_id_valid(operation_id)) {
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INVALID_ARG));
     }
     return mpmc_diagnostic_end(
@@ -168,7 +168,7 @@ mpmc_result_t ipc_ack_end(ipc_context_t *context, uint64_t operation_id) {
 
     if (context != nullptr && context->quiescent)
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_SHUTDOWN));
-    if (context == NULL || !operation_id_valid(operation_id)) {
+    if (context == nullptr || !operation_id_valid(operation_id)) {
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INVALID_ARG));
     }
     return mpmc_diagnostic_end(
@@ -183,7 +183,7 @@ mpmc_result_t ipc_ack_abandon(ipc_context_t *context, uint64_t operation_id) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (context == NULL || !operation_id_valid(operation_id)) {
+    if (context == nullptr || !operation_id_valid(operation_id)) {
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INVALID_ARG));
     }
     if (context->mode == IPC_MESSAGE_QUEUE) {
@@ -198,7 +198,7 @@ mpmc_result_t ipc_poll_events(ipc_context_t *context) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (context == NULL)
+    if (context == nullptr)
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INVALID_ARG));
     if (context->mode == IPC_MESSAGE_QUEUE) {
         return mpmc_diagnostic_end(
@@ -212,7 +212,7 @@ mpmc_result_t ipc_consumed_count(ipc_context_t *context, size_t producer_id, uin
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (context == NULL || out_count == NULL)
+    if (context == nullptr || out_count == nullptr)
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INVALID_ARG));
     if (!logical_index_valid(context, producer_id))
         return mpmc_diagnostic_end(&diagnostic_scope, local_error(MPMC_ERR_INVALID_INDEX));
@@ -237,14 +237,14 @@ void ipc_worker_close(ipc_context_t *context) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
 
-    if (context == NULL) {
+    if (context == nullptr) {
         (void)mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
         return;
     }
     if (context->mode == IPC_MESSAGE_QUEUE) {
         msg_backend_worker_close(context->message_backend);
     } else {
-        (void)shm_backend_worker_close(context->shared_backend, NULL);
+        (void)shm_backend_worker_close(context->shared_backend, nullptr);
     }
     free(context);
     (void)mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
@@ -254,14 +254,14 @@ void ipc_destroy(ipc_context_t *context) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
 
-    if (context == NULL) {
+    if (context == nullptr) {
         (void)mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
         return;
     }
     if (context->mode == IPC_MESSAGE_QUEUE) {
         msg_backend_destroy(context->message_backend);
     } else {
-        (void)shm_backend_destroy(context->shared_backend, NULL);
+        (void)shm_backend_destroy(context->shared_backend, nullptr);
     }
     free(context);
     (void)mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});

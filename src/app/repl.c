@@ -22,7 +22,7 @@
 #include "mpmc/diagnostic.h"
 
 /** @brief Comprimento máximo aceito para uma linha de comando. */
-#define REPL_MAX_LINE 4096u
+static constexpr size_t REPL_MAX_LINE = 4096;
 /** @brief Intervalo máximo de espera para manutenção periódica (ms). */
 #define REPL_POLL_INTERVAL_MS 100
 
@@ -67,7 +67,7 @@ static mpmc_result_t install_signal_handler(
     void (*handler)(int),
     struct sigaction *previous
 ) {
-    struct sigaction action = {0};
+    struct sigaction action = {};
     action.sa_handler = handler;
     sigemptyset(&action.sa_mask);
     if (sigaction(signal_number, &action, previous) == -1) {
@@ -124,7 +124,7 @@ static mpmc_result_t check_foreground_stdin(void) {
  * processar eventos de controle associados ao supervisor.
  */
 static mpmc_result_t service_supervisor(supervisor_t *supervisor) {
-    return supervisor_reap(supervisor, false, NULL);
+    return supervisor_reap(supervisor, false, nullptr);
 }
 
 /**
@@ -160,7 +160,7 @@ static void dispatch_line(supervisor_t *supervisor, char *line, bool *shutdown) 
     }
     if (error.status == MPMC_OK) {
         dispatch_attempted = true;
-        error = supervisor_dispatch(supervisor, &command, NULL);
+        error = supervisor_dispatch(supervisor, &command, nullptr);
     }
 
     if (error.status != MPMC_OK) {
@@ -197,15 +197,15 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
     struct sigaction previous_chld;
     struct sigaction previous_int;
     struct sigaction previous_term;
-    char line[REPL_MAX_LINE + 1u];
-    size_t line_length = 0u;
+    char line[REPL_MAX_LINE + 1];
+    size_t line_length = 0;
     bool line_too_long = false;
     bool need_prompt = true;
     const bool tty_output = isatty(STDOUT_FILENO) == 1;
     bool shutdown = false;
     mpmc_result_t result;
 
-    if (supervisor == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    if (supervisor == nullptr) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
 
     result = check_foreground_stdin();
     if (result.status != MPMC_OK) return result;
@@ -244,7 +244,7 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
         };
         struct pollfd *input = &fds[0];
         const struct pollfd *wake = &fds[1];
-        int ready = poll(fds, 2u, REPL_POLL_INTERVAL_MS);
+        int ready = poll(fds, 2, REPL_POLL_INTERVAL_MS);
         if (ready == -1) {
             int poll_errno = errno;
             if (poll_errno == EINTR) {
@@ -282,7 +282,7 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
             result = service_error;
             break;
         }
-        if (supervisor_take_notices(supervisor) > 0u && tty_output) {
+        if (supervisor_take_notices(supervisor) > 0 && tty_output) {
             need_prompt = true;
         }
         if (ready == 0 || input->revents == 0) {
@@ -303,7 +303,7 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
             break;
         }
         if (bytes_read == 0) {
-            if (line_length != 0u || line_too_long) {
+            if (line_length != 0 || line_too_long) {
                 if (line_too_long) {
                     fprintf(
                         stderr,
@@ -331,7 +331,7 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
                     line[line_length] = '\0';
                     dispatch_line(supervisor, line, &shutdown);
                 }
-                line_length = 0u;
+                line_length = 0;
                 line_too_long = false;
                 need_prompt = !shutdown;
                 if (need_prompt) {
@@ -347,7 +347,7 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
                     line[line_length++] = character;
                 } else {
                     line_too_long = true;
-                    line_length = 0u;
+                    line_length = 0;
                 }
             }
         }
@@ -359,7 +359,7 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
     restore_signal_handler(SIGINT, &previous_int);
     restore_signal_handler(SIGCHLD, &previous_chld);
 
-    mpmc_result_t shutdown_error = supervisor_shutdown(supervisor, NULL);
+    mpmc_result_t shutdown_error = supervisor_shutdown(supervisor, nullptr);
     if (result.status == MPMC_OK && shutdown_error.status != MPMC_OK) {
         result = shutdown_error;
     }

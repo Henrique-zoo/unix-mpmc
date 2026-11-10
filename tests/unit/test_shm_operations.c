@@ -118,12 +118,12 @@ static void test_arguments_and_empty(void) {
     if (!create_backend()) return;
     message_t message = sample_message(7, 42), out = message;
     uint64_t count = UINT64_MAX;
-    CHECK_RESULT(shm_backend_send(NULL, 1, &message), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(shm_backend_send(owned_backend, 1, NULL), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(shm_backend_receive(NULL, 1, &out, false), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(shm_backend_receive(owned_backend, 1, NULL, false), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(shm_backend_consumed_count(NULL, 1, &count), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(shm_backend_consumed_count(owned_backend, 1, NULL), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(shm_backend_send(nullptr, 1, &message), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(shm_backend_send(owned_backend, 1, nullptr), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(shm_backend_receive(nullptr, 1, &out, false), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(shm_backend_receive(owned_backend, 1, nullptr, false), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(shm_backend_consumed_count(nullptr, 1, &count), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(shm_backend_consumed_count(owned_backend, 1, nullptr), MPMC_ERR_INVALID_ARG, 0);
     const size_t invalid_ids[] = {0, 3, SIZE_MAX};
     for (size_t i = 0; i < sizeof invalid_ids / sizeof invalid_ids[0]; ++i) {
         CHECK_RESULT(
@@ -309,7 +309,7 @@ static void test_concurrent_workers(void) {
         children[role] = child;
     }
     close(observations[1]);
-    bool seen[WORKERS_PER_ROLE][MESSAGES_PER_WORKER] = {0};
+    bool seen[WORKERS_PER_ROLE][MESSAGES_PER_WORKER] = {};
     for (unsigned i = 0; i < WORKERS_PER_ROLE * MESSAGES_PER_WORKER; ++i) {
         message_t out;
         bool read_ok = read_message(observations[0], &out);
@@ -328,7 +328,7 @@ static void test_concurrent_workers(void) {
     }
     close(observations[0]);
     collect_children();
-    if (owned_backend == NULL) return;
+    if (owned_backend == nullptr) return;
     for (unsigned p = 0; p < WORKERS_PER_ROLE; ++p) {
         for (unsigned i = 0; i < MESSAGES_PER_WORKER; ++i) CHECK(seen[p][i]);
     }
@@ -416,7 +416,7 @@ static void test_full_queue_blocks_only_its_sender(void) {
     CHECK_RESULT(shm_backend_receive(owned_backend, 1, &out, false), MPMC_OK, 0);
     CHECK(same_message(&out, &first));
     collect_children();
-    if (owned_backend == NULL) return;
+    if (owned_backend == nullptr) return;
 
     for (unsigned i = 2; i <= capacity; ++i) {
         message_t expected = sample_message(i, 11);
@@ -430,7 +430,7 @@ static void test_full_queue_blocks_only_its_sender(void) {
 
     uint64_t count = 0;
     CHECK_RESULT(shm_backend_consumed_count(owned_backend, 1, &count), MPMC_OK, 0);
-    CHECK(count == capacity + 1u);
+    CHECK(count == capacity + 1);
     CHECK_RESULT(shm_backend_consumed_count(owned_backend, 2, &count), MPMC_OK, 0);
     CHECK(count == capacity);
     CHECK(semctl(semid, SHM_SEM_MUTEX, GETVAL) == 1);
@@ -448,7 +448,7 @@ static void test_blocking_receive_resumes_on_own_structure(void) {
     if (!create_backend()) return;
     int ready[2], result[2];
     if (!open_event_pipes(ready, result)) return;
-    if (!spawn_blocked(0, false, 2, NULL, ready, result)) {
+    if (!spawn_blocked(0, false, 2, nullptr, ready, result)) {
         close(ready[0]);
         close(result[0]);
         cleanup();
@@ -473,7 +473,7 @@ static void test_blocking_receive_resumes_on_own_structure(void) {
     CHECK(got);
     close(result[0]);
     collect_children();
-    if (owned_backend == NULL) return;
+    if (owned_backend == nullptr) return;
     CHECK(got && same_message(&received, &wanted));
 
     message_t out;
@@ -501,7 +501,7 @@ static void test_maximum_structure_count(void) {
     cleanup();
     apply_calls = change_calls = fail_apply_call = fail_change_call = 0;
     arm_timeout(10);
-    mpmc_result_t created = shm_backend_create(&owned_backend, MPMC_MAX_PRODUCERS, NULL);
+    mpmc_result_t created = shm_backend_create(&owned_backend, MPMC_MAX_PRODUCERS, nullptr);
     if (created.status == MPMC_ERR_SYS
         && (created.system_errno == ENOSPC || created.system_errno == ENOMEM
             || created.system_errno == EMFILE)) {
@@ -553,17 +553,15 @@ static void test_maximum_structure_count(void) {
     message_t message = sample_message(1, 1), out = message;
     uint64_t count = UINT64_MAX;
     CHECK_RESULT(
-        shm_backend_send(owned_backend, MPMC_MAX_PRODUCERS + 1u, &message),
+        shm_backend_send(owned_backend, MPMC_MAX_PRODUCERS + 1, &message), MPMC_ERR_INVALID_INDEX, 0
+    );
+    CHECK_RESULT(
+        shm_backend_receive(owned_backend, MPMC_MAX_PRODUCERS + 1, &out, false),
         MPMC_ERR_INVALID_INDEX,
         0
     );
     CHECK_RESULT(
-        shm_backend_receive(owned_backend, MPMC_MAX_PRODUCERS + 1u, &out, false),
-        MPMC_ERR_INVALID_INDEX,
-        0
-    );
-    CHECK_RESULT(
-        shm_backend_consumed_count(owned_backend, MPMC_MAX_PRODUCERS + 1u, &count),
+        shm_backend_consumed_count(owned_backend, MPMC_MAX_PRODUCERS + 1, &count),
         MPMC_ERR_INVALID_INDEX,
         0
     );
@@ -613,14 +611,14 @@ static void cleanup(void) {
     }
     for (size_t i = 0; i < sizeof children / sizeof children[0]; ++i) {
         if (children[i] <= 0) continue;
-        while (waitpid(children[i], NULL, 0) < 0 && errno == EINTR) {
+        while (waitpid(children[i], nullptr, 0) < 0 && errno == EINTR) {
         }
         children[i] = 0;
     }
-    if (owned_backend != NULL) {
+    if (owned_backend != nullptr) {
         shm_backend_t *backend = owned_backend;
-        owned_backend = NULL;
-        (void)shm_backend_destroy(backend, NULL);
+        owned_backend = nullptr;
+        (void)shm_backend_destroy(backend, nullptr);
     }
 }
 
@@ -634,19 +632,19 @@ static void cleanup(void) {
 static bool configure_signals(void) {
     struct sigaction action = {.sa_handler = on_alarm, .sa_flags = 0};
     sigemptyset(&action.sa_mask);
-    if (sigprocmask(SIG_SETMASK, NULL, &previous_signal_mask) != 0) return false;
+    if (sigprocmask(SIG_SETMASK, nullptr, &previous_signal_mask) != 0) return false;
     if (sigaction(SIGALRM, &action, &previous_alarm_action) != 0) return false;
     action.sa_handler = on_child;
     if (sigaction(SIGCHLD, &action, &previous_chld_action) != 0) {
-        (void)sigaction(SIGALRM, &previous_alarm_action, NULL);
+        (void)sigaction(SIGALRM, &previous_alarm_action, nullptr);
         return false;
     }
     sigset_t active = previous_signal_mask;
     sigdelset(&active, SIGALRM);
     sigdelset(&active, SIGCHLD);
-    if (sigprocmask(SIG_SETMASK, &active, NULL) != 0) {
-        (void)sigaction(SIGALRM, &previous_alarm_action, NULL);
-        (void)sigaction(SIGCHLD, &previous_chld_action, NULL);
+    if (sigprocmask(SIG_SETMASK, &active, nullptr) != 0) {
+        (void)sigaction(SIGALRM, &previous_alarm_action, nullptr);
+        (void)sigaction(SIGCHLD, &previous_chld_action, nullptr);
         return false;
     }
     signals_configured = true;
@@ -660,14 +658,14 @@ static void finish(void) {
     sigset_t alarms, pending;
     sigemptyset(&alarms);
     sigaddset(&alarms, SIGALRM);
-    CHECK(sigprocmask(SIG_BLOCK, &alarms, NULL) == 0);
+    CHECK(sigprocmask(SIG_BLOCK, &alarms, nullptr) == 0);
     if (sigpending(&pending) == 0 && sigismember(&pending, SIGALRM) == 1) {
         int signal_number;
         CHECK(sigwait(&alarms, &signal_number) == 0);
     }
-    CHECK(sigaction(SIGALRM, &previous_alarm_action, NULL) == 0);
-    CHECK(sigaction(SIGCHLD, &previous_chld_action, NULL) == 0);
-    CHECK(sigprocmask(SIG_SETMASK, &previous_signal_mask, NULL) == 0);
+    CHECK(sigaction(SIGALRM, &previous_alarm_action, nullptr) == 0);
+    CHECK(sigaction(SIGCHLD, &previous_chld_action, nullptr) == 0);
+    CHECK(sigprocmask(SIG_SETMASK, &previous_signal_mask, nullptr) == 0);
     signals_configured = false;
 }
 
@@ -676,7 +674,7 @@ static bool create_backend(void) {
     cleanup();
     apply_calls = change_calls = fail_apply_call = fail_change_call = 0;
     arm_timeout(10);
-    mpmc_result_t result = shm_backend_create(&owned_backend, 2, NULL);
+    mpmc_result_t result = shm_backend_create(&owned_backend, 2, nullptr);
     CHECK(result.status == MPMC_OK && result.system_errno == 0);
     return result.status == MPMC_OK;
 }
@@ -685,8 +683,8 @@ static bool create_backend(void) {
 static void destroy_backend(void) {
     fail_apply_call = fail_change_call = 0;
     shm_backend_t *backend = owned_backend;
-    owned_backend = NULL;
-    CHECK_RESULT(shm_backend_destroy(backend, NULL), MPMC_OK, 0);
+    owned_backend = nullptr;
+    CHECK_RESULT(shm_backend_destroy(backend, nullptr), MPMC_OK, 0);
     alarm(0);
 }
 
@@ -759,7 +757,7 @@ static void run_child(unsigned role, int read_fd, int write_fd) {
         }
     }
     close(write_fd);
-    if (shm_backend_worker_close(owned_backend, NULL).status != MPMC_OK) ok = false;
+    if (shm_backend_worker_close(owned_backend, nullptr).status != MPMC_OK) ok = false;
     _exit(ok ? EXIT_SUCCESS : EXIT_FAILURE);
 }
 
@@ -806,7 +804,7 @@ static bool spawn_blocked(
                 && write(result[1], &out, sizeof out) == (ssize_t)sizeof out;
         }
         close(result[1]);
-        if (shm_backend_worker_close(owned_backend, NULL).status != MPMC_OK) ok = false;
+        if (shm_backend_worker_close(owned_backend, nullptr).status != MPMC_OK) ok = false;
         _exit(ok ? EXIT_SUCCESS : EXIT_FAILURE);
     }
     children[slot] = child;
@@ -859,6 +857,6 @@ static void collect_children(void) {
         children[i] = 0;
         CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     }
-    CHECK(sigprocmask(SIG_SETMASK, &old_mask, NULL) == 0);
+    CHECK(sigprocmask(SIG_SETMASK, &old_mask, nullptr) == 0);
     if (!ok) cleanup();
 }

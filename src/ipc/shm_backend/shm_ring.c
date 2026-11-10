@@ -18,7 +18,7 @@
  * não percorre o vetor flexível nem apaga as posições de mensagens.
  */
 void shm_ring_init(shm_ring_t *ring) {
-    assert(ring != NULL);
+    assert(ring != nullptr);
 
     *ring = (shm_ring_t){
         .head = 0,
@@ -35,7 +35,7 @@ void shm_ring_init(shm_ring_t *ring) {
  * tail anterior ao pós-incremento, seguido da redução módulo capacity.
  */
 void shm_ring_push(shm_ring_t *ring, message_t message) {
-    assert(ring != NULL);
+    assert(ring != nullptr);
     assert(ring->count < ring->capacity);
 
     ring->messages[ring->tail++] = message;
@@ -50,7 +50,7 @@ void shm_ring_push(shm_ring_t *ring, message_t message) {
  * pelos metadados do buffer, não pelo conteúdo armazenado.
  */
 message_t shm_ring_pop(shm_ring_t *ring) {
-    assert(ring != NULL);
+    assert(ring != nullptr);
     assert(ring->count > 0);
 
     message_t message = ring->messages[ring->head++];

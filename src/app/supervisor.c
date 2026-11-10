@@ -30,7 +30,7 @@
 #include "worker_event.h"
 
 /** @brief Capacidade da fila de eventos de resultado pendentes de apresentação. */
-#define SUPERVISOR_MAX_PENDING_OUTCOMES 32u
+static constexpr size_t SUPERVISOR_MAX_PENDING_OUTCOMES = 32;
 
 /** @brief Registro de identidade e estado de um processo filho supervisionado. */
 typedef struct {
@@ -368,7 +368,7 @@ mpmc_result_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_m
     }
 
     supervisor->producer_count = producer_count;
-    supervisor->next_operation_id = 1u;
+    supervisor->next_operation_id = 1;
     mpmc_result_t error = open_event_pipe(supervisor);
 
     if (error.status != MPMC_OK) {
@@ -395,12 +395,12 @@ mpmc_result_t supervisor_queue_outcome(supervisor_t *supervisor, const job_outco
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (supervisor == NULL || outcome == NULL) {
+    if (supervisor == nullptr || outcome == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
     }
-    if (job_outcome_format(outcome, NULL, 0u) < 0) {
+    if (job_outcome_format(outcome, nullptr, 0) < 0) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
@@ -420,18 +420,18 @@ mpmc_result_t supervisor_queue_outcome(supervisor_t *supervisor, const job_outco
  * que faz o REPL redesenhar o prompt em terminais.
  */
 static void flush_pending_outcomes(supervisor_t *supervisor) {
-    for (size_t index = 0u; index < supervisor->pending_outcome_count; ++index) {
+    for (size_t index = 0; index < supervisor->pending_outcome_count; ++index) {
         char text[512];
         int length = job_outcome_format(&supervisor->pending_outcomes[index], text, sizeof text);
         if (length < 0) {
             continue;
         }
-        char line[sizeof text + 16u];
+        char line[sizeof text + 16];
         (void)snprintf(line, sizeof line, "mpmc: %s\n", text);
         (void)fputs(line, stderr);
         ++supervisor->notice_count;
     }
-    supervisor->pending_outcome_count = 0u;
+    supervisor->pending_outcome_count = 0;
 }
 
 /** @details Devolve e zera o contador incrementado por supervisor_reap() a cada
@@ -466,7 +466,7 @@ void supervisor_notify_signal(void) {
     int fd = wake_write_fd;
 
     if (fd != -1) {
-        const unsigned char wake = 1u;
+        const unsigned char wake = 1;
         ssize_t written;
 
         do {
@@ -588,7 +588,7 @@ mpmc_result_t supervisor_dispatch(
         );
     }
 
-    if (supervisor->next_operation_id == 0u)
+    if (supervisor->next_operation_id == 0)
         return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_STATE});
 
     mpmc_result_t error = ensure_child_capacity(supervisor);
@@ -692,7 +692,7 @@ mpmc_result_t supervisor_dispatch(
         .result_fd = result_pipe[0],
     };
 
-    supervisor->next_operation_id = operation_id == UINT64_MAX ? 0u : operation_id + 1u;
+    supervisor->next_operation_id = operation_id == UINT64_MAX ? 0 : operation_id + 1;
 
     if (sigprocmask(SIG_SETMASK, &old_set, nullptr) == -1) {
         return mpmc_diagnostic_end(
@@ -740,7 +740,7 @@ static const char *child_kind_name(command_kind_t kind) {
 static uint64_t elapsed_ns(const struct timespec *start, const struct timespec *end) {
     if (end->tv_sec < start->tv_sec
         || (end->tv_sec == start->tv_sec && end->tv_nsec < start->tv_nsec)) {
-        return 0u;
+        return 0;
     }
 
     uint64_t seconds = (uint64_t)(end->tv_sec - start->tv_sec);
@@ -751,7 +751,7 @@ static uint64_t elapsed_ns(const struct timespec *start, const struct timespec *
         nanos += 1000000000;
     }
 
-    return seconds * 1000000000u + (uint64_t)nanos;
+    return seconds * 1000000000 + (uint64_t)nanos;
 }
 
 /**
@@ -778,7 +778,7 @@ static mpmc_result_t record_report(
     }
 
     struct timespec now;
-    uint64_t duration = 0u;
+    uint64_t duration = 0;
 
     if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
         duration = elapsed_ns(&finished->started, &now);
@@ -1048,10 +1048,10 @@ mpmc_result_t supervisor_shutdown(
  * @param duration_ns Duração em nanossegundos.
  */
 static void format_duration(char *buffer, size_t size, uint64_t duration_ns) {
-    const uint64_t milliseconds = duration_ns / 1000000u;
+    const uint64_t milliseconds = duration_ns / 1000000;
 
     (void)snprintf(
-        buffer, size, "%" PRIu64 ".%03" PRIu64 " s", milliseconds / 1000u, milliseconds % 1000u
+        buffer, size, "%" PRIu64 ".%03" PRIu64 " s", milliseconds / 1000, milliseconds % 1000
     );
 }
 
@@ -1104,7 +1104,7 @@ mpmc_result_t supervisor_print_report(const supervisor_t *supervisor, FILE *out)
     }
 
     struct timespec now;
-    uint64_t total_ns = 0u;
+    uint64_t total_ns = 0;
 
     if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
         total_ns = elapsed_ns(&supervisor->created_at, &now);
@@ -1193,7 +1193,7 @@ mpmc_result_t supervisor_print_report(const supervisor_t *supervisor, FILE *out)
     }
 
     for (size_t producer_id = 1; producer_id <= supervisor->producer_count; ++producer_id) {
-        uint64_t consumed = 0u;
+        uint64_t consumed = 0;
         mpmc_result_t count_error = ipc_consumed_count(supervisor->ipc, producer_id, &consumed);
 
         if (count_error.status != MPMC_OK) {
