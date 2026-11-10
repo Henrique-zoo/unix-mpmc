@@ -45,6 +45,7 @@ static struct {
     pid_t external;
     bool ignore_term;
     bool fake_clock;
+    struct timespec clock_origin;
     bool fail_clock;
     bool fail_term;
     bool fail_kill;
@@ -183,12 +184,20 @@ int mpmc_shutdown_test_clock_gettime(clockid_t clock_id, struct timespec *out) {
         errno = EIO;
         return -1;
     }
-    if (!fixture.fake_clock) return clock_gettime(clock_id, out);
+    if (!fixture.fake_clock) {
+        int result = clock_gettime(clock_id, out);
+        if (result == 0) fixture.clock_origin = *out;
+        return result;
+    }
     CHECK(clock_id == CLOCK_MONOTONIC);
     *out = (struct timespec){
-        .tv_sec = 100 + fixture.elapsed_ns / 1000000000,
-        .tv_nsec = fixture.elapsed_ns % 1000000000,
+        .tv_sec = fixture.clock_origin.tv_sec + fixture.elapsed_ns / 1000000000,
+        .tv_nsec = fixture.clock_origin.tv_nsec + fixture.elapsed_ns % 1000000000,
     };
+    if (out->tv_nsec >= 1000000000) {
+        ++out->tv_sec;
+        out->tv_nsec -= 1000000000;
+    }
     return 0;
 }
 

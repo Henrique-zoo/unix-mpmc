@@ -51,7 +51,7 @@
  * @brief Estado opaco do backend por memória compartilhada.
  * @details Mantém os segmentos System V de 2048 bytes por estrutura lógica,
  * seus conjuntos de semáforos e os recursos globais de ACK: um segmento de
- * controle de 2048 bytes e um conjunto com 65 semáforos.
+ * controle de 2048 bytes e um conjunto com 66 semáforos (mutex, vagas e conclusões).
  * Os mapeamentos são locais a cada processo; os objetos IPC são compartilhados.
  * Apenas `ipc/transport.c` deve acessar diretamente esta interface.
  */
@@ -85,7 +85,7 @@ typedef struct {
  * @brief Recebe uma falha individual durante a limpeza do backend.
  * @param error Diagnóstico válido somente durante a chamada.
  * @param user_data Ponteiro fornecido pelo chamador, sem interpretação pelo backend;
- * pode ser NULL se a callback não precisar de estado adicional.
+ * pode ser nullptr se a callback não precisar de estado adicional.
  * @details Este tipo declara um ponteiro para função. O chamador atribui sua
  * função ao campo on_error de shm_cleanup_reporter_t. A cada falha de liberação,
  * o backend executa on_error(error, user_data), no mesmo fluxo da chamada que
@@ -127,9 +127,9 @@ typedef struct {
 
 /**
  * @brief Cria e inicializa um buffer e seu conjunto de semáforos por estrutura lógica.
- * @param[out] out Recebe o backend criado; recebe NULL em falha, quando o ponteiro é válido.
+ * @param[out] out Recebe o backend criado; recebe nullptr em falha, quando o ponteiro é válido.
  * @param producer_count Número positivo de estruturas independentes.
- * @param reporter Destino dos diagnósticos de rollback; pode ser NULL.
+ * @param reporter Destino dos diagnósticos de rollback; pode ser nullptr.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: segmentos de dados e recursos globais de ACK criados e associados,
  *   buffers vazios e semáforos inicializados; system_errno é zero.
@@ -141,13 +141,13 @@ typedef struct {
  * - MPMC_ERR_SYS: falha em malloc(), calloc(), shmget(), shmat(), semget(),
  *   semctl(SETVAL) ou nas operações de inicialização dos recursos de ACK sem
  *   categoria específica; system_errno preserva o errno capturado na operação
- *   que falhou, inclusive durante a limpeza.
+ *   que falhou. Erros de rollback são comunicados separadamente, sem substituir a causa.
  * @post Em sucesso, *out contém o backend com producer_count segmentos de dados
  * associados, cada um com buffer vazio, índices e total consumido zerados e
  * capacidade calculada. Cada conjunto de dados contém mutex=1, empty=capacity
  * e full=0. Os recursos globais de ACK também estão prontos para registrar
  * operações, com 64 posições livres.
- * Em falha, *out permanece NULL quando out é válido, as alocações locais são liberadas
+ * Em falha, *out permanece nullptr quando out é válido, as alocações locais são liberadas
  * e a limpeza dos recursos das entradas visitadas, inclusive a parcial, é tentada.
  * @note Falhas de rollback são comunicadas por reporter e não substituem o erro
  * original de criação ou associação retornado pela função. Sem reporter habilitado,
@@ -244,13 +244,17 @@ mpmc_result_t shm_backend_receive(
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: operação registrada; system_errno é zero.
  * - MPMC_ERR_INVALID_ARG: backend nulo, operation_id zero ou expected fora de
- *   1..1024; system_errno é zero.
- * - MPMC_ERR_STATE: operation_id já registrado; system_errno é zero.
- * - MPMC_ERR_NO_SPACE: as 64 posições de operação estão ocupadas; system_errno é zero.
- * - MPMC_ERR_INTERRUPTED: aquisição do mutex interrompida; system_errno contém EINTR.
+ *   1..1024, com system_errno zero; ou argumento rejeitado por semop(), com errno
+ *   preservado.
+ * - MPMC_ERR_STATE: operation_id já registrado ou controle ACK não inicializado/
+ *   inconsistente; system_errno é zero.
+ * - MPMC_ERR_INTERRUPTED: aquisição de mutex ou espera por vaga interrompida;
+ *   system_errno contém EINTR.
  * - MPMC_ERR_SHUTDOWN: recurso de semáforo removido; system_errno contém EIDRM.
  * - MPMC_ERR_SYS: outra falha em operação de semáforo; system_errno preserva errno.
- * @details Registra operation_id, PID do produtor e quantidade esperada. A tabela
+ * @details Se não houver vaga, aguarda sem manter o mutex. A espera pode retornar
+ * INTERRUPTED/EINTR. Ao finalizar uma operação, ack_end devolve uma vaga.
+ * Registra operation_id, PID do produtor e quantidade esperada. A tabela
  * é compartilhada entre os processos do backend. A mesma operação
  * pode abranger mensagens destinadas a diferentes estruturas lógicas.
  * @note A política de ACK não é um campo de message_t. O registro precede o
@@ -358,8 +362,8 @@ mpmc_result_t shm_backend_final_count(
 
 /**
  * @brief Desanexa mapeamentos herdados pelo processo filho.
- * @param backend Instância herdada após fork(); NULL é permitido.
- * @param reporter Destino dos diagnósticos de liberação; pode ser NULL.
+ * @param backend Instância herdada após fork(); nullptr é permitido.
+ * @param reporter Destino dos diagnósticos de liberação; pode ser nullptr.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: associações locais desfeitas e estado local liberado, ou backend nulo;
  *   system_errno é zero.
@@ -382,8 +386,8 @@ mpmc_result_t shm_backend_worker_close(
 
 /**
  * @brief Remove objetos IPC e libera estado pertencente ao processo pai.
- * @param backend Instância criada pelo supervisor; NULL é permitido.
- * @param reporter Destino dos diagnósticos de liberação; pode ser NULL.
+ * @param backend Instância criada pelo supervisor; nullptr é permitido.
+ * @param reporter Destino dos diagnósticos de liberação; pode ser nullptr.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: desassociações e solicitações de remoção concluídas, ou backend nulo;
  *   system_errno é zero.

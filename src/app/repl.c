@@ -80,37 +80,6 @@ static mpmc_result_t install_signal_handler(
 }
 
 /**
- * @brief Evita tentativa de leitura de terminal por um job em background.
- * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
- * - MPMC_OK: stdin não é identificado como terminal ou o grupo do processo está em primeiro
- *   plano; system_errno é zero.
- * - MPMC_ERR_SYS: falha em tcgetpgrp(), com o errno capturado em system_errno, ou processo em
- *   background com stdin ligado ao terminal, com system_errno zero.
- * @details Entrada redirecionada por pipe ou arquivo continua permitida. A
- * verificação evita que a leitura de stdin suspenda o programa com SIGTTIN.
- */
-static mpmc_result_t check_foreground_stdin(void) {
-    if (!isatty(STDIN_FILENO)) return (mpmc_result_t){.status = MPMC_OK};
-
-    pid_t foreground_group = tcgetpgrp(STDIN_FILENO);
-    if (foreground_group == -1) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
-    }
-    if (foreground_group != getpgrp()) {
-        fprintf(
-            stderr,
-            "mpmc: stdin pertence a um terminal, mas este processo está em background; "
-            "use-o em primeiro plano ou redirecione stdin.\n"
-        );
-        return (mpmc_result_t){.status = MPMC_ERR_SYS};
-    }
-    return (mpmc_result_t){.status = MPMC_OK};
-}
-
-/**
  * @brief Executa uma rodada não bloqueante de manutenção do supervisor.
  * @param supervisor Instância ativa do supervisor.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
@@ -206,9 +175,6 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
     mpmc_result_t result;
 
     if (supervisor == nullptr) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
-
-    result = check_foreground_stdin();
-    if (result.status != MPMC_OK) return result;
 
     termination_requested = 0;
     mpmc_diagnostic_scope_t setup;
