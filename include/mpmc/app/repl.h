@@ -40,17 +40,19 @@
  * - MPMC_OK: loop encerrado por shutdown, EOF, SIGINT ou SIGTERM, sem falha reportada no
  *   encerramento; system_errno é zero.
  * - MPMC_ERR_INVALID_ARG: supervisor nulo; system_errno é zero.
- * - MPMC_ERR_SYS: falha em tcgetpgrp(), sigaction(), poll(), read() ou, por propagação do
+ * - MPMC_ERR_SYS: falha em sigaction(), poll(), read() ou, por propagação do
  *   supervisor, kill() ou waitpid(); system_errno contém o errno capturado na operação que
- *   falhou. O campo é zero para execução em background com stdin no terminal, eventos
- *   POLLERR/POLLNVAL ou falhas internas propagadas pelo supervisor.
+ *   falhou. O campo é zero para eventos POLLERR/POLLNVAL ou falhas internas propagadas.
+ * - MPMC_ERR_STATE: instante de medição inconsistente ou evento IPC inválido propagado
+ *   pelo supervisor; system_errno é zero.
  *
  * Erros recuperáveis de parsing, validação e despacho são apresentados e não se tornam o retorno
  * do REPL. Leituras e poll() interrompidos por EINTR são repetidos.
- * @pre supervisor não é NULL nem foi encerrado/destruído.
+ * @pre supervisor não é nullptr nem foi encerrado/destruído.
  * @post Não ficam comandos pendentes de processamento.
- * @warning Leitura de stdin em programa posto em background pelo shell pode
- * causar suspensão por SIGTTIN com job control ativo.
+ * @note Lançamento em background é permitido. Com stdin no terminal, o controle
+ * de jobs do shell pode suspender a leitura por SIGTTIN; fg retoma o programa.
+ * Com pipe/arquivo, a entrada continua disponível sem disputar o terminal.
  */
 mpmc_result_t repl_run(supervisor_t *supervisor);
 

@@ -14,6 +14,7 @@
 #include <sys/msg.h>
 #include <sys/sem.h>
 #include <sys/shm.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "mpmc/diagnostic.h"
@@ -182,4 +183,14 @@ static void trigger_cancellation(void) {
         (void)sigaction(SIGTERM, &previous, nullptr);
     }
     (void)raise(SIGTERM);
+}
+
+/** @brief Falha de relógio ativada pelo teste apenas depois da conclusão dos workers. */
+int mpmc_probe_clock_gettime(clockid_t clock_id, struct timespec *out) {
+    const char *marker = getenv("MPMC_PROBE_FAIL_CLOCK_MARKER");
+    if (clock_id == CLOCK_MONOTONIC && marker != nullptr && access(marker, F_OK) == 0) {
+        errno = EIO;
+        return -1;
+    }
+    return clock_gettime(clock_id, out);
 }

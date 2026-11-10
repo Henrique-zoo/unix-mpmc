@@ -27,7 +27,7 @@
 ## que deve terminar com erro em vez de ficar pendurado. Ambos usam um vigia em `sh` puro
 ## (run_limited), pois `timeout` não existe no macOS.
 ##
-## A quantidade de estruturas p é validada contra MPMC_MAX_PRODUCERS: o limite é aceito e
+## A quantidade de estruturas p deve ser positiva e representável em size_t;
 ## valores acima dele (inclusive overflow de size_t) são recusados sem iniciar o REPL.
 ##
 ## Para exercitar os casos, execute o script a partir da raiz do repositório,
@@ -40,7 +40,7 @@
 ## - enviar EOF com e sem uma linha final terminada por `\n` e confirmar encerramento ordenado;
 ## - executar com stdin redirecionado para arquivo/pipe; essa fonte não terminal é permitida mesmo
 ##   quando o processo foi iniciado em background pelo shell;
-## - colocar o processo em background mantendo stdin ligado ao terminal e confirmar diagnóstico
+## - controle de jobs em terminal é exercitado separadamente por test_background.py
 ##   imediato, sem suspensão por `SIGTTIN`;
 ## - deixar a entrada ociosa com filhos ativos e verificar que `waitpid(..., WNOHANG)` e o ponto de
 ##   drenagem de eventos do supervisor continuam sendo chamados periodicamente.
@@ -71,40 +71,15 @@ fail_early() {
 	exit 1
 }
 
-# A quantidade de estruturas p vai de 1 a MPMC_MAX_PRODUCERS (include/mpmc/config.h). O limite
-# é aceito nos dois paradigmas; um valor acima dele, inclusive um que estoura size_t, é recusado
-# com erro e sintaxe de uso, e o REPL nem chega a iniciar (nenhum prompt é exibido).
-max_producers=$(sed -n 's/^#define MPMC_MAX_PRODUCERS[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
-	include/mpmc/config.h)
-[ -n "$max_producers" ] || fail_early 'MPMC_MAX_PRODUCERS não encontrado em include/mpmc/config.h'
-
-# No macOS os limites SysV padrão (memória compartilhada: kern.sysv.shmseg=8, shmmni=32; filas
-# de mensagens: dezenas de filas, sem sysctl para consultar ou elevar) ficam muito abaixo de
-# MPMC_MAX_PRODUCERS. Lá, uma falha na criação dos recursos IPC com p no limite é avisada e o caso
-# é ignorado. Em outros sistemas, ou quando o limite é aceito, o caso continua sendo exigido.
-for mode in 1 2; do
-	limit_rc=0
-	printf 'shutdown\n' | "$binary" "$max_producers" "$mode" >"$tmp_dir/limit_out" 2>"$tmp_dir/limit_err" \
-		|| limit_rc=$?
-	if [ "$limit_rc" -ne 0 ] && [ "$(uname -s)" = Darwin ] \
-		&& grep -q 'não foi possível inicializar o supervisor' "$tmp_dir/limit_err"; then
-		echo "aviso: limites SysV do sistema não comportam p = $max_producers no paradigma $mode;" \
-			"caso ignorado" >&2
-		continue
-	fi
-	[ "$limit_rc" -eq 0 ] \
-		|| fail_early "p = $max_producers (limite) deveria ser aceito no paradigma $mode"
-	[ ! -s "$tmp_dir/limit_err" ] || fail_early "p no limite não deveria gerar erro (paradigma $mode)"
-done
-for too_many in "$((max_producers + 1))" "$((max_producers * 2))" 18446744073709551615 \
-	18446744073709551616; do
-	if printf 'shutdown\n' | "$binary" "$too_many" 1 >"$tmp_dir/limit_out" 2>"$tmp_dir/limit_err"; then
-		fail_early "p = $too_many (acima do limite) deveria ser recusado"
-	fi
-	grep -q 'Argumento inválido' "$tmp_dir/limit_err" \
-		|| fail_early "p = $too_many: mensagem de erro ausente"
-	grep -q 'Uso:' "$tmp_dir/limit_err" || fail_early "p = $too_many: sintaxe de uso ausente"
-	[ ! -s "$tmp_dir/limit_out" ] || fail_early "p = $too_many: o REPL não deveria iniciar"
+# p não tem teto fixo: overflow é erro de argumento; indisponibilidade de recursos
+# é erro de inicialização e deve desfazer os objetos criados. Casos p>1024 são
+# verificados na fixture de argumentos, sem exigir milhares de objetos do kernel.
+for too_many in 18446744073709551616 9999999999999999999999999999999999999999; do
+    if printf 'shutdown\n' | "$binary" "$too_many" 1 >"$tmp_dir/limit_out" 2>"$tmp_dir/limit_err"; then
+        fail_early "p = $too_many deveria ser recusado por overflow"
+    fi
+    grep -q 'Uso:' "$tmp_dir/limit_err" || fail_early 'overflow deveria apresentar uso'
+    [ ! -s "$tmp_dir/limit_out" ] || fail_early 'overflow não deveria iniciar o REPL'
 done
 
 # Um comando inválido deve informar o erro e manter o REPL disponível.
