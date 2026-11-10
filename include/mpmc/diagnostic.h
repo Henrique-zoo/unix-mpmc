@@ -2,6 +2,11 @@
  * @file diagnostic.h
  * @brief Diagnósticos síncronos de operações e cleanup, sem alocação dinâmica.
  * @ingroup core
+ * @details Contrato transversal para observar todas as falhas de um fluxo,
+ * complementando o único mpmc_result_t retornado. Camadas inferiores emitem
+ * registros; a aplicação instala a apresentação no pai ou o emissor de pipe no
+ * filho. Este módulo não conhece terminal, REPL nem protocolo de dados IPC.
+ * @see @ref flow_diagnostics para escopos, propriedade e transporte dos registros.
  */
 #ifndef MPMC_DIAGNOSTIC_H
 #define MPMC_DIAGNOSTIC_H

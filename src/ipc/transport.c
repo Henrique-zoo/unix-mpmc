@@ -1,3 +1,12 @@
+/**
+ * @file transport.c
+ * @brief Seleção do backend e aplicação das regras comuns da fachada IPC.
+ * @ingroup ipc
+ * @details Centraliza validação de índices/identidades e os estados locais de
+ * cancelamento e quiescência antes do despacho. Na liberação, agrega falhas dos
+ * backends por escopos de diagnóstico, preservando a interface void.
+ * @see transport.h para os contratos e @ref architecture para as dependências.
+ */
 #include "mpmc/ipc/transport.h"
 
 #include <errno.h>

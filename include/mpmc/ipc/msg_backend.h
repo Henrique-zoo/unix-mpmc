@@ -2,6 +2,14 @@
  * @file msg_backend.h
  * @brief Backend de filas de mensagens e eventos System V.
  * @ingroup backends
+ * @details Implementa a fachada transport.h no modo 2: filas de dados por
+ * estrutura e filas auxiliares de ACK/eventos, usando apenas os wrappers msg.h.
+ * O produtor drena suas confirmações; o consumidor publica ACK e evento de cada
+ * retirada; o supervisor drena eventos e consolida totais no seu estado local.
+ * O fechamento no filho entrega publicações pendentes sem remover filas globais;
+ * a destruição no pai solicita a remoção dos objetos.
+ * @see @ref architecture para responsabilidades e propriedade dos recursos.
+ * @see @ref ipc_wire_formats para envelopes e contrapressão dos canais.
  */
 #ifndef MPMC_IPC_MSG_BACKEND_H
 #define MPMC_IPC_MSG_BACKEND_H

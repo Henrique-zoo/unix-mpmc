@@ -4,6 +4,9 @@
  * @ingroup sysv_primitives
  * @details Identificadores, tipos e limites de fila são validados pelo kernel.
  * O wrapper verifica apenas os argumentos usados por suas cópias/alocações em C.
+ * Monta o envelope exigido por System V e traduz o resultado da chamada; tipos,
+ * correlação de ACK e eventos de consumo são definidos pelo backend MSG.
+ * @see @ref architecture para as responsabilidades de cada camada.
  */
 #ifndef MPMC_IPC_MSG_H
 #define MPMC_IPC_MSG_H

@@ -2,6 +2,11 @@
  * @file error.h
  * @brief Tipos e funções para representação e descrição de resultados.
  * @ingroup core
+ * @details Contrato comum de controle de fluxo: a camada que observa a falha
+ * escolhe o status e captura errno; chamadores preservam o resultado ao propagá-lo.
+ * A formatação devolve texto ao chamador, que decide onde apresentá-lo.
+ * diagnostic.h complementa o retorno com os erros individuais do mesmo fluxo.
+ * @see @ref flow_diagnostics para a relação entre resultados e observadores.
  */
 #ifndef MPMC_ERROR_H
 #define MPMC_ERROR_H

@@ -2,6 +2,7 @@
 /**
  * @file main.c
  * @brief Ponto de entrada e validação dos argumentos de inicialização.
+ * @ingroup application
  *
  * @details
  * Responsável por interpretar os argumentos, validar a configuração,
@@ -12,6 +13,9 @@
  *
  * O parsing de comandos e o ciclo de vida dos processos pertencem aos
  * módulos app/repl e app/supervisor; os backends de IPC são independentes.
+ * Instala a apresentação dos diagnósticos, solicita o relatório final e destrói
+ * o supervisor após o encerramento conduzido pelo REPL.
+ * @see @ref documentation_guide e @ref architecture para a ordem de leitura e o fluxo.
  */
 
 #include <errno.h>

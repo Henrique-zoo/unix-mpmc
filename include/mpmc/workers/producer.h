@@ -2,6 +2,12 @@
  * @file producer.h
  * @brief Lógica de execução de processos produtores.
  * @ingroup workers
+ * @details Recebe um trabalho do ponto de entrada do filho no supervisor,
+ * constrói metadados e roteia envios pela fachada transport.h. Gerencia o
+ * registro/espera/finalização de ACK do trabalho quando solicitado. Devolve
+ * progresso e resultado ao chamador, que fecha o contexto local e os envia ao pai.
+ * @see @ref architecture para o papel do worker e os canais de retorno.
+ * @see @ref ipc_protocol para identidades, striped e confirmação de consumo.
  */
 #ifndef MPMC_WORKERS_PRODUCER_H
 #define MPMC_WORKERS_PRODUCER_H
@@ -90,23 +96,33 @@ mpmc_result_t producer_run_with_result(
  * @brief Produz as mensagens de um trabalho a partir do processo filho.
  * @param transport Contexto IPC herdado via fork(), pronto para envio.
  * @param job Descrição validada e imutável da operação.
- * @return Estrutura mpmc_result_t.
- * @retval MPMC_OK Todas as mensagens foram enviadas e, se solicitado, consumidas.
- * @retval MPMC_ERR_INVALID_ARG transporte/job nulo, quantidade fora de 1..1024,
- * operation_id zero ou ack_mode inválido.
- * @retval MPMC_ERR_INVALID_INDEX producer_id acima da quantidade de estruturas.
- * @retval MPMC_ERR_* Qualquer erro retornado pelas operações ipc_* ou pela
- * construção dos metadados; o status e system_errno do transporte são propagados.
+ * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
+ * - MPMC_OK: todas as mensagens enviadas e, se solicitado, consumidas;
+ *   system_errno é zero.
+ * - MPMC_ERR_INVALID_ARG: transporte/job inválido, quantidade fora de 1..1024,
+ *   identidade ou modo de ACK inválido, com system_errno zero; argumentos
+ *   rejeitados pelo kernel nas operações IPC preservam o errno original.
+ * - MPMC_ERR_INVALID_INDEX: destino acima da quantidade de estruturas, com
+ *   system_errno zero, ou semop() retornou EFBIG, preservado em system_errno.
+ * - MPMC_ERR_STATE: registro/ACK inconsistente propagado pelo transporte;
+ *   system_errno é zero.
+ * - MPMC_ERR_INTERRUPTED: cancelamento local, com system_errno zero, ou espera
+ *   interrompida em semop(), msgsnd(), msgrcv() ou nanosleep(), com EINTR capturado.
+ * - MPMC_ERR_SHUTDOWN: contexto quiescente, com system_errno zero, ou recurso
+ *   removido durante semop(), msgsnd() ou msgrcv(), com EIDRM capturado.
+ * - MPMC_ERR_SYS: falha em clock_gettime(), alocação ou outra falha em semop(),
+ *   msgsnd(), msgrcv() ou nanosleep(); system_errno preserva o errno capturado.
+ *   Overflow no dimensionamento do registro ACK MSG usa system_errno zero.
  * @details Gera sender_pid=getpid(), sequência iniciando em 1 e sent_at
  * do CLOCK_REALTIME. Usa ipc_send() para o destino selecionado; para
  * producer_id=0, alterna destinos `1 + ((seq-1) % p)`. Na opção ack=1,
  * executa begin antes dos envios, wait após todos os envios e end em qualquer
  * saída posterior a begin; na opção ack=2, não solicita confirmação.
  * @pre Deve ser chamada em um filho do supervisor, não no processo principal.
- * @post O resultado não é entregue por heap: o supervisor o conhece pelo estado de
- * término do filho (ver transport.h). producer_run() não chama ipc_worker_close() nem
- * ipc_destroy(); o ponto de entrada do filho chama ipc_worker_close() uma única vez,
- * qualquer que seja o resultado, e então encerra o processo.
+ * @post Não fecha o contexto nem remove objetos globais. O ponto de entrada do
+ * filho usa producer_run_with_result() para obter também o progresso, chama
+ * ipc_worker_close() uma única vez e envia o resultado estruturado ao pai pelo pipe.
+ * O supervisor recolhe separadamente o estado de término com waitpid().
  * @warning Envio pode bloquear por esgotamento de capacidade mesmo com ack=2.
  */
 mpmc_result_t producer_run(ipc_context_t *transport, const producer_job_t *job);

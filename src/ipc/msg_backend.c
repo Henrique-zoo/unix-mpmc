@@ -1,3 +1,13 @@
+/**
+ * @file msg_backend.c
+ * @brief Implementação de dados, ACK e eventos por filas System V.
+ * @ingroup backends
+ * @details Registros ACK, eventos adiados e contadores são locais ao processo.
+ * Dados e controle atravessam filas distintas; o pai consolida os eventos.
+ * O laço de envio com ACK drena confirmações para evitar espera circular, e o
+ * fechamento no filho entrega publicações que não couberam nas filas sem espera.
+ * @see msg_backend.h para os contratos e @ref ipc_wire_formats para o protocolo.
+ */
 #include "mpmc/ipc/msg_backend.h"
 
 #include <errno.h>

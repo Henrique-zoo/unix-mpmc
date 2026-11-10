@@ -2,6 +2,10 @@
 
 @tableofcontents
 
+Leia primeiro a [arquitetura](architecture.md) para identificar os participantes
+do fluxo. O [guia de leitura](reading_guide.md) indica os contratos e a sequência dos
+demais documentos. Esta página detalha a comunicação realizada pelos backends.
+
 ## Objetivos de correção
 
 Os dois paradigmas devem apresentar as mesmas semânticas observáveis:
@@ -273,18 +277,18 @@ anteriores à alteração do buffer. Ver @ref shm_operation_failures.
 Cabe ao chamador suspender todas as operações de dados e estatísticas do contexto,
 propagar a falha ao supervisor e encaminhar o encerramento coordenado. Não há
 marca de inutilização, bloqueio automático de novas chamadas ou notificação de
-outros processos pelo backend. A integração dessa reação pertence à #20: cada
-filho fecha somente seu estado local, e o supervisor encerra e recolhe todos os
-filhos antes da remoção dos recursos globais.
+outros processos pelo backend. Na aplicação, o filho transmite o diagnóstico ao
+pai pelo seu pipe. O supervisor observa a falha fatal, impede novos trabalhos e
+encaminha o shutdown. Cada filho fecha somente seu estado local, e o supervisor
+encerra e recolhe todos os filhos antes da remoção dos recursos globais.
 
-A implementação não mascara `SIGTERM`/`SIGINT` entre aquisição e publicação. A
-atomicidade de cada vetor não protege todo esse intervalo contra término de
-processo. No shutdown global, as reservas restantes são descartadas junto com o
-contexto; não é necessário restaurá-las para reutilização. Término de um worker
-nesse intervalo também exige descartar o contexto. Cancelamento isolado com
-preservação do contexto exigiria outro protocolo e está fora do contrato da #10.
-Simplesmente bloquear os sinais antes de um `semop()` bloqueante pode impedir que
-SIGTERM cancele a espera.
+Workers reais não mascaram `SIGTERM`/`SIGINT` entre aquisição e publicação; seus
+tratadores apenas solicitam cancelamento e deixam a publicação iniciada concluir.
+A atomicidade de cada vetor não protege todo o intervalo contra morte forçada.
+No shutdown global, reservas restantes são descartadas junto com o contexto;
+não são restauradas para reutilização. Recuperar um contexto após morte
+arbitrária do worker não é uma garantia do projeto. Simplesmente bloquear os
+sinais antes de um `semop()` bloqueante impediria o cancelamento dessa espera.
 
 **ACK por operação (`ack=1`).**
 
@@ -446,18 +450,23 @@ as filas de dados e de controle e libera a memória, mesmo que uma remoção fal
 os filhos, e faz uma drenagem final antes de ler `ipc_consumed_count()`. Assim, um consumidor
 bloqueado em `Q_evt` cheia é liberado pela drenagem e nenhum evento enfileirado é perdido.
 
-**Limite conhecido, janela entre retirada e evento.** O kernel não oferece "receber e
-publicar" atômico. Se um `SIGTERM` terminar o consumidor entre o retorno de `msgrcv` e o
-envio do evento, essa mensagem foi retirada mas não contada. A janela é de poucas
-instruções e só se abre durante o `shutdown` ou numa morte anormal; o relatório de
-consumo por estrutura pode então ficar uma unidade abaixo do real nesse caso.
+**Limite conhecido, janela entre retirada e publicação.** O kernel não oferece
+"receber e publicar" atômico entre filas. Workers reais tratam SIGTERM/SIGINT como
+cancelamento cooperativo: uma retirada iniciada termina as publicações devidas e
+o fechamento entrega ACKs/eventos adiados. Se o consumidor morrer por SIGKILL ou
+outra morte anormal antes dessa entrega, a mensagem pode ter sido retirada sem
+que seu ACK/evento chegue ao destinatário. O relatório por estrutura pode então
+subcontar retiradas, incluindo as que ficaram acumuladas no estado local do filho.
 
 ### Resultado de um trabalho
 
 Um worker devolve `mpmc_result_t`; o primeiro erro do trabalho prevalece sobre falhas de
-liberação, e `ipc_ack_end` roda sempre que `ipc_ack_begin` retornou `MPMC_OK`. O supervisor
-conhece o desfecho pelo estado de término do filho (código zero só em sucesso completo) e
-os totais por estrutura por `ipc_poll_events`/`ipc_consumed_count`. Um erro de
+liberação, e `ipc_ack_end` roda sempre que `ipc_ack_begin` retornou `MPMC_OK`.
+O ponto de entrada do filho obtém também o progresso, fecha o contexto local e
+publica o resultado final em seu pipe. O supervisor drena esse canal e apresenta
+o resultado por trabalho; waitpid() informa separadamente o estado de término
+(código zero só em sucesso completo). Totais por estrutura vêm de
+`ipc_poll_events`/`ipc_consumed_count`. Um erro de
 `ipc_receive` depois da retirada (`MPMC_ERR_STATE`, `MPMC_ERR_SYS`) não conta como consumo
 do trabalho. Os retornos por função estão em `transport.h`.
 
@@ -471,10 +480,10 @@ do trabalho. Os retornos por função estão em `transport.h`.
 | Exclusão mútua | `mutex` do conjunto `M_i` | Fornecida pelo kernel |
 | Contagem de consumo | `consumed_total` sob `mutex`, junto da retirada | Evento em `Q_evt`, consolidado pelo supervisor |
 | Canal de ACK | Tabela em `C` e contadores no conjunto `K` | `Q_ack`, com `mtype = operation_id` |
-| Limite de ACK | 64 operações com ACK simultâneas | Capacidade de `Q_ack`, com drenagem pelo produtor |
+| Limite de ACK | 64 registros ativos; novos produtores aguardam vaga sem mutex | Capacidade de `Q_ack`, com drenagem pelo produtor |
 | Espera pelo ACK | `semop(−1)` na notificação final | `msgrcv` por tipo |
 | Garantia contra deadlock de ACK | `V` nunca bloqueia | Produtor `ack=1` sempre drena antes de esperar |
-| Janela retirada→contagem | Nenhuma (mesma seção crítica) | Poucas instruções, só em término forçado |
+| Janela retirada→contagem | Nenhuma (mesma seção crítica) | Entre retirada e entrega do evento, inclusive eventos adiados; protegida no cancelamento cooperativo, não na morte forçada |
 
 ### Cancelamento e sinais
 
@@ -486,13 +495,13 @@ do trabalho. Os retornos por função estão em `transport.h`.
   `MPMC_ERR_INVALID_ARG`. Em ambos os casos a espera termina de imediato, `ack_end` roda e
   o produtor sai com falha; quem interpreta o resultado deve tratar as duas classes como
   encerramento quando o supervisor já removeu as filas (`test_msg_ack_lifecycle`).
-- No modo 1, os vetores de aquisição/publicação são atômicos individualmente, mas
-  SIGTERM/SIGINT não são mascarados no intervalo entre eles. Término de processo
-  nesse intervalo exige descartar o contexto por encerramento coordenado; não há
-  garantia de cancelamento isolado com preservação do contexto na #10.
+- Nos workers reais, SIGTERM/SIGINT apenas solicitam cancelamento. Novas operações
+  são recusadas; publicações já iniciadas e fechamento continuam disponíveis.
+  No modo 1, os vetores de aquisição/publicação são atômicos individualmente;
+  morte forçada entre eles exige descartar o contexto por encerramento coordenado.
 - Falhas fatais de IPC exigem interromper o uso de dados e estatísticas do contexto.
-  Sua comunicação ao supervisor e o encaminhamento do shutdown são integração da #20;
-  a propagação do erro pelo backend não executa esse encerramento automaticamente.
+  O backend as diagnostica, o filho transmite o registro pelo pipe e o supervisor
+  encaminha o shutdown; o backend não coordena outros processos diretamente.
 - O supervisor remove os recursos (`IPC_RMID`) somente depois de recolher todos os filhos.
 
 ## Semáforos e invariantes da memória compartilhada
@@ -607,12 +616,13 @@ A remoção de um segmento/filas não é substituto geral para supervisão dos f
 O `waitpid()` deve ser usado para recolher processos. `IPC_RMID` é responsabilidade
 única do supervisor.
 
-## Requisitos versus decisões propostas
+## Requisitos versus decisões de implementação
 
 A obrigatoriedade de `shm + sem`, `msg`, tamanho de 2048 bytes, comandos, flags e
 informações da mensagem vem do enunciado. Buffer circular, identificador de operação,
 formato do ACK, organização em backends e filas auxiliares de controle são **decisões
-arquiteturais do projeto**, fixadas em @ref ipc_wire_formats e a revisar durante os testes
-de concorrência. Os limites que elas introduzem (63 entradas por segmento, 64 operações
-com ACK simultâneas no modo 1, ACKs órfãos e a janela de contagem no modo 2) estão
+arquiteturais do projeto**, fixadas em @ref ipc_wire_formats e verificadas pelas
+suítes descritas em [Testes](testing.md). Os limites de capacidade e as políticas
+de contrapressão (63 entradas por segmento, espera por um dos 64 registros ACK
+no modo 1, tratamento de ACKs órfãos e janela de publicação no modo 2) estão
 declarados ali e não vêm do enunciado.

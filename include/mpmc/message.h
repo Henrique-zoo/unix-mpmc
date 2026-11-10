@@ -2,6 +2,10 @@
  * @file message.h
  * @brief Mensagem lógica compartilhada entre os paradigmas de IPC.
  * @ingroup core
+ * @details O produtor preenche os metadados; transporte e backends preservam
+ * seu conteúdo até a retirada. O índice lógico é passado à API separadamente,
+ * e envelopes de filas e controle de ACK não pertencem a este modelo.
+ * @see @ref ipc_protocol para identidades, representação física e correlação.
  */
 #ifndef MPMC_MESSAGE_H
 #define MPMC_MESSAGE_H
