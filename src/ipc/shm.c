@@ -38,7 +38,7 @@ mpmc_result_t sysv_shm_create(size_t size, int *out_shmid) {
 
 /**
  * @details O teste de falha de shmat() compara o endereço com `(void *) -1`;
- * NULL não é o sentinela de erro dessa chamada.
+ * nullptr não é o sentinela de erro dessa chamada.
  */
 mpmc_result_t sysv_shm_attach(int shmid, void **out_addr) {
     mpmc_diagnostic_scope_t diagnostic_scope;
@@ -74,7 +74,7 @@ mpmc_result_t sysv_shm_detach(const void *address) {
 }
 
 /**
- * @details O terceiro argumento de shmctl() é NULL porque IPC_RMID dispensa um
+ * @details O terceiro argumento de shmctl() é nullptr porque IPC_RMID dispensa um
  * buffer struct shmid_ds. O identificador é validado pela própria chamada.
  */
 mpmc_result_t sysv_shm_remove(int shmid) {

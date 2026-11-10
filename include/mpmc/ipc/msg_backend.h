@@ -25,7 +25,7 @@ typedef struct msg_backend msg_backend_t;
 
 /**
  * @brief Cria filas de mensagens para os índices 1..p.
- * @param out Recebe a instância criada; NULL em qualquer falha.
+ * @param out Recebe a instância criada; nullptr em qualquer falha.
  * @param producer_count Quantidade positiva de filas de dados.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: p filas de dados, uma fila de eventos e uma fila de ACK criadas;
@@ -267,7 +267,7 @@ void msg_backend_worker_close(msg_backend_t *backend);
 
 /**
  * @brief Remove todas as filas globais de dados e controle do supervisor.
- * @param backend Backend pertencente ao pai; NULL é aceito.
+ * @param backend Backend pertencente ao pai; nullptr é aceito.
  * @pre Todos os processos filhos foram recolhidos e eventos já drenados.
  * @details Chama msgctl(IPC_RMID) para todos os identificadores válidos
  * criados na inicialização e libera memória alocada para a instância.

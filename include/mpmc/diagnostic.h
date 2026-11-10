@@ -60,7 +60,11 @@ typedef struct {
  */
 void mpmc_diagnostic_set_reporter(const mpmc_reporter_t *reporter);
 
-/** @brief Desvincula escopos herdados do pai, antes de iniciar o fluxo do filho. */
+/**
+ * @brief Desvincula escopos herdados do pai, antes de iniciar o fluxo do filho.
+ * @param operation_id Identidade do trabalho executado pelo filho.
+ * @param producer_id Estrutura lógica, ou zero para striped.
+ */
 void mpmc_diagnostic_after_fork(uint64_t operation_id, size_t producer_id);
 
 /**
@@ -78,7 +82,13 @@ typedef struct mpmc_diagnostic_scope {
     int resource_id;                      /**< Recurso específico ou -1. */
 } mpmc_diagnostic_scope_t;
 
-/** @brief Inicia um escopo; cleanup é herdado dos chamadores. */
+/**
+ * @brief Inicia um escopo; cleanup é herdado dos chamadores.
+ * @param scope Objeto automático a finalizar exatamente uma vez por end().
+ * @param function Nome estático da chamada, válido até finalizar o escopo.
+ * @param cleanup Marca finalização, rollback ou liberação.
+ * @param primitive Indica wrapper cujo EINTR pode ser repetido pelo chamador.
+ */
 void mpmc_diagnostic_begin(
     mpmc_diagnostic_scope_t *scope,
     const char *function,
@@ -97,10 +107,18 @@ void mpmc_diagnostic_begin(
  */
 mpmc_result_t mpmc_diagnostic_end(mpmc_diagnostic_scope_t *scope, mpmc_result_t result);
 
-/** @brief Registra uma falha individual na etapa do escopo atual; preserva errno. */
+/**
+ * @brief Registra uma falha individual na etapa do escopo atual; preserva errno.
+ * @param operation Operação que originou o resultado, copiada para o registro.
+ * @param result Resultado capturado; OK e WOULD_BLOCK não emitem diagnóstico.
+ */
 void mpmc_diagnostic_report(const char *operation, mpmc_result_t result);
 
-/** @brief Registra a causa antes do rollback, se ela ainda não foi comunicada. */
+/**
+ * @brief Registra a causa antes do rollback, se ela ainda não foi comunicada.
+ * @param operation Nome da operação que falhou.
+ * @param result Resultado original, com sua causa de sistema quando aplicável.
+ */
 void mpmc_diagnostic_cause(const char *operation, mpmc_result_t result);
 
 /**
@@ -109,7 +127,10 @@ void mpmc_diagnostic_cause(const char *operation, mpmc_result_t result);
  */
 void mpmc_diagnostic_deliver(const mpmc_diagnostic_t *error);
 
-/** @brief Indica se existe observador instalado nesta thread. */
+/**
+ * @brief Indica se existe observador instalado nesta thread.
+ * @return true quando a configuração contém callback não nula.
+ */
 bool mpmc_diagnostic_enabled(void);
 
 /**
@@ -121,7 +142,10 @@ bool mpmc_diagnostic_enabled(void);
  */
 void mpmc_diagnostic_observe(const char *operation, mpmc_result_t result, uint64_t before);
 
-/** @brief Quantidade de diagnósticos emitidos ou recebidos nesta thread. */
+/**
+ * @brief Quantidade de diagnósticos emitidos ou recebidos nesta thread.
+ * @return Contador desde o início ou a última chamada de after_fork().
+ */
 uint64_t mpmc_diagnostic_count(void);
 
 #endif
