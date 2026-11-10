@@ -26,7 +26,7 @@ static mpmc_result_t shm_backend_cleanup(
 
 /**
  * @details Aloca o estado com malloc() e o vetor de segmentos com calloc().
- * Prepara cada entrada visitada com identificadores -1 e mapeamento NULL antes
+ * Prepara cada entrada visitada com identificadores -1 e mapeamento nullptr antes
  * de criar seus recursos, distinguindo ausência de recurso do identificador zero.
  *
  * Cada entrada recebe um segmento de 2048 bytes por sysv_shm_create() e uma
@@ -248,7 +248,7 @@ static void record_cleanup_error(
  *
  * Sempre libera o vetor e a instância, sem alocar memória para os diagnósticos.
  * A auxiliar aceita vetor nulo. Os chamadores garantem que backend é não nulo:
- * os pontos públicos tratam NULL antecipadamente, e create() só delega após alocá-lo.
+ * os pontos públicos tratam nullptr antecipadamente, e create() só delega após alocá-lo.
  */
 static mpmc_result_t shm_backend_cleanup(
     shm_backend_t *backend,

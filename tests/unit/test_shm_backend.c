@@ -221,12 +221,6 @@ mpmc_result_t mpmc_test_sem_remove(int semid) {
     return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG, .system_errno = EINVAL};
 }
 
-/**
- * @brief Registra um ponteiro alocado para detectar vazamentos e liberações duplicadas.
- * @param pointer Ponteiro obtido de malloc()/calloc(); NULL é ignorado.
- * @details Ocupa a primeira posição livre e incrementa live_allocations. Registra
- * falha se não houver espaço para rastrear um ponteiro não nulo.
- */
 /*
  * Recursos ACK são simulados nesta suíte de ciclo de vida. Os testes específicos
  * de ACK usam os wrappers System V reais em uma suíte separada.
@@ -242,6 +236,12 @@ mpmc_result_t mpmc_test_ack_resources_cleanup(shm_backend_t *backend, bool remov
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
+/**
+ * @brief Registra um ponteiro alocado para detectar vazamentos e liberações duplicadas.
+ * @param pointer Ponteiro obtido de malloc()/calloc(); NULL é ignorado.
+ * @details Ocupa a primeira posição livre e incrementa live_allocations. Registra
+ * falha se não houver espaço para rastrear um ponteiro não nulo.
+ */
 static void track_allocation(void *pointer) {
     if (pointer == nullptr) return;
     for (size_t i = 0; i < MAX_SEGMENTS; ++i) {

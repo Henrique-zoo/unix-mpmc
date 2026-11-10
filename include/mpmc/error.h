@@ -128,7 +128,7 @@ typedef struct {
  *
  * @param status Código a descrever, inclusive valores inesperados.
  *
- * @return Ponteiro para uma string constante e estática, nunca NULL.
+ * @return Ponteiro para uma string constante e estática, nunca nullptr.
  *
  * @par Concorrência
  * Pode ser chamada concorrentemente e não modifica estado global.
@@ -161,7 +161,7 @@ const char *mpmc_status_str(mpmc_status_t status);
  *
  * @param error Resultado a ser descrito.
  * @param[out] buffer Buffer que receberá a mensagem formatada.
- *                    Pode ser NULL somente quando capacity for zero.
+ *                    Pode ser nullptr somente quando capacity for zero.
  * @param capacity Capacidade total do buffer, em bytes, incluindo
  *                 o espaço necessário ao terminador nulo.
  *
@@ -182,7 +182,7 @@ const char *mpmc_status_str(mpmc_status_t status);
  * não coube integralmente no buffer.
  *
  * A capacidade necessária pode ser consultada chamando a função
- * com buffer igual a NULL e capacity igual a zero.
+ * com buffer igual a nullptr e capacity igual a zero.
  *
  * @par Origem das informações
  * A função utiliza exclusivamente os campos de error para determinar
