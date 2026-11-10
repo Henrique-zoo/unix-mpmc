@@ -102,7 +102,7 @@ static void test_arguments(void) {
     CHECK_RESULT(sysv_sem_create(UINT_MAX, &sentinel), MPMC_ERR_INVALID_ARG, 0);
     CHECK(sentinel == -123);
 
-    CHECK_RESULT(sysv_sem_create(1, NULL), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(sysv_sem_create(1, nullptr), MPMC_ERR_INVALID_ARG, 0);
     CHECK_RESULT(sysv_sem_set(-1, 0, 0), MPMC_ERR_INVALID_ARG, EINVAL);
     CHECK_RESULT(sysv_sem_change(-1, 0, -1, true), MPMC_ERR_INVALID_ARG, EINVAL);
     CHECK_RESULT(sysv_sem_remove(-1), MPMC_ERR_INVALID_ARG, EINVAL);
@@ -118,7 +118,7 @@ static void test_atomic_apply(void) {
     };
 
     CHECK_RESULT(sysv_sem_apply(owned_semid, operations, 0), MPMC_ERR_INVALID_ARG, EINVAL);
-    CHECK_RESULT(sysv_sem_apply(owned_semid, NULL, 1), MPMC_ERR_INVALID_ARG, EFAULT);
+    CHECK_RESULT(sysv_sem_apply(owned_semid, nullptr, 1), MPMC_ERR_INVALID_ARG, EFAULT);
     CHECK_RESULT(sysv_sem_apply(owned_semid, operations, 2), MPMC_ERR_WOULD_BLOCK, EAGAIN);
     CHECK(semctl(owned_semid, 0, GETVAL) == 1);
     CHECK(semctl(owned_semid, 1, GETVAL) == 0);
@@ -211,7 +211,7 @@ static void test_interruption(void) {
 
     CHECK(result.status == MPMC_ERR_INTERRUPTED);
     CHECK(result.system_errno == EINTR);
-    CHECK(sigaction(SIGALRM, &previous, NULL) == 0);
+    CHECK(sigaction(SIGALRM, &previous, nullptr) == 0);
 }
 
 /** @brief Verifica erros sem depender da temporização entre processos. */
@@ -241,7 +241,7 @@ static void test_injected_errors(void) {
 
     /* A própria chamada decide a precedência entre múltiplos argumentos inválidos. */
     injected_semop_errno = EACCES;
-    CHECK_RESULT(sysv_sem_apply(-1, NULL, 0), MPMC_ERR_SYS, EACCES);
+    CHECK_RESULT(sysv_sem_apply(-1, nullptr, 0), MPMC_ERR_SYS, EACCES);
     injected_semop_errno = 0;
 }
 

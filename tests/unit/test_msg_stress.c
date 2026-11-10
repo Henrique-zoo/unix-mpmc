@@ -91,7 +91,7 @@ static void on_alarm(int signal_number) {
 
 /** @brief Estrutura de destino da mensagem i do produtor k (0-based), em 1..p. */
 static unsigned destination(unsigned k, unsigned i, size_t p) {
-    return 1U + (unsigned)((k + i) % p);
+    return 1 + (unsigned)((k + i) % p);
 }
 
 /** @brief Cria uma mensagem com identidade (operation_id, sequence) e metadados fixos. */
@@ -99,7 +99,7 @@ static message_t make_message(uint64_t operation_id, uint32_t sequence) {
     message_t message = {
         .sender_pid = getpid(),
         .sequence = sequence,
-        .sent_at = {.tv_sec = (time_t)(1000U + operation_id), .tv_nsec = (long)sequence},
+        .sent_at = {.tv_sec = (time_t)(1000 + operation_id), .tv_nsec = (long)sequence},
         .operation_id = operation_id,
     };
     return message;
@@ -142,7 +142,7 @@ static void producer_child(
     (void)signal(SIGALRM, SIG_DFL);
     (void)alarm(CHILD_TIMEOUT);
     for (unsigned i = 0; i < MESSAGES_PER_PRODUCER; ++i) {
-        message_t message = make_message(base + k + 1U, i + 1U);
+        message_t message = make_message(base + k + 1, i + 1);
         if (msg_backend_send(backend, destination(k, i, p), &message).status != MPMC_OK) _exit(2);
     }
     msg_backend_worker_close(backend);
@@ -199,27 +199,27 @@ static void abandon_round(msg_backend_t *backend) {
 /** @brief Verifica que o backend rejeita, sem inventar retornos, índices e ponteiros inválidos. */
 static void test_invalid_arguments(void) {
     msg_backend_t *backend = (msg_backend_t *)&backend;
-    CHECK(msg_backend_create(NULL, 1U).status == MPMC_ERR_INVALID_ARG);
-    CHECK(msg_backend_create(&backend, 0U).status == MPMC_ERR_INVALID_ARG);
-    CHECK(backend == NULL);
+    CHECK(msg_backend_create(nullptr, 1).status == MPMC_ERR_INVALID_ARG);
+    CHECK(msg_backend_create(&backend, 0).status == MPMC_ERR_INVALID_ARG);
+    CHECK(backend == nullptr);
 
-    CHECK(msg_backend_create(&backend, 1U).status == MPMC_OK && backend != NULL);
-    if (backend == NULL) return;
-    message_t message = make_message(1U, 1U);
+    CHECK(msg_backend_create(&backend, 1).status == MPMC_OK && backend != nullptr);
+    if (backend == nullptr) return;
+    message_t message = make_message(1, 1);
     message_t out;
-    uint64_t count = 77U;
-    CHECK(msg_backend_send(backend, 0U, &message).status == MPMC_ERR_INVALID_ARG);
-    CHECK(msg_backend_send(backend, 2U, &message).status == MPMC_ERR_INVALID_ARG);
-    CHECK(msg_backend_send(backend, 1U, NULL).status == MPMC_ERR_INVALID_ARG);
-    CHECK(msg_backend_receive(backend, 0U, &out, false).status == MPMC_ERR_INVALID_ARG);
-    CHECK(msg_backend_receive(backend, 2U, &out, false).status == MPMC_ERR_INVALID_ARG);
-    CHECK(msg_backend_receive(backend, 1U, NULL, false).status == MPMC_ERR_INVALID_ARG);
-    CHECK(msg_backend_consumed_count(backend, 0U, &count).status == MPMC_ERR_INVALID_ARG);
-    CHECK(msg_backend_consumed_count(backend, 2U, &count).status == MPMC_ERR_INVALID_ARG);
-    CHECK(msg_backend_consumed_count(backend, 1U, NULL).status == MPMC_ERR_INVALID_ARG);
-    CHECK(count == 77U);
+    uint64_t count = 77;
+    CHECK(msg_backend_send(backend, 0, &message).status == MPMC_ERR_INVALID_ARG);
+    CHECK(msg_backend_send(backend, 2, &message).status == MPMC_ERR_INVALID_ARG);
+    CHECK(msg_backend_send(backend, 1, nullptr).status == MPMC_ERR_INVALID_ARG);
+    CHECK(msg_backend_receive(backend, 0, &out, false).status == MPMC_ERR_INVALID_ARG);
+    CHECK(msg_backend_receive(backend, 2, &out, false).status == MPMC_ERR_INVALID_ARG);
+    CHECK(msg_backend_receive(backend, 1, nullptr, false).status == MPMC_ERR_INVALID_ARG);
+    CHECK(msg_backend_consumed_count(backend, 0, &count).status == MPMC_ERR_INVALID_ARG);
+    CHECK(msg_backend_consumed_count(backend, 2, &count).status == MPMC_ERR_INVALID_ARG);
+    CHECK(msg_backend_consumed_count(backend, 1, nullptr).status == MPMC_ERR_INVALID_ARG);
+    CHECK(count == 77);
     /* Recepção não bloqueante em estrutura vazia responde sem esperar itens futuros. */
-    CHECK(msg_backend_receive(backend, 1U, &out, false).status == MPMC_ERR_WOULD_BLOCK);
+    CHECK(msg_backend_receive(backend, 1, &out, false).status == MPMC_ERR_WOULD_BLOCK);
     msg_backend_destroy(backend);
 }
 
@@ -241,9 +241,9 @@ static int wait_for_signal(pid_t pid) {
  * que criou.
  */
 static void test_timeout_detection(void) {
-    msg_backend_t *backend = NULL;
-    CHECK(msg_backend_create(&backend, 1U).status == MPMC_OK && backend != NULL);
-    if (backend == NULL) return;
+    msg_backend_t *backend = nullptr;
+    CHECK(msg_backend_create(&backend, 1).status == MPMC_OK && backend != nullptr);
+    if (backend == nullptr) return;
     int queue_id = backend->data_queues[0];
     struct msqid_ds info;
 
@@ -252,8 +252,8 @@ static void test_timeout_detection(void) {
     if (pid == 0) {
         message_t out;
         (void)signal(SIGALRM, SIG_DFL);
-        (void)alarm(1U);
-        (void)msg_backend_receive(backend, 1U, &out, true);
+        (void)alarm(1);
+        (void)msg_backend_receive(backend, 1, &out, true);
         _exit(0); /* só alcançado se o bloqueio não ocorrer */
     }
     CHECK(pid > 0);
@@ -269,20 +269,20 @@ static void test_timeout_detection(void) {
         message_t out;
         (void)signal(SIGALRM, SIG_DFL);
         (void)alarm(CHILD_TIMEOUT); /* reserva: se o tratador do pai falhar, o resultado difere */
-        (void)msg_backend_receive(backend, 1U, &out, true);
+        (void)msg_backend_receive(backend, 1, &out, true);
         _exit(0);
     }
     CHECK(pid > 0);
     children[0] = pid;
-    (void)alarm(1U);
+    (void)alarm(1);
     CHECK(wait_for_signal(pid) == SIGKILL);
     CHECK(alarm_seen);
     children[0] = 0;
     (void)alarm(0);
 
     errno = 0;
-    CHECK(waitpid(-1, NULL, WNOHANG) < 0 && errno == ECHILD); /* sem zumbis */
-    CHECK(msgctl(queue_id, IPC_STAT, &info) == 0 && info.msg_qnum == 0U);
+    CHECK(waitpid(-1, nullptr, WNOHANG) < 0 && errno == ECHILD); /* sem zumbis */
+    CHECK(msgctl(queue_id, IPC_STAT, &info) == 0 && info.msg_qnum == 0);
     msg_backend_destroy(backend);
     CHECK(msgctl(queue_id, IPC_STAT, &info) < 0); /* a fila do teste foi removida */
     alarm_seen = 0;
@@ -290,21 +290,21 @@ static void test_timeout_detection(void) {
 
 /** @brief Executa uma rodada completa com p estruturas. */
 static void run_round(unsigned round, size_t p) {
-    const uint64_t base = (uint64_t)round * 100U;
-    const unsigned consumers = (unsigned)(2U * p);
-    static unsigned seen[PRODUCERS + 1U][MAX_SEQ + 1U];
-    static uint32_t last[MAX_CONSUMERS][PRODUCERS + 1U];
-    static unsigned prefill_structure[MAX_SEQ + 1U];
+    const uint64_t base = (uint64_t)round * 100;
+    const unsigned consumers = (unsigned)(2 * p);
+    static unsigned seen[PRODUCERS + 1][MAX_SEQ + 1];
+    static uint32_t last[MAX_CONSUMERS][PRODUCERS + 1];
+    static unsigned prefill_structure[MAX_SEQ + 1];
     memset(seen, 0, sizeof seen);
     memset(last, 0, sizeof last);
     memset(prefill_structure, 0, sizeof prefill_structure);
     alarm_seen = 0;
     (void)alarm(ROUND_TIMEOUT);
 
-    msg_backend_t *backend = NULL;
+    msg_backend_t *backend = nullptr;
     mpmc_result_t created = msg_backend_create(&backend, p);
-    CHECK(created.status == MPMC_OK && backend != NULL);
-    if (created.status != MPMC_OK || backend == NULL) return;
+    CHECK(created.status == MPMC_OK && backend != nullptr);
+    if (created.status != MPMC_OK || backend == nullptr) return;
 
     int queue_ids[MAX_STRUCTURES];
     for (size_t j = 0; j < p; ++j) queue_ids[j] = backend->data_queues[j];
@@ -312,8 +312,8 @@ static void run_round(unsigned round, size_t p) {
 
     /* O pai enche cada fila antes de criar filhos, de forma que a primeira operação de cada
      * produtor encontra a fila cheia, sem depender de tempo. O limite vem do kernel. */
-    unsigned prefilled[MAX_STRUCTURES + 1U] = {0};
-    unsigned next_seq = 1U;
+    unsigned prefilled[MAX_STRUCTURES + 1] = {};
+    unsigned next_seq = 1;
     for (unsigned j = 1; j <= p; ++j) {
         for (;;) {
             if (next_seq > MAX_SEQ) {
@@ -322,8 +322,7 @@ static void run_round(unsigned round, size_t p) {
                 return;
             }
             message_t message = make_message(base, next_seq);
-            mpmc_result_t sent =
-                sysv_msg_send(queue_ids[j - 1U], 1, &message, sizeof message, true);
+            mpmc_result_t sent = sysv_msg_send(queue_ids[j - 1], 1, &message, sizeof message, true);
             if (sent.status == MPMC_ERR_WOULD_BLOCK) break;
             if (sent.status != MPMC_OK) {
                 CHECK(false);
@@ -334,12 +333,12 @@ static void run_round(unsigned round, size_t p) {
             ++prefilled[j];
         }
         struct msqid_ds info;
-        CHECK(prefilled[j] > 0U);
-        CHECK(msgctl(queue_ids[j - 1U], IPC_STAT, &info) == 0);
+        CHECK(prefilled[j] > 0);
+        CHECK(msgctl(queue_ids[j - 1], IPC_STAT, &info) == 0);
         CHECK(info.msg_qnum == prefilled[j]);
     }
 
-    unsigned total[MAX_STRUCTURES + 1U];
+    unsigned total[MAX_STRUCTURES + 1];
     for (unsigned j = 1; j <= p; ++j) total[j] = prefilled[j];
     for (unsigned k = 0; k < PRODUCERS; ++k) {
         for (unsigned i = 0; i < MESSAGES_PER_PRODUCER; ++i) ++total[destination(k, i, p)];
@@ -358,8 +357,8 @@ static void run_round(unsigned round, size_t p) {
             children[slot++] = pid;
     }
     for (unsigned c = 0; c < consumers && spawned; ++c) {
-        unsigned structure = 1U + c % (unsigned)p;
-        unsigned quota = total[structure] / 2U + (c < p ? total[structure] % 2U : 0U);
+        unsigned structure = 1 + c % (unsigned)p;
+        unsigned quota = total[structure] / 2 + (c < p ? total[structure] % 2 : 0);
         pid_t pid = fork();
         if (pid == 0) consumer_child(backend, c, structure, quota, fds[0], fds[1]);
         if (pid < 0)
@@ -370,8 +369,8 @@ static void run_round(unsigned round, size_t p) {
     (void)close(fds[1]);
     CHECK(spawned);
 
-    pid_t producer_pid[PRODUCERS + 1U] = {getpid()};
-    for (unsigned k = 0; k < PRODUCERS; ++k) producer_pid[k + 1U] = children[k];
+    pid_t producer_pid[PRODUCERS + 1] = {getpid()};
+    for (unsigned k = 0; k < PRODUCERS; ++k) producer_pid[k + 1] = children[k];
 
     unsigned received = 0, expected_total = 0;
     for (unsigned j = 1; j <= p; ++j) expected_total += total[j];
@@ -391,18 +390,18 @@ static void run_round(unsigned round, size_t p) {
         ++received;
         uint64_t op = record.message.operation_id - base;
         uint32_t seq = record.message.sequence;
-        bool valid = record.message.operation_id >= base && op <= PRODUCERS && seq >= 1U
+        bool valid = record.message.operation_id >= base && op <= PRODUCERS && seq >= 1
             && seq <= MAX_SEQ && record.consumer < consumers;
         CHECK(valid);
         if (!valid) continue;
         unsigned dest =
-            op == 0 ? prefill_structure[seq] : destination((unsigned)op - 1U, seq - 1U, p);
+            op == 0 ? prefill_structure[seq] : destination((unsigned)op - 1, seq - 1, p);
         CHECK(op == 0 ? (seq < next_seq) : (seq <= MESSAGES_PER_PRODUCER));
         CHECK(dest == record.structure);
         CHECK(record.message.sender_pid == producer_pid[op]);
-        CHECK(record.message.sent_at.tv_sec == (time_t)(1000U + record.message.operation_id));
+        CHECK(record.message.sent_at.tv_sec == (time_t)(1000 + record.message.operation_id));
         CHECK(record.message.sent_at.tv_nsec == (long)seq); /* metadados preservados */
-        CHECK(seen[op][seq] == 0U);                         /* sem consumo duplicado */
+        CHECK(seen[op][seq] == 0);                          /* sem consumo duplicado */
         ++seen[op][seq];
         CHECK(last[record.consumer][op] < seq); /* FIFO por consumidor e produtor */
         last[record.consumer][op] = seq;
@@ -412,8 +411,8 @@ static void run_round(unsigned round, size_t p) {
     CHECK(!alarm_seen);
     CHECK(received == expected_total);
     for (unsigned op = 0; op <= PRODUCERS; ++op) {
-        unsigned limit = op == 0 ? next_seq - 1U : MESSAGES_PER_PRODUCER;
-        for (unsigned seq = 1; seq <= limit; ++seq) CHECK(seen[op][seq] == 1U); /* nada perdido */
+        unsigned limit = op == 0 ? next_seq - 1 : MESSAGES_PER_PRODUCER;
+        for (unsigned seq = 1; seq <= limit; ++seq) CHECK(seen[op][seq] == 1); /* nada perdido */
     }
     if (alarm_seen || !reap_children()) {
         CHECK(false);
@@ -422,19 +421,21 @@ static void run_round(unsigned round, size_t p) {
         return;
     }
     errno = 0;
-    CHECK(waitpid(-1, NULL, WNOHANG) < 0 && errno == ECHILD); /* sem zumbis ou filhos restantes */
+    CHECK(
+        waitpid(-1, nullptr, WNOHANG) < 0 && errno == ECHILD
+    ); /* sem zumbis ou filhos restantes */
 
     /* A consolidação final obtém os totais exatos, sem depender do heap dos filhos. */
     CHECK(msg_backend_poll_events(backend).status == MPMC_OK);
     struct msqid_ds info;
-    CHECK(msgctl(event_queue, IPC_STAT, &info) == 0 && info.msg_qnum == 0U);
+    CHECK(msgctl(event_queue, IPC_STAT, &info) == 0 && info.msg_qnum == 0);
     for (unsigned j = 1; j <= p; ++j) {
         uint64_t consumed = 0;
         message_t out;
         CHECK(msg_backend_consumed_count(backend, j, &consumed).status == MPMC_OK);
         CHECK(consumed == total[j]);
         CHECK(msg_backend_receive(backend, j, &out, false).status == MPMC_ERR_WOULD_BLOCK);
-        CHECK(msgctl(queue_ids[j - 1U], IPC_STAT, &info) == 0 && info.msg_qnum == 0U);
+        CHECK(msgctl(queue_ids[j - 1], IPC_STAT, &info) == 0 && info.msg_qnum == 0);
     }
 
     msg_backend_destroy(backend);
@@ -447,20 +448,20 @@ static void run_round(unsigned round, size_t p) {
 int main(void) {
     struct sigaction action = {.sa_handler = on_alarm, .sa_flags = 0};
     sigemptyset(&action.sa_mask);
-    if (sigaction(SIGALRM, &action, NULL) != 0) return EXIT_FAILURE;
+    if (sigaction(SIGALRM, &action, nullptr) != 0) return EXIT_FAILURE;
 
     (void)alarm(ROUND_TIMEOUT);
     test_invalid_arguments();
     (void)alarm(0);
     test_timeout_detection();
 
-    msg_backend_t *bystander = NULL;
-    CHECK(msg_backend_create(&bystander, 1U).status == MPMC_OK && bystander != NULL);
-    if (bystander == NULL) return EXIT_FAILURE;
+    msg_backend_t *bystander = nullptr;
+    CHECK(msg_backend_create(&bystander, 1).status == MPMC_OK && bystander != nullptr);
+    if (bystander == nullptr) return EXIT_FAILURE;
     int by_queue = bystander->data_queues[0];
-    message_t keep = make_message(7777U, 1U);
+    message_t keep = make_message(7777, 1);
     (void)alarm(ROUND_TIMEOUT);
-    mpmc_result_t kept = msg_backend_send(bystander, 1U, &keep);
+    mpmc_result_t kept = msg_backend_send(bystander, 1, &keep);
     CHECK(kept.status == MPMC_OK);
     if (kept.status != MPMC_OK) {
         msg_backend_destroy(bystander);
@@ -473,7 +474,7 @@ int main(void) {
         unsigned round = 0; round < sizeof structures_per_round / sizeof structures_per_round[0];
         ++round
     ) {
-        run_round(round + 1U, structures_per_round[round]);
+        run_round(round + 1, structures_per_round[round]);
         kill_children();
         if (timed_out) break;
     }
@@ -482,8 +483,8 @@ int main(void) {
     message_t out;
     struct msqid_ds info;
     (void)alarm(ROUND_TIMEOUT);
-    CHECK(msgctl(by_queue, IPC_STAT, &info) == 0 && info.msg_qnum == 1U);
-    CHECK(msg_backend_receive(bystander, 1U, &out, false).status == MPMC_OK);
+    CHECK(msgctl(by_queue, IPC_STAT, &info) == 0 && info.msg_qnum == 1);
+    CHECK(msg_backend_receive(bystander, 1, &out, false).status == MPMC_OK);
     CHECK(out.operation_id == keep.operation_id && out.sequence == keep.sequence);
     CHECK(out.sent_at.tv_sec == keep.sent_at.tv_sec && out.sent_at.tv_nsec == keep.sent_at.tv_nsec);
     msg_backend_destroy(bystander);

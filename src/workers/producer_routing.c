@@ -11,10 +11,10 @@ mpmc_status_t producer_route_destination(
     size_t producer_count,
     size_t *out_destination
 ) {
-    if (out_destination == NULL || producer_count == 0u || ordinal == 0u) {
+    if (out_destination == nullptr || producer_count == 0 || ordinal == 0) {
         return MPMC_ERR_INVALID_ARG;
     }
 
-    *out_destination = 1u + ((ordinal - 1u) % producer_count);
+    *out_destination = 1 + ((ordinal - 1) % producer_count);
     return MPMC_OK;
 }

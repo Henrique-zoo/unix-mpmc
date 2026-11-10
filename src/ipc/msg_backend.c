@@ -59,12 +59,12 @@ static ack_registration_t *msg_backend_find_registration(
     msg_backend_t *backend,
     uint64_t operation_id
 ) {
-    for (size_t index = 0u; index < backend->registration_count; ++index) {
+    for (size_t index = 0; index < backend->registration_count; ++index) {
         if (backend->registrations[index].operation_id == operation_id) {
             return &backend->registrations[index];
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 static mpmc_result_t msg_backend_ack_receive(
@@ -137,7 +137,7 @@ static mpmc_result_t msg_backend_purge_operation(msg_backend_t *backend, uint64_
 
 static mpmc_result_t msg_backend_ack_backoff(void) {
     const struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000};
-    if (nanosleep(&delay, NULL) == 0) {
+    if (nanosleep(&delay, nullptr) == 0) {
         return (mpmc_result_t){.status = MPMC_OK};
     }
     int sleep_errno = errno;
@@ -168,7 +168,7 @@ static mpmc_result_t msg_backend_send_retry(
  * que o produtor espere para sempre por ele.
  */
 static mpmc_result_t msg_backend_defer_ack(msg_backend_t *backend, uint64_t operation_id) {
-    for (size_t index = 0u; index < backend->pending_ack_count; ++index) {
+    for (size_t index = 0; index < backend->pending_ack_count; ++index) {
         if (backend->pending_acks[index].operation_id == operation_id) {
             ++backend->pending_acks[index].count;
             return (mpmc_result_t){.status = MPMC_OK};
@@ -176,20 +176,20 @@ static mpmc_result_t msg_backend_defer_ack(msg_backend_t *backend, uint64_t oper
     }
     if (backend->pending_ack_count == backend->pending_ack_capacity) {
         size_t capacity =
-            backend->pending_ack_capacity == 0u ? 8u : backend->pending_ack_capacity * 2u;
+            backend->pending_ack_capacity == 0 ? 8 : backend->pending_ack_capacity * 2;
         if (capacity < backend->pending_ack_capacity
             || capacity > SIZE_MAX / sizeof(*backend->pending_acks)) {
             return (mpmc_result_t){.status = MPMC_ERR_SYS};
         }
         pending_ack_t *grown = realloc(backend->pending_acks, capacity * sizeof(*grown));
-        if (grown == NULL) {
+        if (grown == nullptr) {
             return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
         }
         backend->pending_acks = grown;
         backend->pending_ack_capacity = capacity;
     }
     backend->pending_acks[backend->pending_ack_count++] =
-        (pending_ack_t){.operation_id = operation_id, .count = 1u};
+        (pending_ack_t){.operation_id = operation_id, .count = 1};
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
@@ -201,9 +201,9 @@ static mpmc_result_t msg_backend_defer_ack(msg_backend_t *backend, uint64_t oper
 static mpmc_result_t msg_backend_flush_acks(msg_backend_t *backend, bool wait) {
     mpmc_result_t outcome = {.status = MPMC_OK};
     bool full = false;
-    for (size_t index = 0u; index < backend->pending_ack_count && !full; ++index) {
+    for (size_t index = 0; index < backend->pending_ack_count && !full; ++index) {
         pending_ack_t *entry = &backend->pending_acks[index];
-        while (entry->count > 0u) {
+        while (entry->count > 0) {
             ack_event_t ack = {.operation_id = entry->operation_id};
             mpmc_result_t result = msg_backend_send_retry(
                 backend->ack_queue, (long)entry->operation_id, &ack, sizeof(ack), !wait
@@ -219,9 +219,9 @@ static mpmc_result_t msg_backend_flush_acks(msg_backend_t *backend, bool wait) {
             break;
         }
     }
-    size_t kept = 0u;
-    for (size_t index = 0u; index < backend->pending_ack_count; ++index) {
-        if (backend->pending_acks[index].count != 0u) {
+    size_t kept = 0;
+    for (size_t index = 0; index < backend->pending_ack_count; ++index) {
+        if (backend->pending_acks[index].count != 0) {
             backend->pending_acks[kept++] = backend->pending_acks[index];
         }
     }
@@ -233,7 +233,7 @@ static mpmc_result_t msg_backend_remove_created(msg_backend_t *backend) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
 
-    for (size_t index = 0u; index < backend->producer_count; ++index) {
+    for (size_t index = 0; index < backend->producer_count; ++index) {
         if (backend->data_queues[index] != -1) {
             uint64_t before = mpmc_diagnostic_count();
             mpmc_result_t removed = sysv_msg_remove(backend->data_queues[index]);
@@ -257,21 +257,21 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (out == NULL) {
+    if (out == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
     }
-    *out = NULL;
-    if (producer_count == 0u || producer_count > SIZE_MAX / sizeof(int)
+    *out = nullptr;
+    if (producer_count == 0 || producer_count > SIZE_MAX / sizeof(int)
         || producer_count > SIZE_MAX / sizeof(uint64_t)) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
     }
 
-    msg_backend_t *backend = calloc(1u, sizeof(*backend));
-    if (backend == NULL) {
+    msg_backend_t *backend = calloc(1, sizeof(*backend));
+    if (backend == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno}
         );
@@ -281,8 +281,8 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
     backend->data_queues = malloc(producer_count * sizeof(*backend->data_queues));
     backend->consumed_counts = calloc(producer_count, sizeof(*backend->consumed_counts));
     backend->pending_events = calloc(producer_count, sizeof(*backend->pending_events));
-    if (backend->data_queues == NULL || backend->consumed_counts == NULL
-        || backend->pending_events == NULL) {
+    if (backend->data_queues == nullptr || backend->consumed_counts == nullptr
+        || backend->pending_events == nullptr) {
         int allocation_errno = errno;
         free(backend->data_queues);
         free(backend->consumed_counts);
@@ -293,12 +293,12 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
             (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = allocation_errno}
         );
     }
-    for (size_t index = 0u; index < producer_count; ++index) {
+    for (size_t index = 0; index < producer_count; ++index) {
         backend->data_queues[index] = -1;
     }
     backend->producer_count = producer_count;
 
-    for (size_t index = 0u; index < producer_count; ++index) {
+    for (size_t index = 0; index < producer_count; ++index) {
         mpmc_result_t result = sysv_msg_create(&backend->data_queues[index]);
         if (result.status != MPMC_OK) {
             mpmc_diagnostic_cause("criação das filas de dados", result);
@@ -342,20 +342,20 @@ mpmc_result_t msg_backend_send(
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (backend == NULL || message == NULL || producer_id == 0u
+    if (backend == nullptr || message == nullptr || producer_id == 0
         || producer_id > backend->producer_count) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
     }
-    ack_registration_t *registration = message->operation_id == 0u
-        ? NULL
+    ack_registration_t *registration = message->operation_id == 0
+        ? nullptr
         : msg_backend_find_registration(backend, message->operation_id);
-    if (registration == NULL) {
+    if (registration == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope,
             sysv_msg_send(
-                backend->data_queues[producer_id - 1u], 1, message, sizeof(*message), false
+                backend->data_queues[producer_id - 1], 1, message, sizeof(*message), false
             )
         );
     }
@@ -365,7 +365,7 @@ mpmc_result_t msg_backend_send(
     }
     for (;;) {
         mpmc_result_t result = sysv_msg_send(
-            backend->data_queues[producer_id - 1u], 2, message, sizeof(*message), true
+            backend->data_queues[producer_id - 1], 2, message, sizeof(*message), true
         );
         if (result.status == MPMC_OK) {
             return mpmc_diagnostic_end(&diagnostic_scope, result);
@@ -394,7 +394,7 @@ mpmc_result_t msg_backend_receive(
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (backend == NULL || out == NULL || producer_id == 0u
+    if (backend == nullptr || out == nullptr || producer_id == 0
         || producer_id > backend->producer_count) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
@@ -403,7 +403,7 @@ mpmc_result_t msg_backend_receive(
 
     /* ACKs devidos por retiradas anteriores sem espera: tenta entregá-los sem esperar,
      * antes de qualquer retirada nova, para que não fiquem retidos neste processo. */
-    if (backend->pending_ack_count != 0u) {
+    if (backend->pending_ack_count != 0) {
         mpmc_result_t flushed = msg_backend_flush_acks(backend, false);
         if (flushed.status != MPMC_OK) {
             return mpmc_diagnostic_end(&diagnostic_scope, flushed);
@@ -413,7 +413,7 @@ mpmc_result_t msg_backend_receive(
     ssize_t received = 0;
     long type = 0;
     mpmc_result_t result = sysv_msg_receive_typed(
-        backend->data_queues[producer_id - 1u], 0, out, sizeof(*out), !blocking, &received, &type
+        backend->data_queues[producer_id - 1], 0, out, sizeof(*out), !blocking, &received, &type
     );
     if (result.status != MPMC_OK) {
         return mpmc_diagnostic_end(&diagnostic_scope, result);
@@ -449,14 +449,14 @@ mpmc_result_t msg_backend_receive(
      * pela confirmação. A ordem inversa acoplaria os canais de controle e poderia
      * deixar ack_wait() parado enquanto o consumidor aguarda o supervisor.
      */
-    uint64_t *pending = &backend->pending_events[producer_id - 1u];
-    consumption_event_t event = {.producer_id = producer_id, .count = 1u + *pending};
+    uint64_t *pending = &backend->pending_events[producer_id - 1];
+    consumption_event_t event = {.producer_id = producer_id, .count = 1 + *pending};
     if (blocking) {
         result = msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), false);
         if (result.status != MPMC_OK) {
             return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
-        *pending = 0u;
+        *pending = 0;
         return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
     }
 
@@ -468,7 +468,7 @@ mpmc_result_t msg_backend_receive(
      */
     result = msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), true);
     if (result.status == MPMC_OK) {
-        *pending = 0u;
+        *pending = 0;
     } else if (result.status == MPMC_ERR_WOULD_BLOCK) {
         ++*pending;
     } else {
@@ -485,25 +485,25 @@ mpmc_result_t msg_backend_ack_begin(
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (backend == NULL || operation_id == 0u || operation_id > (uint64_t)LONG_MAX || expected == 0u
-        || expected > 1024u) {
+    if (backend == nullptr || operation_id == 0 || operation_id > (uint64_t)LONG_MAX
+        || expected == 0 || expected > 1024) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
     }
-    if (msg_backend_find_registration(backend, operation_id) != NULL) {
+    if (msg_backend_find_registration(backend, operation_id) != nullptr) {
         return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_STATE});
     }
     if (backend->registration_count == backend->registration_capacity) {
         size_t capacity =
-            backend->registration_capacity == 0u ? 8u : backend->registration_capacity * 2u;
+            backend->registration_capacity == 0 ? 8 : backend->registration_capacity * 2;
         if (capacity < backend->registration_capacity
             || capacity > SIZE_MAX / sizeof(*backend->registrations)) {
             return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_SYS});
         }
         ack_registration_t *registrations =
             realloc(backend->registrations, capacity * sizeof(*registrations));
-        if (registrations == NULL) {
+        if (registrations == nullptr) {
             return mpmc_diagnostic_end(
                 &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno}
             );
@@ -514,7 +514,7 @@ mpmc_result_t msg_backend_ack_begin(
     backend->registrations[backend->registration_count++] = (ack_registration_t){
         .operation_id = operation_id,
         .expected = expected,
-        .received = 0u,
+        .received = 0,
     };
     return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
@@ -523,13 +523,13 @@ mpmc_result_t msg_backend_ack_wait(msg_backend_t *backend, uint64_t operation_id
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (backend == NULL || operation_id == 0u) {
+    if (backend == nullptr || operation_id == 0) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
     }
     ack_registration_t *registration = msg_backend_find_registration(backend, operation_id);
-    if (registration == NULL) {
+    if (registration == nullptr) {
         return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_STATE});
     }
     while (registration->received < registration->expected) {
@@ -547,17 +547,17 @@ mpmc_result_t msg_backend_ack_end(msg_backend_t *backend, uint64_t operation_id)
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
 
-    if (backend == NULL || operation_id == 0u) {
+    if (backend == nullptr || operation_id == 0) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
     }
     ack_registration_t *registration = msg_backend_find_registration(backend, operation_id);
-    if (registration == NULL) {
+    if (registration == nullptr) {
         return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
     }
     mpmc_result_t result = msg_backend_ack_drain(backend, registration, false);
-    for (size_t index = 0u; index < backend->registration_count; ++index) {
+    for (size_t index = 0; index < backend->registration_count; ++index) {
         if (backend->registrations[index].operation_id == operation_id) {
             backend->registrations[index] = backend->registrations[--backend->registration_count];
             break;
@@ -570,7 +570,7 @@ mpmc_result_t msg_backend_poll_events(msg_backend_t *backend) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (backend == NULL) {
+    if (backend == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
@@ -589,20 +589,20 @@ mpmc_result_t msg_backend_poll_events(msg_backend_t *backend) {
         if (result.status != MPMC_OK) {
             return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
-        if ((size_t)received != sizeof(event) || event.producer_id == 0u
+        if ((size_t)received != sizeof(event) || event.producer_id == 0
             || event.producer_id > backend->producer_count
-            || UINT64_MAX - backend->consumed_counts[event.producer_id - 1u] < event.count) {
+            || UINT64_MAX - backend->consumed_counts[event.producer_id - 1] < event.count) {
             return mpmc_diagnostic_end(
                 &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_STATE}
             );
         }
-        backend->consumed_counts[event.producer_id - 1u] += event.count;
+        backend->consumed_counts[event.producer_id - 1] += event.count;
     }
 
     /* ACKs tardios de operações abandonadas não podem lotar Q_ack e travar
      * consumidores. */
     mpmc_result_t first = {.status = MPMC_OK};
-    for (size_t index = 0u; index < backend->abandoned_count; ++index) {
+    for (size_t index = 0; index < backend->abandoned_count; ++index) {
         mpmc_result_t purged = msg_backend_purge_operation(backend, backend->abandoned[index]);
         if (first.status == MPMC_OK) {
             first = purged;
@@ -615,19 +615,19 @@ mpmc_result_t msg_backend_ack_abandon(msg_backend_t *backend, uint64_t operation
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (backend == NULL || operation_id == 0u || operation_id > (uint64_t)LONG_MAX) {
+    if (backend == nullptr || operation_id == 0 || operation_id > (uint64_t)LONG_MAX) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
     }
     bool known = false;
-    for (size_t index = 0u; index < backend->abandoned_count; ++index) {
+    for (size_t index = 0; index < backend->abandoned_count; ++index) {
         known = known || backend->abandoned[index] == operation_id;
     }
     if (!known) {
         if (backend->abandoned_count == backend->abandoned_capacity) {
             size_t capacity =
-                backend->abandoned_capacity == 0u ? 8u : backend->abandoned_capacity * 2u;
+                backend->abandoned_capacity == 0 ? 8 : backend->abandoned_capacity * 2;
             if (capacity < backend->abandoned_capacity
                 || capacity > SIZE_MAX / sizeof(*backend->abandoned)) {
                 return mpmc_diagnostic_end(
@@ -635,7 +635,7 @@ mpmc_result_t msg_backend_ack_abandon(msg_backend_t *backend, uint64_t operation
                 );
             }
             uint64_t *grown = realloc(backend->abandoned, capacity * sizeof(*grown));
-            if (grown == NULL) {
+            if (grown == nullptr) {
                 return mpmc_diagnostic_end(
                     &diagnostic_scope,
                     (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno}
@@ -659,13 +659,13 @@ mpmc_result_t msg_backend_consumed_count(
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
 
-    if (backend == NULL || out_count == NULL || producer_id == 0u
+    if (backend == nullptr || out_count == nullptr || producer_id == 0
         || producer_id > backend->producer_count) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
     }
-    *out_count = backend->consumed_counts[producer_id - 1u];
+    *out_count = backend->consumed_counts[producer_id - 1];
     return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
@@ -673,7 +673,7 @@ void msg_backend_worker_close(msg_backend_t *backend) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
 
-    if (backend == NULL) {
+    if (backend == nullptr) {
         {
             (void)mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
             return;
@@ -685,10 +685,10 @@ void msg_backend_worker_close(msg_backend_t *backend) {
     uint64_t before = mpmc_diagnostic_count();
     mpmc_result_t flushed = msg_backend_flush_acks(backend, true);
     mpmc_diagnostic_observe("entrega dos ACKs pendentes", flushed, before);
-    for (size_t index = 0u; index < backend->producer_count; ++index) {
-        if (backend->pending_events[index] != 0u) {
+    for (size_t index = 0; index < backend->producer_count; ++index) {
+        if (backend->pending_events[index] != 0) {
             consumption_event_t event = {
-                .producer_id = index + 1u, .count = backend->pending_events[index]};
+                .producer_id = index + 1, .count = backend->pending_events[index]};
             before = mpmc_diagnostic_count();
             mpmc_result_t sent =
                 msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), false);
@@ -709,7 +709,7 @@ void msg_backend_destroy(msg_backend_t *backend) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
 
-    if (backend == NULL) {
+    if (backend == nullptr) {
         {
             (void)mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
             return;

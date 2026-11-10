@@ -107,7 +107,7 @@ static void test_spies_work(void) {
 
 /* Retorna true se command_parse() ou command_validate() rejeita a linha. */
 static bool is_rejected(const char *line) {
-    command_t command = {0};
+    command_t command = {};
 
     if (!STATUS_IS_OK(command_parse(line, &command))) {
         return true;
