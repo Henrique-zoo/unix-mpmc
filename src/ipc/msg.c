@@ -179,7 +179,7 @@ mpmc_result_t sysv_msg_remove(int msqid) {
 /**
  * @brief Aloca espaço contíguo para o tipo System V e o corpo binário.
  * @param body_size Quantidade de bytes reservados para o corpo.
- * @return Envelope alocado por malloc(), ou NULL se a alocação falhar.
+ * @return Envelope alocado por malloc(), ou nullptr se a alocação falhar.
  * @pre body_size deve permitir a soma com offsetof(msg_envelope_t, mtext) sem overflow.
  * @note O conteúdo não é inicializado; o chamador preenche o tipo e o corpo e libera
  * o envelope com free(). Em falha, errno é o informado por malloc().

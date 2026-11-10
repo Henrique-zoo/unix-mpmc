@@ -72,7 +72,7 @@ mpmc_result_t sysv_shm_create(size_t size, int *out_shmid);
  * leitura e escrita.
  *
  * O endereço de associação é escolhido automaticamente pelo kernel,
- * pois shmaddr é informado como NULL.
+ * pois shmaddr é informado como nullptr.
  *
  * Em caso de sucesso, o endereço inicial do segmento é armazenado em
  * @p out_addr. Em caso de falha, o parâmetro de saída permanece inalterado.
