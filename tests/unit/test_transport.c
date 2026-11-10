@@ -100,10 +100,10 @@ void *mpmc_test_calloc(size_t count, size_t size) {
     ++g_calloc_calls;
     if (g_calloc_failure_errno != 0) {
         errno = g_calloc_failure_errno;
-        return NULL;
+        return nullptr;
     }
     void *block = calloc(count, size);
-    if (block != NULL) {
+    if (block != nullptr) {
         ++g_live_allocations;
     }
     return block;
@@ -114,7 +114,7 @@ void *mpmc_test_calloc(size_t count, size_t size) {
  * @param pointer Bloco a liberar; NULL é aceito e não é contado.
  */
 void mpmc_test_free(void *pointer) {
-    if (pointer != NULL) {
+    if (pointer != nullptr) {
         ++g_free_calls;
         --g_live_allocations;
     }
@@ -246,14 +246,14 @@ static struct shm_backend g_shm_object;
 /** @brief Mensagem que o teste envia; a fachada não deve alterá-la nem
  * copiá-la. */
 static message_t g_message_in = {.sender_pid = 1234,
-    .sequence = 9u,
+    .sequence = 9,
     .sent_at = {.tv_sec = 5, .tv_nsec = 6},
-    .operation_id = 77u};
+    .operation_id = 77};
 /** @brief Mensagem que os backends escrevem em receive ao terem sucesso. */
 static const message_t g_receive_payload = {.sender_pid = 4321,
-    .sequence = 11u,
+    .sequence = 11,
     .sent_at = {.tv_sec = 7, .tv_nsec = 8},
-    .operation_id = 88u};
+    .operation_id = 88};
 /** @brief Destino de ipc_receive(). */
 static message_t g_message_out;
 /** @brief Total que os backends escrevem em consumed_count ao terem sucesso. */
@@ -282,7 +282,7 @@ static call_t *record(call_kind_t kind, const void *backend) {
 /* ------------------------------------------------------------------ */
 
 mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
-    call_t *call = record(CALL_MSG_CREATE, NULL);
+    call_t *call = record(CALL_MSG_CREATE, nullptr);
     call->index = producer_count;
     call->out = out;
     if (g_result.status == MPMC_OK || g_dirty_out_on_failure) {
@@ -383,7 +383,7 @@ mpmc_result_t shm_backend_create(
     size_t producer_count,
     const shm_cleanup_reporter_t *reporter
 ) {
-    call_t *call = record(CALL_SHM_CREATE, NULL);
+    call_t *call = record(CALL_SHM_CREATE, nullptr);
     call->index = producer_count;
     call->out = out;
     call->reporter = reporter;
@@ -546,16 +546,16 @@ static bool is_shm_call(call_kind_t kind) {
  * caso. */
 static void reset_state(void) {
     memset(g_calls, 0, sizeof g_calls);
-    g_call_count = 0u;
+    g_call_count = 0;
     g_result = RESULT_OK;
     g_dirty_out_on_failure = false;
-    g_calloc_calls = 0u;
-    g_free_calls = 0u;
+    g_calloc_calls = 0;
+    g_free_calls = 0;
     g_live_allocations = 0;
     g_calloc_failure_errno = 0;
-    g_sysv_calls = 0u;
+    g_sysv_calls = 0;
     memset(&g_message_out, 0, sizeof g_message_out);
-    g_count_out = 0u;
+    g_count_out = 0;
 }
 
 /**
@@ -576,14 +576,14 @@ static bool same_result(mpmc_result_t actual, mpmc_result_t expected) {
  * @return Contexto válido; aborta o teste se a criação falhar.
  */
 static ipc_context_t *make_context(ipc_mode_t mode, size_t producers) {
-    ipc_context_t *context = NULL;
+    ipc_context_t *context = nullptr;
     g_result = RESULT_OK;
     mpmc_result_t result = ipc_init(&context, producers, mode);
-    if (!same_result(result, RESULT_OK) || context == NULL) {
+    if (!same_result(result, RESULT_OK) || context == nullptr) {
         fprintf(stderr, "test_transport: ipc_init() preparatório falhou\n");
         abort();
     }
-    g_call_count = 0u;
+    g_call_count = 0;
     return context;
 }
 
@@ -599,7 +599,7 @@ static void expect_clean(const char *where) {
         g_live_allocations
     );
     CHECK(
-        g_sysv_calls == 0u,
+        g_sysv_calls == 0,
         "%s: a fachada chamou %u primitiva(s) System V diretamente",
         where,
         g_sysv_calls
@@ -783,33 +783,35 @@ static void check_forwarded_arguments(op_t op, ipc_mode_t mode, const call_t *ca
  * passariam em vão. */
 static void test_instrumentation_works(void) {
     reset_state();
-    CHECK(msgget(0, 0) == -1 && g_sysv_calls == 1u, "espião de msgget não registrou a chamada");
+    CHECK(msgget(0, 0) == -1 && g_sysv_calls == 1, "espião de msgget não registrou a chamada");
     CHECK(
-        msgsnd(0, NULL, 0, 0) == -1 && g_sysv_calls == 2u,
+        msgsnd(0, nullptr, 0, 0) == -1 && g_sysv_calls == 2,
         "espião de msgsnd não registrou a chamada"
     );
     CHECK(
-        msgrcv(0, NULL, 0, 0, 0) == -1 && g_sysv_calls == 3u,
+        msgrcv(0, nullptr, 0, 0, 0) == -1 && g_sysv_calls == 3,
         "espião de msgrcv não registrou a chamada"
     );
-    CHECK(shmget(0, 0, 0) == -1 && g_sysv_calls == 4u, "espião de shmget não registrou a chamada");
-    CHECK(semget(0, 0, 0) == -1 && g_sysv_calls == 5u, "espião de semget não registrou a chamada");
-    CHECK(semop(0, NULL, 0) == -1 && g_sysv_calls == 6u, "espião de semop não registrou a chamada");
+    CHECK(shmget(0, 0, 0) == -1 && g_sysv_calls == 4, "espião de shmget não registrou a chamada");
+    CHECK(semget(0, 0, 0) == -1 && g_sysv_calls == 5, "espião de semget não registrou a chamada");
+    CHECK(
+        semop(0, nullptr, 0) == -1 && g_sysv_calls == 6, "espião de semop não registrou a chamada"
+    );
 
     reset_state();
-    void *block = mpmc_test_calloc(1u, 8u);
+    void *block = mpmc_test_calloc(1, 8);
     CHECK(
-        block != NULL && g_live_allocations == 1 && g_calloc_calls == 1u,
+        block != nullptr && g_live_allocations == 1 && g_calloc_calls == 1,
         "calloc de teste não contou a alocação"
     );
     mpmc_test_free(block);
-    CHECK(g_live_allocations == 0 && g_free_calls == 1u, "free de teste não contou a liberação");
-    mpmc_test_free(NULL);
-    CHECK(g_free_calls == 1u, "free(NULL) não deve ser contado");
+    CHECK(g_live_allocations == 0 && g_free_calls == 1, "free de teste não contou a liberação");
+    mpmc_test_free(nullptr);
+    CHECK(g_free_calls == 1, "free(NULL) não deve ser contado");
     g_calloc_failure_errno = ENOMEM;
     errno = 0;
     CHECK(
-        mpmc_test_calloc(1u, 8u) == NULL && errno == ENOMEM,
+        mpmc_test_calloc(1, 8) == nullptr && errno == ENOMEM,
         "falha injetada de calloc não foi aplicada"
     );
     reset_state();
@@ -821,10 +823,10 @@ static void test_dispatch_goes_to_selected_backend(void) {
     for (size_t m = 0; m < sizeof k_modes / sizeof k_modes[0]; ++m) {
         const ipc_mode_t mode = k_modes[m];
         reset_state();
-        ipc_context_t *context = make_context(mode, 3u);
+        ipc_context_t *context = make_context(mode, 3);
 
         for (op_t op = 0; op < OP_COUNT; ++op) {
-            g_call_count = 0u;
+            g_call_count = 0;
             g_result = RESULT_OK;
             const mpmc_result_t result = invoke(op, context);
             const call_kind_t want = expected_kind(op, mode);
@@ -839,7 +841,7 @@ static void test_dispatch_goes_to_selected_backend(void) {
             );
             if (want == CALL_NONE) {
                 CHECK(
-                    g_call_count == 0u,
+                    g_call_count == 0,
                     "%s, %s: a fachada não deveria chamar nenhum backend (%u "
                     "chamada(s))",
                     k_op_names[op],
@@ -849,13 +851,13 @@ static void test_dispatch_goes_to_selected_backend(void) {
                 continue;
             }
             CHECK(
-                g_call_count == 1u,
+                g_call_count == 1,
                 "%s, %s: %u chamada(s) ao backend em vez de uma",
                 k_op_names[op],
                 mode_name(mode),
                 g_call_count
             );
-            if (g_call_count != 1u) {
+            if (g_call_count != 1) {
                 continue;
             }
             CHECK(
@@ -885,12 +887,12 @@ static void test_dispatch_goes_to_selected_backend(void) {
  * eles falhem. */
 static void test_poll_events_is_noop_in_shared_memory_mode(void) {
     reset_state();
-    ipc_context_t *context = make_context(IPC_SHARED_MEMORY, 2u);
+    ipc_context_t *context = make_context(IPC_SHARED_MEMORY, 2);
     g_result = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EIO};
     const mpmc_result_t result = ipc_poll_events(context);
     CHECK(same_result(result, RESULT_OK), "modo 1: ipc_poll_events() deveria devolver OK");
     CHECK(
-        g_call_count == 0u, "modo 1: ipc_poll_events() chamou um backend (%u vez(es))", g_call_count
+        g_call_count == 0, "modo 1: ipc_poll_events() chamou um backend (%u vez(es))", g_call_count
     );
     ipc_destroy(context);
     expect_clean("poll modo 1");
@@ -900,19 +902,19 @@ static void test_poll_events_is_noop_in_shared_memory_mode(void) {
  * transport.h. */
 static void test_ack_abandon_shared_memory_validation(void) {
     reset_state();
-    ipc_context_t *context = make_context(IPC_SHARED_MEMORY, 2u);
+    ipc_context_t *context = make_context(IPC_SHARED_MEMORY, 2);
 
-    const mpmc_result_t invalid = ipc_ack_abandon(context, 0u);
+    const mpmc_result_t invalid = ipc_ack_abandon(context, 0);
     CHECK(
         invalid.status == MPMC_ERR_INVALID_ARG && invalid.system_errno == 0,
         "modo 1: operation_id zero deveria retornar INVALID_ARG/0"
     );
-    CHECK(g_call_count == 0u, "modo 1: ACK inválido chamou backend (%u vez(es))", g_call_count);
+    CHECK(g_call_count == 0, "modo 1: ACK inválido chamou backend (%u vez(es))", g_call_count);
 
-    const mpmc_result_t no_op = ipc_ack_abandon(context, 1u);
+    const mpmc_result_t no_op = ipc_ack_abandon(context, 1);
     CHECK(same_result(no_op, RESULT_OK), "modo 1: ACK abandon válido deveria ser no-op OK");
     CHECK(
-        g_call_count == 0u, "modo 1: ACK abandon válido chamou backend (%u vez(es))", g_call_count
+        g_call_count == 0, "modo 1: ACK abandon válido chamou backend (%u vez(es))", g_call_count
     );
 
     ipc_destroy(context);
@@ -924,7 +926,7 @@ static void test_results_and_outputs_are_forwarded(void) {
     for (size_t m = 0; m < sizeof k_modes / sizeof k_modes[0]; ++m) {
         const ipc_mode_t mode = k_modes[m];
         reset_state();
-        ipc_context_t *context = make_context(mode, 3u);
+        ipc_context_t *context = make_context(mode, 3);
 
         for (op_t op = 0; op < OP_COUNT; ++op) {
             if (expected_kind(op, mode) == CALL_NONE) {
@@ -933,10 +935,10 @@ static void test_results_and_outputs_are_forwarded(void) {
             for (size_t r = 0; r < RESULT_COUNT; ++r) {
                 const mpmc_result_t want = k_results[r];
                 const message_t sentinel_message = {
-                    .sender_pid = -1, .sequence = 0xFFFFFFFFu, .operation_id = 5u};
+                    .sender_pid = -1, .sequence = 0xFFFFFFFFu, .operation_id = 5};
                 g_message_out = sentinel_message;
                 g_count_out = UINT64_C(0xDEADBEEF);
-                g_call_count = 0u;
+                g_call_count = 0;
                 g_result = want;
 
                 const mpmc_result_t got = invoke(op, context);
@@ -952,7 +954,7 @@ static void test_results_and_outputs_are_forwarded(void) {
                     got.system_errno
                 );
                 CHECK(
-                    g_call_count == 1u,
+                    g_call_count == 1,
                     "%s, %s: %u chamada(s) ao backend com resultado %d",
                     k_op_names[op],
                     mode_name(mode),
@@ -1004,7 +1006,7 @@ static void test_null_context_is_rejected(void) {
     for (op_t op = 0; op < OP_COUNT; ++op) {
         reset_state();
         g_result = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EIO};
-        const mpmc_result_t result = invoke(op, NULL);
+        const mpmc_result_t result = invoke(op, nullptr);
         CHECK(
             result.status == MPMC_ERR_INVALID_ARG && result.system_errno == 0,
             "%s(NULL): resultado %d/%d em vez de INVALID_ARG/0",
@@ -1013,19 +1015,16 @@ static void test_null_context_is_rejected(void) {
             result.system_errno
         );
         CHECK(
-            g_call_count == 0u,
-            "%s(NULL): chamou backend (%u vez(es))",
-            k_op_names[op],
-            g_call_count
+            g_call_count == 0, "%s(NULL): chamou backend (%u vez(es))", k_op_names[op], g_call_count
         );
     }
 
     reset_state();
-    CHECK(ipc_producer_count(NULL) == 0u, "ipc_producer_count(NULL) deveria ser 0");
-    ipc_worker_close(NULL);
-    ipc_destroy(NULL);
-    CHECK(g_call_count == 0u, "ipc_worker_close/ipc_destroy(NULL) chamaram backend");
-    CHECK(g_free_calls == 0u, "ipc_worker_close/ipc_destroy(NULL) liberaram memória");
+    CHECK(ipc_producer_count(nullptr) == 0, "ipc_producer_count(NULL) deveria ser 0");
+    ipc_worker_close(nullptr);
+    ipc_destroy(nullptr);
+    CHECK(g_call_count == 0, "ipc_worker_close/ipc_destroy(NULL) chamaram backend");
+    CHECK(g_free_calls == 0, "ipc_worker_close/ipc_destroy(NULL) liberaram memória");
     expect_clean("contexto nulo");
 }
 
@@ -1043,7 +1042,7 @@ static void test_init_rejects_invalid_arguments(void) {
     for (size_t i = 0; i < sizeof invalid_modes / sizeof invalid_modes[0]; ++i) {
         reset_state();
         ipc_context_t *out = marker;
-        const mpmc_result_t result = ipc_init(&out, 2u, invalid_modes[i]);
+        const mpmc_result_t result = ipc_init(&out, 2, invalid_modes[i]);
         CHECK(
             result.status == MPMC_ERR_INVALID_ARG && result.system_errno == 0,
             "modo inválido %d: resultado %d/%d",
@@ -1053,7 +1052,7 @@ static void test_init_rejects_invalid_arguments(void) {
         );
         CHECK(out == marker, "modo inválido %d: *out foi modificado", (int)invalid_modes[i]);
         CHECK(
-            g_call_count == 0u && g_calloc_calls == 0u,
+            g_call_count == 0 && g_calloc_calls == 0,
             "modo inválido %d: houve alocação ou chamada de backend",
             (int)invalid_modes[i]
         );
@@ -1063,7 +1062,7 @@ static void test_init_rejects_invalid_arguments(void) {
         const ipc_mode_t mode = k_modes[m];
         reset_state();
         ipc_context_t *out = marker;
-        mpmc_result_t result = ipc_init(&out, 0u, mode);
+        mpmc_result_t result = ipc_init(&out, 0, mode);
         CHECK(
             result.status == MPMC_ERR_INVALID_ARG && result.system_errno == 0,
             "%s, p=0: resultado %d/%d",
@@ -1073,12 +1072,12 @@ static void test_init_rejects_invalid_arguments(void) {
         );
         CHECK(out == marker, "%s, p=0: *out foi modificado", mode_name(mode));
         CHECK(
-            g_call_count == 0u && g_calloc_calls == 0u,
+            g_call_count == 0 && g_calloc_calls == 0,
             "%s, p=0: houve alocação ou chamada de backend",
             mode_name(mode)
         );
 
-        result = ipc_init(NULL, 2u, mode);
+        result = ipc_init(nullptr, 2, mode);
         CHECK(
             result.status == MPMC_ERR_INVALID_ARG && result.system_errno == 0,
             "%s, out nulo: resultado %d/%d",
@@ -1087,13 +1086,13 @@ static void test_init_rejects_invalid_arguments(void) {
             result.system_errno
         );
         CHECK(
-            g_call_count == 0u && g_calloc_calls == 0u,
+            g_call_count == 0 && g_calloc_calls == 0,
             "%s, out nulo: houve alocação ou chamada de backend",
             mode_name(mode)
         );
     }
     reset_state();
-    mpmc_result_t result = ipc_init(NULL, 0u, (ipc_mode_t)7);
+    mpmc_result_t result = ipc_init(nullptr, 0, (ipc_mode_t)7);
     CHECK(
         result.status == MPMC_ERR_INVALID_ARG && result.system_errno == 0,
         "todos os argumentos inválidos: resultado %d/%d",
@@ -1106,7 +1105,7 @@ static void test_init_rejects_invalid_arguments(void) {
 /** @brief ipc_init() bem-sucedido cria o backend do modo, uma única vez, e
  * guarda p. */
 static void test_init_success_selects_backend(void) {
-    static const size_t counts[] = {1u, 3u, 1024u, SIZE_MAX};
+    static const size_t counts[] = {1, 3, 1024, SIZE_MAX};
 
     for (size_t m = 0; m < sizeof k_modes / sizeof k_modes[0]; ++m) {
         const ipc_mode_t mode = k_modes[m];
@@ -1124,19 +1123,19 @@ static void test_init_success_selects_backend(void) {
                 result.system_errno
             );
             CHECK(
-                context != NULL && context != MARKER,
+                context != nullptr && context != MARKER,
                 "%s, p=%zu: *out não recebeu o novo contexto",
                 mode_name(mode),
                 counts[i]
             );
             CHECK(
-                g_call_count == 1u,
+                g_call_count == 1,
                 "%s, p=%zu: %u chamada(s) ao backend em vez de uma",
                 mode_name(mode),
                 counts[i],
                 g_call_count
             );
-            if (g_call_count == 1u) {
+            if (g_call_count == 1) {
                 CHECK(
                     g_calls[0].kind
                         == (mode == IPC_MESSAGE_QUEUE ? CALL_MSG_CREATE : CALL_SHM_CREATE),
@@ -1152,7 +1151,7 @@ static void test_init_success_selects_backend(void) {
                     counts[i]
                 );
                 CHECK(
-                    g_calls[0].reporter == NULL,
+                    g_calls[0].reporter == nullptr,
                     "%s: o reporter do backend shm deveria ser NULL (a fachada ainda "
                     "não o "
                     "repassa)",
@@ -1160,14 +1159,14 @@ static void test_init_success_selects_backend(void) {
                 );
             }
             CHECK(
-                g_calloc_calls == 1u && g_live_allocations == 1,
+                g_calloc_calls == 1 && g_live_allocations == 1,
                 "%s, p=%zu: a fachada deveria ter uma alocação (calloc=%u, vivas=%d)",
                 mode_name(mode),
                 counts[i],
                 g_calloc_calls,
                 g_live_allocations
             );
-            if (context != NULL && context != MARKER) {
+            if (context != nullptr && context != MARKER) {
                 CHECK(
                     ipc_producer_count(context) == counts[i],
                     "%s: ipc_producer_count() devolveu %zu em vez de %zu",
@@ -1193,7 +1192,7 @@ static void test_init_allocation_failure(void) {
             reset_state();
             g_calloc_failure_errno = errors[e];
             ipc_context_t *context = MARKER;
-            const mpmc_result_t result = ipc_init(&context, 4u, mode);
+            const mpmc_result_t result = ipc_init(&context, 4, mode);
 
             CHECK(
                 result.status == MPMC_ERR_SYS && result.system_errno == errors[e],
@@ -1204,10 +1203,12 @@ static void test_init_allocation_failure(void) {
                 result.system_errno
             );
             CHECK(
-                context == NULL, "%s: *out deveria ser NULL após falha de alocação", mode_name(mode)
+                context == nullptr,
+                "%s: *out deveria ser NULL após falha de alocação",
+                mode_name(mode)
             );
             CHECK(
-                g_call_count == 0u,
+                g_call_count == 0,
                 "%s: o backend foi criado apesar da falha de alocação",
                 mode_name(mode)
             );
@@ -1234,7 +1235,7 @@ static void test_init_backend_failure_rolls_back(void) {
                 g_result = k_results[r];
                 g_dirty_out_on_failure = dirty != 0;
                 ipc_context_t *context = MARKER;
-                const mpmc_result_t result = ipc_init(&context, 5u, mode);
+                const mpmc_result_t result = ipc_init(&context, 5, mode);
 
                 CHECK(
                     same_result(result, k_results[r]),
@@ -1246,14 +1247,14 @@ static void test_init_backend_failure_rolls_back(void) {
                     result.system_errno
                 );
                 CHECK(
-                    context == NULL,
+                    context == nullptr,
                     "%s, falha %d%s: *out deveria ser NULL",
                     mode_name(mode),
                     (int)k_results[r].status,
                     dirty ? " (backend deixou *out sujo)" : ""
                 );
                 CHECK(
-                    g_call_count == 1u,
+                    g_call_count == 1,
                     "%s, falha %d: %u chamada(s) ao backend; nenhuma remoção deve "
                     "ser chamada após "
                     "falha de criação",
@@ -1261,7 +1262,7 @@ static void test_init_backend_failure_rolls_back(void) {
                     (int)k_results[r].status,
                     g_call_count
                 );
-                if (g_call_count >= 1u) {
+                if (g_call_count >= 1) {
                     CHECK(
                         g_calls[0].kind
                             == (mode == IPC_MESSAGE_QUEUE ? CALL_MSG_CREATE : CALL_SHM_CREATE),
@@ -1270,7 +1271,7 @@ static void test_init_backend_failure_rolls_back(void) {
                     );
                 }
                 CHECK(
-                    g_calloc_calls == 1u && g_free_calls == 1u,
+                    g_calloc_calls == 1 && g_free_calls == 1,
                     "%s, falha %d: calloc=%u free=%u (a fachada deve liberar a "
                     "própria alocação "
                     "uma vez)",
@@ -1294,19 +1295,19 @@ static void test_worker_close_is_local_only(void) {
         const ipc_mode_t mode = k_modes[m];
         for (int failing = 0; failing <= 1; ++failing) {
             reset_state();
-            ipc_context_t *context = make_context(mode, 2u);
+            ipc_context_t *context = make_context(mode, 2);
             g_result =
                 failing ? (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EIO} : RESULT_OK;
 
             ipc_worker_close(context);
 
             CHECK(
-                g_call_count == 1u,
+                g_call_count == 1,
                 "%s: ipc_worker_close() fez %u chamada(s) ao backend",
                 mode_name(mode),
                 g_call_count
             );
-            if (g_call_count >= 1u) {
+            if (g_call_count >= 1) {
                 CHECK(
                     g_calls[0].kind
                         == (mode == IPC_MESSAGE_QUEUE ? CALL_MSG_CLOSE : CALL_SHM_CLOSE),
@@ -1321,10 +1322,12 @@ static void test_worker_close_is_local_only(void) {
                     mode_name(mode)
                 );
                 CHECK(
-                    g_calls[0].reporter == NULL, "%s: o reporter deveria ser NULL", mode_name(mode)
+                    g_calls[0].reporter == nullptr,
+                    "%s: o reporter deveria ser NULL",
+                    mode_name(mode)
                 );
                 CHECK(
-                    g_calls[0].frees_before == 0u,
+                    g_calls[0].frees_before == 0,
                     "%s: o contexto foi liberado antes de fechar o backend",
                     mode_name(mode)
                 );
@@ -1337,7 +1340,7 @@ static void test_worker_close_is_local_only(void) {
                 );
             }
             CHECK(
-                g_free_calls == 1u,
+                g_free_calls == 1,
                 "%s: o contexto deveria ser liberado uma vez (free=%u)%s",
                 mode_name(mode),
                 g_free_calls,
@@ -1357,19 +1360,19 @@ static void test_destroy_removes_global_resources(void) {
         const ipc_mode_t mode = k_modes[m];
         for (int failing = 0; failing <= 1; ++failing) {
             reset_state();
-            ipc_context_t *context = make_context(mode, 2u);
+            ipc_context_t *context = make_context(mode, 2);
             g_result =
                 failing ? (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = EIO} : RESULT_OK;
 
             ipc_destroy(context);
 
             CHECK(
-                g_call_count == 1u,
+                g_call_count == 1,
                 "%s: ipc_destroy() fez %u chamada(s) ao backend",
                 mode_name(mode),
                 g_call_count
             );
-            if (g_call_count >= 1u) {
+            if (g_call_count >= 1) {
                 CHECK(
                     g_calls[0].kind
                         == (mode == IPC_MESSAGE_QUEUE ? CALL_MSG_DESTROY : CALL_SHM_DESTROY),
@@ -1383,10 +1386,12 @@ static void test_destroy_removes_global_resources(void) {
                     mode_name(mode)
                 );
                 CHECK(
-                    g_calls[0].reporter == NULL, "%s: o reporter deveria ser NULL", mode_name(mode)
+                    g_calls[0].reporter == nullptr,
+                    "%s: o reporter deveria ser NULL",
+                    mode_name(mode)
                 );
                 CHECK(
-                    g_calls[0].frees_before == 0u,
+                    g_calls[0].frees_before == 0,
                     "%s: o contexto foi liberado antes de remover o backend",
                     mode_name(mode)
                 );
@@ -1399,7 +1404,7 @@ static void test_destroy_removes_global_resources(void) {
                 );
             }
             CHECK(
-                g_free_calls == 1u,
+                g_free_calls == 1,
                 "%s: o contexto deveria ser liberado uma vez (free=%u)%s",
                 mode_name(mode),
                 g_free_calls,
@@ -1414,43 +1419,43 @@ static void test_destroy_removes_global_resources(void) {
  * compartilhado. */
 static void test_contexts_of_both_modes_coexist(void) {
     reset_state();
-    ipc_context_t *shared = make_context(IPC_SHARED_MEMORY, 2u);
-    ipc_context_t *queues = make_context(IPC_MESSAGE_QUEUE, 7u);
+    ipc_context_t *shared = make_context(IPC_SHARED_MEMORY, 2);
+    ipc_context_t *queues = make_context(IPC_MESSAGE_QUEUE, 7);
 
     CHECK(
-        ipc_producer_count(shared) == 2u && ipc_producer_count(queues) == 7u,
+        ipc_producer_count(shared) == 2 && ipc_producer_count(queues) == 7,
         "cada contexto deve guardar o seu p"
     );
 
-    g_call_count = 0u;
+    g_call_count = 0;
     CHECK(
-        same_result(ipc_send(queues, 1u, &g_message_in), RESULT_OK),
+        same_result(ipc_send(queues, 1, &g_message_in), RESULT_OK),
         "envio pelo contexto de filas falhou"
     );
     CHECK(
-        g_call_count == 1u && g_calls[0].kind == CALL_MSG_SEND,
+        g_call_count == 1 && g_calls[0].kind == CALL_MSG_SEND,
         "o contexto de filas não chamou o backend de filas"
     );
-    g_call_count = 0u;
+    g_call_count = 0;
     CHECK(
-        same_result(ipc_send(shared, 1u, &g_message_in), RESULT_OK),
+        same_result(ipc_send(shared, 1, &g_message_in), RESULT_OK),
         "envio pelo contexto de memória compartilhada falhou"
     );
     CHECK(
-        g_call_count == 1u && g_calls[0].kind == CALL_SHM_SEND,
+        g_call_count == 1 && g_calls[0].kind == CALL_SHM_SEND,
         "o contexto de memória compartilhada não chamou o seu backend"
     );
 
-    g_call_count = 0u;
+    g_call_count = 0;
     ipc_worker_close(queues);
     CHECK(
-        g_call_count == 1u && g_calls[0].kind == CALL_MSG_CLOSE,
+        g_call_count == 1 && g_calls[0].kind == CALL_MSG_CLOSE,
         "o fechamento do contexto de filas afetou o outro backend"
     );
-    g_call_count = 0u;
+    g_call_count = 0;
     ipc_destroy(shared);
     CHECK(
-        g_call_count == 1u && g_calls[0].kind == CALL_SHM_DESTROY,
+        g_call_count == 1 && g_calls[0].kind == CALL_SHM_DESTROY,
         "a remoção do contexto de memória compartilhada afetou o outro backend"
     );
     expect_clean("coexistência");
@@ -1474,7 +1479,7 @@ int main(void) {
     printf(
         "%u verificações do transporte com backends substitutos, %u falhas\n", g_checks, g_failures
     );
-    return g_failures == 0u ? 0 : 1;
+    return g_failures == 0 ? 0 : 1;
 }
 
 mpmc_result_t shm_backend_final_count(

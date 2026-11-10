@@ -76,7 +76,7 @@ typedef struct {
 
 static void read_file(FILE *file, char *buffer, size_t capacity) {
     rewind(file);
-    size_t length = fread(buffer, 1u, capacity - 1u, file);
+    size_t length = fread(buffer, 1, capacity - 1, file);
 
     buffer[length] = '\0';
 }
@@ -95,7 +95,7 @@ static bool redirect_begin(redirect_t *state, const char *input) {
     fflush(stderr);
     state->out_file = tmpfile();
     state->err_file = tmpfile();
-    if (state->out_file == NULL || state->err_file == NULL) {
+    if (state->out_file == nullptr || state->err_file == nullptr) {
         return false;
     }
 
@@ -104,7 +104,7 @@ static bool redirect_begin(redirect_t *state, const char *input) {
     if (pipe(pipe_fds) == -1) {
         return false;
     }
-    if (input != NULL) {
+    if (input != nullptr) {
         size_t length = strlen(input);
 
         if (write(pipe_fds[1], input, length) != (ssize_t)length) {
@@ -155,19 +155,19 @@ static mpmc_result_t run_repl(supervisor_t *supervisor, const char *input, captu
 static mpmc_result_t run_reap(supervisor_t *supervisor, capture_t *capture) {
     redirect_t state;
 
-    if (!redirect_begin(&state, NULL)) {
+    if (!redirect_begin(&state, nullptr)) {
         return (mpmc_result_t){.status = MPMC_ERR_SYS};
     }
-    mpmc_result_t result = supervisor_reap(supervisor, false, NULL);
+    mpmc_result_t result = supervisor_reap(supervisor, false, nullptr);
 
     redirect_end(&state, capture);
     return result;
 }
 
 static supervisor_t *new_supervisor(void) {
-    supervisor_t *supervisor = NULL;
+    supervisor_t *supervisor = nullptr;
 
-    if (supervisor_create(&supervisor, 2u, IPC_MESSAGE_QUEUE).status != MPMC_OK) {
+    if (supervisor_create(&supervisor, 2, IPC_MESSAGE_QUEUE).status != MPMC_OK) {
         fprintf(stderr, "supervisor_create falhou; System V IPC indisponível?\n");
         _exit(2);
     }
@@ -175,7 +175,7 @@ static supervisor_t *new_supervisor(void) {
 }
 
 static void finish(supervisor_t *supervisor) {
-    CHECK(supervisor_shutdown(supervisor, NULL).status == MPMC_OK, "shutdown do supervisor");
+    CHECK(supervisor_shutdown(supervisor, nullptr).status == MPMC_OK, "shutdown do supervisor");
     supervisor_destroy(supervisor);
 }
 
@@ -184,9 +184,9 @@ static void finish(supervisor_t *supervisor) {
 /* ------------------------------------------------------------------ */
 
 static size_t count_substring(const char *text, const char *needle) {
-    size_t count = 0u;
+    size_t count = 0;
 
-    for (const char *at = strstr(text, needle); at != NULL; at = strstr(at + 1, needle)) {
+    for (const char *at = strstr(text, needle); at != nullptr; at = strstr(at + 1, needle)) {
         ++count;
     }
     return count;
@@ -194,14 +194,14 @@ static size_t count_substring(const char *text, const char *needle) {
 
 /* Toda linha de stderr deve estar inteira: começa com "mpmc: " e não tem outro "mpmc: ". */
 static void check_whole_lines(const char *text, size_t *lines_out) {
-    size_t lines = 0u;
+    size_t lines = 0;
     const char *cursor = text;
 
     while (*cursor != '\0') {
         const char *end = strchr(cursor, '\n');
 
-        CHECK(end != NULL, "última linha sem quebra: \"%s\"", cursor);
-        if (end == NULL) {
+        CHECK(end != nullptr, "última linha sem quebra: \"%s\"", cursor);
+        if (end == nullptr) {
             break;
         }
         CHECK(
@@ -214,11 +214,11 @@ static void check_whole_lines(const char *text, size_t *lines_out) {
         size_t length = (size_t)(end - cursor);
 
         if (length >= sizeof line) {
-            length = sizeof line - 1u;
+            length = sizeof line - 1;
         }
         memcpy(line, cursor, length);
         line[length] = '\0';
-        CHECK(strstr(line + 6, "mpmc: ") == NULL, "linhas misturadas: \"%s\"", line);
+        CHECK(strstr(line + 6, "mpmc: ") == nullptr, "linhas misturadas: \"%s\"", line);
         ++lines;
         cursor = end + 1;
     }
@@ -274,29 +274,29 @@ static void test_outcomes_are_presented_and_repl_continues(void) {
 
     CHECK(result.status == MPMC_OK, "o REPL deveria terminar normalmente: %d", result.status);
 
-    size_t lines = 0u;
+    size_t lines = 0;
 
     check_whole_lines(capture.err, &lines);
-    CHECK(lines == 4u, "esperadas 3 linhas de eventos e 1 de erro, obtidas %zu", lines);
+    CHECK(lines == 4, "esperadas 3 linhas de eventos e 1 de erro, obtidas %zu", lines);
 
     CHECK(
         strstr(
             capture.err,
             "operação 3 (produz, estrutura 1) falhou após 4 de 10 mensagens "
             "produzidas"
-        ) != NULL,
+        ) != nullptr,
         "erro de kernel: %s",
         capture.err
     );
     CHECK(
-        strstr(capture.err, strerror(EIO)) != NULL, "errno válido deve aparecer: %s", capture.err
+        strstr(capture.err, strerror(EIO)) != nullptr, "errno válido deve aparecer: %s", capture.err
     );
     CHECK(
         strstr(
             capture.err,
             "operação 4 (consome, estrutura 2) não foi concluída: apenas 3 de 5 "
             "mensagens consumidas"
-        ) != NULL,
+        ) != nullptr,
         "consumo parcial: %s",
         capture.err
     );
@@ -305,24 +305,26 @@ static void test_outcomes_are_presented_and_repl_continues(void) {
             capture.err,
             "operação 5 (produz, todas as estruturas) cancelada antes de "
             "terminar: 2 de 8"
-        ) != NULL,
+        ) != nullptr,
         "cancelamento: %s",
         capture.err
     );
 
     /* Nenhum evento incompleto é apresentado como conclusão. */
     CHECK(
-        strstr(capture.err, ") concluída") == NULL,
+        strstr(capture.err, ") concluída") == nullptr,
         "evento incompleto como sucesso: %s",
         capture.err
     );
 
     /* O erro do comando inválido continua sendo apresentado. */
-    CHECK(count_substring(capture.err, "mpmc: ") == 4u, "linhas com prefixo");
+    CHECK(count_substring(capture.err, "mpmc: ") == 4, "linhas com prefixo");
 
     /* Eventos vão para stderr; stdout só tem o prompt. */
     CHECK(
-        strstr(capture.out, "operação") == NULL, "eventos não podem ir para stdout: %s", capture.out
+        strstr(capture.out, "operação") == nullptr,
+        "eventos não podem ir para stdout: %s",
+        capture.out
     );
 
     finish(supervisor);
@@ -344,37 +346,41 @@ static void test_spawn_failure_is_contextual_and_recoverable(void) {
             capture.err,
             "mpmc: comando (produz, estrutura 1): não foi possível criar o "
             "processo filho: "
-        ) != NULL,
+        ) != nullptr,
         "diagnóstico da falha de criação: %s",
         capture.err
     );
-    CHECK(strstr(capture.err, strerror(EAGAIN)) != NULL, "errno da falha de fork: %s", capture.err);
+    CHECK(
+        strstr(capture.err, strerror(EAGAIN)) != nullptr, "errno da falha de fork: %s", capture.err
+    );
 
     /* O segundo comando foi despachado: o filho é recolhido e o relatório o registra. */
     static capture_t waiting;
 
     redirect_t state;
-    CHECK(redirect_begin(&state, NULL), "redirecionar");
-    CHECK(supervisor_reap(supervisor, true, NULL).status == MPMC_OK, "recolher o filho");
+    CHECK(redirect_begin(&state, nullptr), "redirecionar");
+    CHECK(supervisor_reap(supervisor, true, nullptr).status == MPMC_OK, "recolher o filho");
     redirect_end(&state, &waiting);
 
     FILE *report = tmpfile();
     char report_text[CAPTURE_MAX];
 
-    CHECK(report != NULL, "arquivo do relatório");
-    if (report != NULL) {
+    CHECK(report != nullptr, "arquivo do relatório");
+    if (report != nullptr) {
         CHECK(supervisor_print_report(supervisor, report).status == MPMC_OK, "relatório");
         read_file(report, report_text, sizeof report_text);
         fclose(report);
         CHECK(
-            strstr(report_text, "Filhos recolhidos: 1") != NULL,
+            strstr(report_text, "Filhos recolhidos: 1") != nullptr,
             "exatamente um filho deveria ter sido criado: %s",
             report_text
         );
-        CHECK(strstr(report_text, "produz") != NULL, "o filho é do tipo produz: %s", report_text);
+        CHECK(
+            strstr(report_text, "produz") != nullptr, "o filho é do tipo produz: %s", report_text
+        );
     }
 
-    size_t lines = 0u;
+    size_t lines = 0;
 
     check_whole_lines(capture.err, &lines);
     finish(supervisor);
@@ -392,12 +398,12 @@ static void test_spawn_failure_texts_for_each_command_form(void) {
     CHECK(result.status == MPMC_OK, "REPL: %d", result.status);
     CHECK(
         strstr(capture.err, "comando (produz, todas as estruturas): não foi possível criar")
-            != NULL,
+            != nullptr,
         "produz 0: %s",
         capture.err
     );
     CHECK(
-        strstr(capture.err, "comando (consome, estrutura 2): não foi possível criar") != NULL,
+        strstr(capture.err, "comando (consome, estrutura 2): não foi possível criar") != nullptr,
         "consome 2: %s",
         capture.err
     );
@@ -433,8 +439,8 @@ static void test_prompt_is_preserved(void) {
         "stdout só deve ter prompts: \"%s\"",
         capture.out
     );
-    CHECK(prompts == 3u, "esperados 3 prompts (inicial, invalido e produz), obtidos %zu", prompts);
-    CHECK(strstr(capture.err, ">>") == NULL, "o prompt não pode ir para stderr");
+    CHECK(prompts == 3, "esperados 3 prompts (inicial, invalido e produz), obtidos %zu", prompts);
+    CHECK(strstr(capture.err, ">>") == nullptr, "o prompt não pode ir para stderr");
     finish(supervisor);
 }
 
@@ -456,17 +462,17 @@ static void test_concurrent_events_are_whole_lines_without_global_order(void) {
 
     CHECK(result.status == MPMC_OK, "REPL: %d", result.status);
 
-    size_t lines = 0u;
+    size_t lines = 0;
 
     check_whole_lines(capture.err, &lines);
     /* Cada evento aparece exatamente uma vez, em qualquer ordem entre si ou com o filho. */
     CHECK(
-        count_substring(capture.err, "operação 11 (consome, estrutura 1) não foi concluída") == 1u,
+        count_substring(capture.err, "operação 11 (consome, estrutura 1) não foi concluída") == 1,
         "evento 11: %s",
         capture.err
     );
     CHECK(
-        count_substring(capture.err, "operação 12 (produz, estrutura 2) cancelada") == 1u,
+        count_substring(capture.err, "operação 12 (produz, estrutura 2) cancelada") == 1,
         "evento 12: %s",
         capture.err
     );
@@ -480,19 +486,19 @@ static void test_notice_count_drives_prompt_redraw(void) {
         JOB_OUTCOME_PARTIAL, COMMAND_CONSUME, 1, 1, 5, 2, (mpmc_result_t){.status = MPMC_OK}
     );
 
-    CHECK(supervisor_take_notices(supervisor) == 0u, "sem avisos iniciais");
+    CHECK(supervisor_take_notices(supervisor) == 0, "sem avisos iniciais");
     CHECK(supervisor_queue_outcome(supervisor, &event).status == MPMC_OK, "enfileirar");
-    CHECK(supervisor_take_notices(supervisor) == 0u, "enfileirar não imprime nem avisa");
+    CHECK(supervisor_take_notices(supervisor) == 0, "enfileirar não imprime nem avisa");
 
     CHECK(run_reap(supervisor, &capture).status == MPMC_OK, "reap");
-    CHECK(count_substring(capture.err, "não foi concluída") == 1u, "linha impressa uma vez");
-    CHECK(supervisor_take_notices(supervisor) == 1u, "cada linha conta como um aviso");
-    CHECK(supervisor_take_notices(supervisor) == 0u, "o contador é zerado ao ser consultado");
+    CHECK(count_substring(capture.err, "não foi concluída") == 1, "linha impressa uma vez");
+    CHECK(supervisor_take_notices(supervisor) == 1, "cada linha conta como um aviso");
+    CHECK(supervisor_take_notices(supervisor) == 0, "o contador é zerado ao ser consultado");
 
     /* Uma nova rodada não repete o que já foi apresentado. */
     CHECK(run_reap(supervisor, &capture).status == MPMC_OK, "reap");
     CHECK(capture.err[0] == '\0', "evento repetido: %s", capture.err);
-    CHECK(supervisor_take_notices(supervisor) == 0u, "sem novos avisos");
+    CHECK(supervisor_take_notices(supervisor) == 0, "sem novos avisos");
     finish(supervisor);
 }
 
@@ -506,25 +512,29 @@ static void test_queue_contract(void) {
         (job_outcome_kind_t)99, COMMAND_PRODUCE, 1, 1, 5, 2, (mpmc_result_t){.status = MPMC_OK}
     );
 
-    CHECK(supervisor_queue_outcome(NULL, &event).status == MPMC_ERR_INVALID_ARG, "supervisor nulo");
-    CHECK(supervisor_queue_outcome(supervisor, NULL).status == MPMC_ERR_INVALID_ARG, "evento nulo");
+    CHECK(
+        supervisor_queue_outcome(nullptr, &event).status == MPMC_ERR_INVALID_ARG, "supervisor nulo"
+    );
+    CHECK(
+        supervisor_queue_outcome(supervisor, nullptr).status == MPMC_ERR_INVALID_ARG, "evento nulo"
+    );
     CHECK(
         supervisor_queue_outcome(supervisor, &unknown).status == MPMC_ERR_INVALID_ARG,
         "tipo desconhecido"
     );
 
-    size_t accepted = 0u;
+    size_t accepted = 0;
 
-    while (supervisor_queue_outcome(supervisor, &event).status == MPMC_OK && accepted < 1000u) {
+    while (supervisor_queue_outcome(supervisor, &event).status == MPMC_OK && accepted < 1000) {
         ++accepted;
     }
-    CHECK(accepted > 0u && accepted < 1000u, "a fila deve ter capacidade finita: %zu", accepted);
+    CHECK(accepted > 0 && accepted < 1000, "a fila deve ter capacidade finita: %zu", accepted);
     CHECK(supervisor_queue_outcome(supervisor, &event).status == MPMC_ERR_NO_SPACE, "fila cheia");
 
     /* Esvaziar a fila libera espaço, e nenhum evento é perdido ou repetido. */
     CHECK(run_reap(supervisor, &capture).status == MPMC_OK, "reap");
 
-    size_t lines = 0u;
+    size_t lines = 0;
 
     check_whole_lines(capture.err, &lines);
     CHECK(lines == accepted, "linhas %zu, eventos aceitos %zu", lines, accepted);
@@ -541,13 +551,13 @@ static void test_pending_outcomes_are_consolidated_at_shutdown(void) {
     redirect_t state;
 
     CHECK(supervisor_queue_outcome(supervisor, &event).status == MPMC_OK, "enfileirar");
-    CHECK(redirect_begin(&state, NULL), "redirecionar");
-    mpmc_result_t shutdown = supervisor_shutdown(supervisor, NULL);
+    CHECK(redirect_begin(&state, nullptr), "redirecionar");
+    mpmc_result_t shutdown = supervisor_shutdown(supervisor, nullptr);
 
     redirect_end(&state, &capture);
     CHECK(shutdown.status == MPMC_OK, "shutdown");
     CHECK(
-        count_substring(capture.err, "operação 9 (consome, estrutura 1) cancelada") == 1u,
+        count_substring(capture.err, "operação 9 (consome, estrutura 1) cancelada") == 1,
         "evento pendente deve ser apresentado no shutdown: %s",
         capture.err
     );

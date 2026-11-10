@@ -76,13 +76,13 @@ mpmc_result_t mpmc_test_shm_create(size_t size, int *out_shmid) {
     unsigned position = ++create_calls;
 
     CHECK(size == MPMC_SHM_SEGMENT_BYTES);
-    CHECK(out_shmid != NULL);
+    CHECK(out_shmid != nullptr);
 
     if (position == fail_create) {
         return simulated_error(MPMC_ERR_SYS, 28);
     }
 
-    unsigned index = position - 1U;
+    unsigned index = position - 1;
     CHECK(index < SHM_COUNT);
 
     if (index >= SHM_COUNT) {
@@ -104,9 +104,9 @@ mpmc_result_t mpmc_test_shm_attach(int shmid, void **out_address) {
 
     int index = shmid - 100;
     CHECK(index >= 0 && index < (int)SHM_COUNT);
-    CHECK(out_address != NULL);
+    CHECK(out_address != nullptr);
 
-    if (index < 0 || index >= (int)SHM_COUNT || out_address == NULL) {
+    if (index < 0 || index >= (int)SHM_COUNT || out_address == nullptr) {
         return simulated_error(MPMC_ERR_STATE, 0);
     }
 
@@ -152,7 +152,7 @@ mpmc_result_t mpmc_test_sem_create(unsigned count, int *out_semid) {
     ++sem_create_calls;
 
     CHECK(count == SHM_ACK_SEM_COUNT);
-    CHECK(out_semid != NULL);
+    CHECK(out_semid != nullptr);
 
     if (sem_create_calls == fail_sem_create) {
         return simulated_error(MPMC_ERR_SYS, 28);
@@ -229,13 +229,13 @@ static void test_shm_create_failures(void) {
         CHECK(result.status == MPMC_ERR_SYS);
         CHECK(result.system_errno == 28);
         CHECK(create_calls == position);
-        CHECK(attach_calls == position - 1U);
+        CHECK(attach_calls == position - 1);
 
         result = shm_backend_ack_resources_cleanup(&backend, true);
         CHECK(result.status == MPMC_OK);
 
-        CHECK(detach_calls == position - 1U);
-        CHECK(shm_remove_calls == position - 1U);
+        CHECK(detach_calls == position - 1);
+        CHECK(shm_remove_calls == position - 1);
         CHECK(sem_remove_calls == 0);
 
         check_all_resources_removed();
@@ -260,7 +260,7 @@ static void test_shm_attach_failures(void) {
         result = shm_backend_ack_resources_cleanup(&backend, true);
         CHECK(result.status == MPMC_OK);
 
-        CHECK(detach_calls == position - 1U);
+        CHECK(detach_calls == position - 1);
         CHECK(shm_remove_calls == position);
         CHECK(sem_remove_calls == 0);
 
@@ -333,14 +333,14 @@ static void test_successful_creation(void) {
     CHECK(sem_set_calls == SHM_ACK_SEM_COUNT);
 
     CHECK(backend.ack_control_shmid == 100);
-    CHECK(backend.ack_control != NULL);
+    CHECK(backend.ack_control != nullptr);
     CHECK(backend.ack_control->magic == UINT32_C(0x53484D41));
     CHECK(backend.ack_semid == 700);
 
-    CHECK(sem_values[SHM_ACK_SEM_MUTEX] == 1U);
+    CHECK(sem_values[SHM_ACK_SEM_MUTEX] == 1);
 
     for (unsigned index = 0; index < SHM_ACK_OPERATION_CAPACITY; ++index) {
-        CHECK(sem_values[SHM_ACK_SEM_NOTIFICATION_BASE + index] == 0U);
+        CHECK(sem_values[SHM_ACK_SEM_NOTIFICATION_BASE + index] == 0);
     }
 
     for (size_t index = 0; index < SHM_ACK_OPERATION_CAPACITY; ++index) {

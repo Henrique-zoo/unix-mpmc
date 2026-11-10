@@ -121,7 +121,7 @@ static void test_kernel_error_and_spawn_failure(void) {
         cause
     );
     CHECK_TEXT(kernel, expected);
-    CHECK(strstr(expected, strerror(EIO)) != NULL, "o errno válido deve ser interpretado");
+    CHECK(strstr(expected, strerror(EIO)) != nullptr, "o errno válido deve ser interpretado");
 
     /* Falha ao criar o filho: nenhuma quantidade efetiva é mencionada. */
     mpmc_result_t again = {.status = MPMC_ERR_SYS, .system_errno = EAGAIN};
@@ -135,7 +135,8 @@ static void test_kernel_error_and_spawn_failure(void) {
     );
     CHECK_TEXT(spawn, expected);
     CHECK(
-        strstr(expected, " de 3 mensagens") == NULL, "falha de criação não tem quantidade efetiva"
+        strstr(expected, " de 3 mensagens") == nullptr,
+        "falha de criação não tem quantidade efetiva"
     );
 
     job_outcome_t spawn_with_id =
@@ -162,10 +163,10 @@ static void test_identification_of_operation_index_and_quantity(void) {
     char text[512];
 
     CHECK(job_outcome_format(&outcome, text, sizeof text) > 0, "formatação falhou");
-    CHECK(strstr(text, "operação 123456789012") != NULL, "falta a operação: %s", text);
-    CHECK(strstr(text, "consome") != NULL, "falta o verbo: %s", text);
-    CHECK(strstr(text, "estrutura 42") != NULL, "falta o índice: %s", text);
-    CHECK(strstr(text, "1000 de 1024") != NULL, "falta a quantidade efetiva: %s", text);
+    CHECK(strstr(text, "operação 123456789012") != nullptr, "falta a operação: %s", text);
+    CHECK(strstr(text, "consome") != nullptr, "falta o verbo: %s", text);
+    CHECK(strstr(text, "estrutura 42") != nullptr, "falta o índice: %s", text);
+    CHECK(strstr(text, "1000 de 1024") != nullptr, "falta a quantidade efetiva: %s", text);
 }
 
 static void test_incomplete_results_are_never_success(void) {
@@ -192,7 +193,7 @@ static void test_incomplete_results_are_never_success(void) {
         CHECK(!job_outcome_is_success(&outcome), "tipo %d não pode ser sucesso", (int)kinds[i]);
         CHECK(job_outcome_format(&outcome, text, sizeof text) > 0, "formatação falhou");
         CHECK(
-            strstr(text, ") concluída") == NULL,
+            strstr(text, ") concluída") == nullptr,
             "tipo %d apresentado como conclusão: %s",
             (int)kinds[i],
             text
@@ -213,7 +214,7 @@ static void test_incomplete_results_are_never_success(void) {
     job_outcome_t exact = make(JOB_OUTCOME_COMPLETED, COMMAND_CONSUME, 8, 2, 5, 5, NO_ERROR);
 
     CHECK(job_outcome_is_success(&exact), "5 de 5 deve ser sucesso");
-    CHECK(!job_outcome_is_success(NULL), "NULL não é sucesso");
+    CHECK(!job_outcome_is_success(nullptr), "NULL não é sucesso");
 }
 
 static void test_errno_is_interpreted_only_when_valid(void) {
@@ -226,13 +227,13 @@ static void test_errno_is_interpreted_only_when_valid(void) {
 
         CHECK(job_outcome_format(&outcome, text, sizeof text) > 0, "formatação falhou");
         CHECK(
-            strstr(text, "Unknown error") == NULL && strstr(text, "Success") == NULL,
+            strstr(text, "Unknown error") == nullptr && strstr(text, "Success") == nullptr,
             "errno %d inválido foi interpretado: %s",
             invalid_errnos[i],
             text
         );
         CHECK(
-            strstr(text, mpmc_status_str(MPMC_ERR_SYS)) != NULL,
+            strstr(text, mpmc_status_str(MPMC_ERR_SYS)) != nullptr,
             "a categoria deve aparecer: %s",
             text
         );
@@ -244,8 +245,8 @@ static void test_errno_is_interpreted_only_when_valid(void) {
         make(JOB_OUTCOME_KERNEL_ERROR, COMMAND_PRODUCE, 1, 1, 5, 2, ok_with_errno);
 
     CHECK(job_outcome_format(&no_cause, text, sizeof text) > 0, "formatação falhou");
-    CHECK(strstr(text, "causa não informada") != NULL, "causa ausente: %s", text);
-    CHECK(strstr(text, strerror(EIO)) == NULL, "errno de status OK foi interpretado: %s", text);
+    CHECK(strstr(text, "causa não informada") != nullptr, "causa ausente: %s", text);
+    CHECK(strstr(text, strerror(EIO)) == nullptr, "errno de status OK foi interpretado: %s", text);
 
     /* Status que não é de sistema também pode carregar um errno válido. */
     mpmc_result_t interrupted = {.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR};
@@ -253,14 +254,14 @@ static void test_errno_is_interpreted_only_when_valid(void) {
         make(JOB_OUTCOME_KERNEL_ERROR, COMMAND_CONSUME, 1, 1, 5, 2, interrupted);
 
     CHECK(job_outcome_format(&with_errno, text, sizeof text) > 0, "formatação falhou");
-    CHECK(strstr(text, strerror(EINTR)) != NULL, "errno válido não interpretado: %s", text);
+    CHECK(strstr(text, strerror(EINTR)) != nullptr, "errno válido não interpretado: %s", text);
 
     /* Limites do intervalo válido. */
     mpmc_result_t first = {.status = MPMC_ERR_SYS, .system_errno = 1};
     job_outcome_t at_one = make(JOB_OUTCOME_SPAWN_FAILED, COMMAND_PRODUCE, 0, 1, 1, 0, first);
 
     CHECK(job_outcome_format(&at_one, text, sizeof text) > 0, "formatação falhou");
-    CHECK(strstr(text, strerror(1)) != NULL, "errno 1 deveria ser interpretado: %s", text);
+    CHECK(strstr(text, strerror(1)) != nullptr, "errno 1 deveria ser interpretado: %s", text);
 }
 
 static void test_lines_are_single_and_unprefixed(void) {
@@ -285,7 +286,7 @@ static void test_lines_are_single_and_unprefixed(void) {
         char text[512];
 
         CHECK(job_outcome_format(&outcome, text, sizeof text) > 0, "formatação falhou");
-        CHECK(strchr(text, '\n') == NULL, "o texto não pode ter quebra de linha: %s", text);
+        CHECK(strchr(text, '\n') == nullptr, "o texto não pode ter quebra de linha: %s", text);
         CHECK(strncmp(text, "mpmc:", 5) != 0, "o prefixo é do chamador: %s", text);
     }
 }
@@ -296,16 +297,16 @@ static void test_buffer_contract(void) {
     int needed = job_outcome_format(&outcome, full, sizeof full);
 
     CHECK(needed > 0, "formatação falhou");
-    CHECK(job_outcome_format(&outcome, NULL, 0u) == needed, "tamanho sem buffer difere");
+    CHECK(job_outcome_format(&outcome, nullptr, 0) == needed, "tamanho sem buffer difere");
 
     char small[16];
     memset(small, 'x', sizeof small);
     CHECK(job_outcome_format(&outcome, small, sizeof small) == needed, "retorno com truncamento");
     CHECK(
-        small[sizeof small - 1u] == '\0' && strlen(small) == sizeof small - 1u,
+        small[sizeof small - 1] == '\0' && strlen(small) == sizeof small - 1,
         "texto truncado deve terminar em NUL"
     );
-    CHECK(strncmp(small, full, sizeof small - 1u) == 0, "o truncamento deve preservar o início");
+    CHECK(strncmp(small, full, sizeof small - 1) == 0, "o truncamento deve preservar o início");
 
     char one[1] = {'x'};
     CHECK(
@@ -313,8 +314,8 @@ static void test_buffer_contract(void) {
         "capacidade 1 deve produzir texto vazio"
     );
 
-    CHECK(job_outcome_format(NULL, full, sizeof full) == -1, "evento nulo");
-    CHECK(job_outcome_format(&outcome, NULL, 8u) == -1, "buffer nulo com capacidade");
+    CHECK(job_outcome_format(nullptr, full, sizeof full) == -1, "evento nulo");
+    CHECK(job_outcome_format(&outcome, nullptr, 8) == -1, "buffer nulo com capacidade");
 
     job_outcome_t unknown = make((job_outcome_kind_t)99, COMMAND_CONSUME, 1, 1, 1, 1, NO_ERROR);
 

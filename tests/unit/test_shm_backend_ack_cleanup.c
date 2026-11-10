@@ -34,7 +34,7 @@ static unsigned shm_remove_calls;
 static unsigned sem_remove_calls;
 
 mpmc_result_t mpmc_test_shm_detach(const void *address) {
-    CHECK(address != NULL);
+    CHECK(address != nullptr);
     unsigned index = detach_calls++;
     if (index >= 1) {
         return (mpmc_result_t){.status = MPMC_ERR_STATE};
@@ -83,7 +83,7 @@ static void test_failed_detach_preserves_mapping(void) {
 
     CHECK(result.status == MPMC_ERR_SYS);
     CHECK(result.system_errno == 5);
-    CHECK(backend.ack_control != NULL);
+    CHECK(backend.ack_control != nullptr);
     CHECK(detach_calls == 1);
 
     detach_results[0] = (mpmc_result_t){.status = MPMC_OK};
@@ -92,7 +92,7 @@ static void test_failed_detach_preserves_mapping(void) {
     result = shm_backend_ack_resources_cleanup(&backend, false);
 
     CHECK(result.status == MPMC_OK);
-    CHECK(backend.ack_control == NULL);
+    CHECK(backend.ack_control == nullptr);
 }
 
 static void test_failed_global_removals_preserve_ids(void) {
@@ -150,7 +150,7 @@ static void test_cleanup_preserves_first_error_and_continues(void) {
     CHECK(detach_calls == 1);
     CHECK(sem_remove_calls == 1);
     CHECK(shm_remove_calls == 1);
-    CHECK(backend.ack_control != NULL);
+    CHECK(backend.ack_control != nullptr);
     CHECK(backend.ack_semid == 20);
     CHECK(backend.ack_control_shmid == 10);
     CHECK(causes[0] == 3 && causes[1] == 5 && causes[2] == 13 && causes[3] == 1);

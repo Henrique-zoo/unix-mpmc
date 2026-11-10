@@ -10,7 +10,7 @@
 #include <stdio.h>
 
 bool job_outcome_is_success(const job_outcome_t *outcome) {
-    return outcome != NULL && outcome->kind == JOB_OUTCOME_COMPLETED
+    return outcome != nullptr && outcome->kind == JOB_OUTCOME_COMPLETED
         && outcome->effective == outcome->requested;
 }
 
@@ -32,7 +32,7 @@ static void format_cause(mpmc_result_t error, char *buffer, size_t capacity) {
 }
 
 int job_outcome_format(const job_outcome_t *outcome, char *buffer, size_t capacity) {
-    if (outcome == NULL || (buffer == NULL && capacity > 0u)) {
+    if (outcome == nullptr || (buffer == nullptr && capacity > 0)) {
         return -1;
     }
 
@@ -45,14 +45,14 @@ int job_outcome_format(const job_outcome_t *outcome, char *buffer, size_t capaci
     const char *done = outcome->command == COMMAND_PRODUCE ? "produzidas" : "consumidas";
 
     char structure[48];
-    if (outcome->producer_id == 0u) {
+    if (outcome->producer_id == 0) {
         (void)snprintf(structure, sizeof structure, "todas as estruturas");
     } else {
         (void)snprintf(structure, sizeof structure, "estrutura %zu", outcome->producer_id);
     }
 
     char subject[128];
-    if (outcome->operation_id == 0u) {
+    if (outcome->operation_id == 0) {
         (void)snprintf(subject, sizeof subject, "comando (%s, %s)", verb, structure);
     } else {
         (void)snprintf(

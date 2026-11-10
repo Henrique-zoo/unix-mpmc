@@ -60,7 +60,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    supervisor_t *supervisor = NULL;
+    supervisor_t *supervisor = nullptr;
     uint64_t before = mpmc_diagnostic_count();
     error = supervisor_create(&supervisor, config.producer_count, config.mode);
     if (error.status != MPMC_OK) {
@@ -76,7 +76,7 @@ int main(int argc, char *argv[]) {
         (void)mpmc_error_format(error, error_text, sizeof error_text);
         if (before == mpmc_diagnostic_count())
             fprintf(stderr, "mpmc: REPL encerrado com erro: %s\n", error_text);
-        (void)supervisor_shutdown(supervisor, NULL);
+        (void)supervisor_shutdown(supervisor, nullptr);
     }
     before = mpmc_diagnostic_count();
     mpmc_result_t report_error = supervisor_print_report(supervisor, stdout);
@@ -127,7 +127,7 @@ int main(int argc, char *argv[]) {
  * @note A função não inicializa recursos IPC nem cria processos.
  */
 static mpmc_result_t parse_args(int argc, char *argv[], mpmc_config_t *out) {
-    if (argc != 3 || argv == NULL || out == NULL) {
+    if (argc != 3 || argv == nullptr || out == nullptr) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
@@ -181,7 +181,7 @@ static mpmc_result_t parse_args(int argc, char *argv[], mpmc_config_t *out) {
  * formato/faixa sem causa de sistema possuem system_errno igual a zero.
  */
 static mpmc_result_t parse_positive_integer(const char *text, size_t *out) {
-    if (text == NULL || out == NULL || *text == '\0') {
+    if (text == nullptr || out == nullptr || *text == '\0') {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 

@@ -79,7 +79,7 @@ static void cleanup_segments(void) {
 
     for (size_t index = 0; index < owned_count; ++index) {
         if (owned_segments[index] >= 0) {
-            (void)shmctl(owned_segments[index], IPC_RMID, NULL);
+            (void)shmctl(owned_segments[index], IPC_RMID, nullptr);
         }
     }
 }
@@ -96,7 +96,7 @@ static void track_segment(int shmid) {
     if (owned_count < capacity) {
         owned_segments[owned_count++] = shmid;
     } else {
-        (void)shmctl(shmid, IPC_RMID, NULL);
+        (void)shmctl(shmid, IPC_RMID, nullptr);
     }
 }
 
@@ -179,7 +179,7 @@ static void noop_sigchld_handler(int signal_number) {
 static bool wait_for_child(pid_t child, int *status) {
     sigset_t wait_signals;
     sigset_t previous_mask;
-    struct sigaction chld_action = {0};
+    struct sigaction chld_action = {};
     struct sigaction old_chld_action;
     bool action_saved = false;
     bool mask_saved = false;
@@ -263,10 +263,10 @@ cleanup:
         CHECK(waited == child || (waited == -1 && errno == ECHILD));
     }
     if (action_saved) {
-        CHECK(sigaction(SIGCHLD, &old_chld_action, NULL) == 0);
+        CHECK(sigaction(SIGCHLD, &old_chld_action, nullptr) == 0);
     }
     if (mask_saved) {
-        CHECK(sigprocmask(SIG_SETMASK, &previous_mask, NULL) == 0);
+        CHECK(sigprocmask(SIG_SETMASK, &previous_mask, nullptr) == 0);
     }
 
     return collected;
@@ -279,14 +279,14 @@ static void test_invalid_arguments(void) {
     int shmid = -1;
     CHECK_RESULT(sysv_shm_create(0, &shmid), MPMC_ERR_INVALID_ARG, EINVAL);
     CHECK(shmid == -1);
-    CHECK_RESULT(sysv_shm_create(MPMC_SHM_SEGMENT_BYTES, NULL), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(sysv_shm_create(MPMC_SHM_SEGMENT_BYTES, nullptr), MPMC_ERR_INVALID_ARG, 0);
 
     int sentinel;
     void *address = &sentinel;
     CHECK_RESULT(sysv_shm_attach(-1, &address), MPMC_ERR_INVALID_ARG, EINVAL);
     CHECK(address == &sentinel);
-    CHECK_RESULT(sysv_shm_attach(0, NULL), MPMC_ERR_INVALID_ARG, 0);
-    CHECK_RESULT(sysv_shm_detach(NULL), MPMC_ERR_INVALID_ARG, EINVAL);
+    CHECK_RESULT(sysv_shm_attach(0, nullptr), MPMC_ERR_INVALID_ARG, 0);
+    CHECK_RESULT(sysv_shm_detach(nullptr), MPMC_ERR_INVALID_ARG, EINVAL);
     CHECK_RESULT(sysv_shm_remove(-1), MPMC_ERR_INVALID_ARG, EINVAL);
 
     struct shmid_ds info = {.shm_segsz = 123};
@@ -335,9 +335,9 @@ static void test_segments_are_private_and_sized(void) {
         }
     }
 
-    CHECK_RESULT(sysv_shm_stat(first, NULL), MPMC_ERR_INVALID_ARG, EFAULT);
+    CHECK_RESULT(sysv_shm_stat(first, nullptr), MPMC_ERR_INVALID_ARG, EFAULT);
 
-    void *address = NULL;
+    void *address = nullptr;
     errno = EACCES;
     mpmc_result_t result = sysv_shm_attach(first, &address);
     CHECK(result.status == MPMC_OK && result.system_errno == 0);
@@ -384,7 +384,7 @@ static void test_parent_and_child_lifecycle(void) {
     int shmid = new_segment();
     if (shmid < 0) return;
 
-    void *address = NULL;
+    void *address = nullptr;
     mpmc_result_t result = sysv_shm_attach(shmid, &address);
     CHECK(result.status == MPMC_OK && result.system_errno == 0);
     if (result.status != MPMC_OK) return;

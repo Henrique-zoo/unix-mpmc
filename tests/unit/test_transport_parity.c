@@ -60,19 +60,19 @@ static const char *mode_name(ipc_mode_t mode) {
 /** @brief Último recurso contra travamento: mata filhos e remove o contexto em uso. */
 static void on_alarm(int signal_number) {
     (void)signal_number;
-    for (size_t index = 0u; index < MAX_KIDS; ++index) {
+    for (size_t index = 0; index < MAX_KIDS; ++index) {
         if (kids[index] > 0) (void)kill(kids[index], SIGKILL);
     }
     ipc_context_t *context = live;
-    if (context != NULL) ipc_destroy(context);
+    if (context != nullptr) ipc_destroy(context);
     static const char message[] = "ALARME: teste travou; filhos mortos\n";
-    (void)!write(STDERR_FILENO, message, sizeof(message) - 1u);
+    (void)!write(STDERR_FILENO, message, sizeof(message) - 1);
     _exit(3);
 }
 
 static void tick(void) {
     const struct timespec delay = {.tv_sec = 0, .tv_nsec = 2000000};
-    (void)nanosleep(&delay, NULL);
+    (void)nanosleep(&delay, nullptr);
 }
 
 static unsigned long elapsed_ms(const struct timespec *start) {
@@ -130,15 +130,15 @@ static bool source_is_mode_agnostic(const char *path) {
         "msgrcv",
     };
     FILE *file = fopen(path, "r");
-    if (file == NULL) {
+    if (file == nullptr) {
         fprintf(stderr, "não foi possível abrir %s (execute a partir da raiz)\n", path);
         return false;
     }
     char line[512];
     bool clean = true;
-    while (fgets(line, sizeof(line), file) != NULL) {
-        for (size_t index = 0u; index < sizeof(forbidden) / sizeof(forbidden[0]); ++index) {
-            if (strstr(line, forbidden[index]) != NULL) {
+    while (fgets(line, sizeof(line), file) != nullptr) {
+        for (size_t index = 0; index < sizeof(forbidden) / sizeof(forbidden[0]); ++index) {
+            if (strstr(line, forbidden[index]) != nullptr) {
                 fprintf(stderr, "%s cita %s\n", path, forbidden[index]);
                 clean = false;
             }
@@ -154,7 +154,7 @@ static void test_workers_have_no_paradigm_branches(void) {
         "src/workers/consumer.c",
         "src/workers/producer_routing.c",
     };
-    for (size_t index = 0u; index < SOURCE_WORKERS; ++index) {
+    for (size_t index = 0; index < SOURCE_WORKERS; ++index) {
         CHECK(source_is_mode_agnostic(sources[index]));
     }
 }
@@ -213,7 +213,7 @@ static pid_t spawn_consumer(
             .producer_id = queue,
             .message_count = count,
             .ack_mode = mode,
-            .operation_id = 900u + count,
+            .operation_id = 900 + count,
         };
         consumer_result_t result;
         _exit(exit_code(consumer_run(context, &job, &result)));
@@ -235,7 +235,7 @@ static bool check_head(
     size_t count
 ) {
     bool ok = true;
-    for (size_t index = 0u; index < count; ++index) {
+    for (size_t index = 0; index < count; ++index) {
         message_t message;
         mpmc_result_t result = ipc_receive(context, queue, &message, false);
         ok = ok && result.status == MPMC_OK && message.sender_pid == sender
@@ -252,53 +252,53 @@ static bool check_head(
  * bloqueantes e um não bloqueante sobre fila vazia.
  */
 static outcome_t run_scenario(ipc_mode_t mode) {
-    outcome_t outcome = {0};
-    ipc_context_t *context = NULL;
-    if (ipc_init(&context, 3u, mode).status != MPMC_OK) return outcome;
+    outcome_t outcome = {};
+    ipc_context_t *context = nullptr;
+    if (ipc_init(&context, 3, mode).status != MPMC_OK) return outcome;
     live = context;
 
     /* Produtor A: 20 mensagens à fila 2. Produtor B: 30 mensagens em rodízio 1..3. */
-    kids[0] = spawn_producer(context, 2u, kDirected, PRODUCER_ACK_NONE, 1u);
+    kids[0] = spawn_producer(context, 2, kDirected, PRODUCER_ACK_NONE, 1);
     pid_t producer_a = kids[0];
-    outcome.codes[outcome.code_count++] = reap(0u, context);
-    kids[0] = spawn_producer(context, 0u, kStriped, PRODUCER_ACK_NONE, 2u);
+    outcome.codes[outcome.code_count++] = reap(0, context);
+    kids[0] = spawn_producer(context, 0, kStriped, PRODUCER_ACK_NONE, 2);
     pid_t producer_b = kids[0];
-    outcome.codes[outcome.code_count++] = reap(0u, context);
+    outcome.codes[outcome.code_count++] = reap(0, context);
 
     /* Fila 1 só tem as mensagens 1, 4, 7... do striped; a fila 2 tem as de A antes. */
-    const uint32_t striped_first[3] = {1u, 4u, 7u};
-    const uint32_t directed_first[3] = {1u, 2u, 3u};
-    outcome.metadata_ok = check_head(context, 1u, producer_b, 2u, striped_first, 3u)
-        && check_head(context, 2u, producer_a, 1u, directed_first, 3u);
+    const uint32_t striped_first[3] = {1, 4, 7};
+    const uint32_t directed_first[3] = {1, 2, 3};
+    outcome.metadata_ok = check_head(context, 1, producer_b, 2, striped_first, 3)
+        && check_head(context, 2, producer_a, 1, directed_first, 3);
 
     /* O restante é consumido por workers: 7 + 27 + 10. */
-    kids[0] = spawn_consumer(context, 1u, kPerQueueB - kHead, CONSUMER_BLOCKING);
-    kids[1] = spawn_consumer(context, 2u, kDirected + kPerQueueB - kHead, CONSUMER_BLOCKING);
-    kids[2] = spawn_consumer(context, 3u, kPerQueueB, CONSUMER_BLOCKING);
-    for (size_t slot = 0u; slot < 3u; ++slot) {
+    kids[0] = spawn_consumer(context, 1, kPerQueueB - kHead, CONSUMER_BLOCKING);
+    kids[1] = spawn_consumer(context, 2, kDirected + kPerQueueB - kHead, CONSUMER_BLOCKING);
+    kids[2] = spawn_consumer(context, 3, kPerQueueB, CONSUMER_BLOCKING);
+    for (size_t slot = 0; slot < 3; ++slot) {
         outcome.codes[outcome.code_count++] = reap(slot, context);
     }
 
     /* Tudo foi retirado: um consumo não bloqueante agora termina por falta de item. */
-    kids[0] = spawn_consumer(context, 3u, 1u, CONSUMER_NONBLOCKING);
-    outcome.codes[outcome.code_count++] = reap(0u, context);
+    kids[0] = spawn_consumer(context, 3, 1, CONSUMER_NONBLOCKING);
+    outcome.codes[outcome.code_count++] = reap(0, context);
 
     (void)ipc_poll_events(context);
-    for (size_t queue = 1u; queue <= 3u; ++queue) {
-        uint64_t count = 0u;
+    for (size_t queue = 1; queue <= 3; ++queue) {
+        uint64_t count = 0;
         if (ipc_consumed_count(context, queue, &count).status == MPMC_OK) {
-            outcome.consumed[queue - 1u] = count;
+            outcome.consumed[queue - 1] = count;
         }
     }
-    live = NULL;
+    live = nullptr;
     ipc_destroy(context);
     return outcome;
 }
 
 static void print_outcome(const char *name, const outcome_t *outcome) {
     fprintf(stderr, "  [%s] metadata_ok=%d códigos=[", name, (int)outcome->metadata_ok);
-    for (size_t index = 0u; index < outcome->code_count; ++index) {
-        fprintf(stderr, "%s%d", index == 0u ? "" : " ", outcome->codes[index]);
+    for (size_t index = 0; index < outcome->code_count; ++index) {
+        fprintf(stderr, "%s%d", index == 0 ? "" : " ", outcome->codes[index]);
     }
     fprintf(
         stderr,
@@ -316,9 +316,9 @@ static void test_same_worker_code_same_outcome(void) {
     const int expected_codes[6] = {0, 0, 0, 0, 0, 100 + (int)MPMC_ERR_WOULD_BLOCK};
     const uint64_t expected_consumed[3] = {kPerQueueB, kDirected + kPerQueueB, kPerQueueB};
 
-    for (size_t mode_index = 0u; mode_index < 2u; ++mode_index) {
-        const outcome_t *outcome = mode_index == 0u ? &shm : &msg;
-        CHECK(outcome->code_count == 6u);
+    for (size_t mode_index = 0; mode_index < 2; ++mode_index) {
+        const outcome_t *outcome = mode_index == 0 ? &shm : &msg;
+        CHECK(outcome->code_count == 6);
         CHECK(memcmp(outcome->codes, expected_codes, sizeof(expected_codes)) == 0);
         CHECK(memcmp(outcome->consumed, expected_consumed, sizeof(expected_consumed)) == 0);
         CHECK(outcome->metadata_ok);
@@ -347,51 +347,51 @@ typedef struct {
 
 /** @brief Executa a mesma tabela de chamadas inválidas e devolve o resultado de cada uma. */
 static void collect_errors(ipc_mode_t mode, call_result_t out[ERROR_CASES]) {
-    ipc_context_t *context = NULL;
-    CHECK(ipc_init(&context, 2u, mode).status == MPMC_OK);
-    if (context == NULL) return;
-    message_t message = {.sender_pid = getpid(), .sequence = 1u, .operation_id = 7u};
+    ipc_context_t *context = nullptr;
+    CHECK(ipc_init(&context, 2, mode).status == MPMC_OK);
+    if (context == nullptr) return;
+    message_t message = {.sender_pid = getpid(), .sequence = 1, .operation_id = 7};
     message_t received;
-    uint64_t count = 0u;
-    size_t n = 0u;
+    uint64_t count = 0;
+    size_t n = 0;
 #define RECORD(label, expression)                                                                  \
     do {                                                                                           \
         mpmc_result_t r_ = (expression);                                                           \
         out[n++] = (call_result_t){label, r_.status, r_.system_errno};                             \
     } while (0)
-    RECORD("send índice 0", ipc_send(context, 0u, &message));
-    RECORD("send índice p+1", ipc_send(context, 3u, &message));
-    RECORD("send mensagem nula", ipc_send(context, 1u, NULL));
-    RECORD("receive índice 0", ipc_receive(context, 0u, &received, false));
-    RECORD("receive índice p+1", ipc_receive(context, 3u, &received, false));
-    RECORD("receive saída nula", ipc_receive(context, 1u, NULL, false));
-    RECORD("consumed índice 0", ipc_consumed_count(context, 0u, &count));
-    RECORD("consumed índice p+1", ipc_consumed_count(context, 3u, &count));
-    RECORD("consumed saída nula", ipc_consumed_count(context, 1u, NULL));
-    RECORD("ack_begin op 0", ipc_ack_begin(context, 0u, 1u));
-    RECORD("ack_begin op > LONG_MAX", ipc_ack_begin(context, (uint64_t)LONG_MAX + 1u, 1u));
-    RECORD("ack_begin n 0", ipc_ack_begin(context, 9u, 0u));
-    RECORD("ack_begin n 1025", ipc_ack_begin(context, 9u, 1025u));
-    RECORD("ack_wait op 0", ipc_ack_wait(context, 0u));
-    RECORD("ack_end op 0", ipc_ack_end(context, 0u));
-    RECORD("ack_abandon op 0", ipc_ack_abandon(context, 0u));
-    RECORD("ack_abandon op > LONG_MAX", ipc_ack_abandon(context, (uint64_t)LONG_MAX + 1u));
-    RECORD("contexto nulo send", ipc_send(NULL, 1u, &message));
-    RECORD("contexto nulo receive", ipc_receive(NULL, 1u, &received, false));
-    RECORD("contexto nulo poll", ipc_poll_events(NULL));
-    RECORD("contexto nulo ack_begin", ipc_ack_begin(NULL, 9u, 1u));
+    RECORD("send índice 0", ipc_send(context, 0, &message));
+    RECORD("send índice p+1", ipc_send(context, 3, &message));
+    RECORD("send mensagem nula", ipc_send(context, 1, nullptr));
+    RECORD("receive índice 0", ipc_receive(context, 0, &received, false));
+    RECORD("receive índice p+1", ipc_receive(context, 3, &received, false));
+    RECORD("receive saída nula", ipc_receive(context, 1, nullptr, false));
+    RECORD("consumed índice 0", ipc_consumed_count(context, 0, &count));
+    RECORD("consumed índice p+1", ipc_consumed_count(context, 3, &count));
+    RECORD("consumed saída nula", ipc_consumed_count(context, 1, nullptr));
+    RECORD("ack_begin op 0", ipc_ack_begin(context, 0, 1));
+    RECORD("ack_begin op > LONG_MAX", ipc_ack_begin(context, (uint64_t)LONG_MAX + 1, 1));
+    RECORD("ack_begin n 0", ipc_ack_begin(context, 9, 0));
+    RECORD("ack_begin n 1025", ipc_ack_begin(context, 9, 1025));
+    RECORD("ack_wait op 0", ipc_ack_wait(context, 0));
+    RECORD("ack_end op 0", ipc_ack_end(context, 0));
+    RECORD("ack_abandon op 0", ipc_ack_abandon(context, 0));
+    RECORD("ack_abandon op > LONG_MAX", ipc_ack_abandon(context, (uint64_t)LONG_MAX + 1));
+    RECORD("contexto nulo send", ipc_send(nullptr, 1, &message));
+    RECORD("contexto nulo receive", ipc_receive(nullptr, 1, &received, false));
+    RECORD("contexto nulo poll", ipc_poll_events(nullptr));
+    RECORD("contexto nulo ack_begin", ipc_ack_begin(nullptr, 9, 1));
     /* Fila vazia sem bloquear: mesmo status; o errno é o da syscall de cada paradigma. */
-    RECORD("receive vazia", ipc_receive(context, 1u, &received, false));
+    RECORD("receive vazia", ipc_receive(context, 1, &received, false));
 #undef RECORD
     ipc_destroy(context);
 }
 
 static void test_error_parity(void) {
-    call_result_t shm[ERROR_CASES + 1u] = {0};
-    call_result_t msg[ERROR_CASES + 1u] = {0};
+    call_result_t shm[ERROR_CASES + 1] = {};
+    call_result_t msg[ERROR_CASES + 1] = {};
     collect_errors(IPC_SHARED_MEMORY, shm);
     collect_errors(IPC_MESSAGE_QUEUE, msg);
-    static const mpmc_status_t expected[ERROR_CASES + 1u] = {
+    static const mpmc_status_t expected[ERROR_CASES + 1] = {
         MPMC_ERR_INVALID_INDEX,
         MPMC_ERR_INVALID_INDEX,
         MPMC_ERR_INVALID_ARG,
@@ -415,8 +415,8 @@ static void test_error_parity(void) {
         MPMC_ERR_INVALID_ARG,
         MPMC_ERR_WOULD_BLOCK,
     };
-    for (size_t index = 0u; index < ERROR_CASES; ++index) {
-        if (shm[index].name == NULL || msg[index].name == NULL) {
+    for (size_t index = 0; index < ERROR_CASES; ++index) {
+        if (shm[index].name == nullptr || msg[index].name == nullptr) {
             CHECK(false);
             continue;
         }
@@ -439,8 +439,8 @@ static void test_error_parity(void) {
         }
     }
     /* O errno de "vazio" é diagnóstico da syscall de cada paradigma. */
-    CHECK(shm[ERROR_CASES - 1u].system_errno == EAGAIN);
-    CHECK(msg[ERROR_CASES - 1u].system_errno == ENOMSG);
+    CHECK(shm[ERROR_CASES - 1].system_errno == EAGAIN);
+    CHECK(msg[ERROR_CASES - 1].system_errno == ENOMSG);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -456,19 +456,17 @@ typedef struct {
 } resource_ids_t;
 
 static resource_ids_t capture_ids(ipc_context_t *context) {
-    resource_ids_t ids = {0};
+    resource_ids_t ids = {};
     if (context->mode == IPC_MESSAGE_QUEUE) {
         msg_backend_t *backend = context->message_backend;
-        for (size_t index = 0u; index < backend->producer_count && ids.msq_count < 6u; ++index) {
+        for (size_t index = 0; index < backend->producer_count && ids.msq_count < 6; ++index) {
             ids.msq[ids.msq_count++] = backend->data_queues[index];
         }
         ids.msq[ids.msq_count++] = backend->event_queue;
         ids.msq[ids.msq_count++] = backend->ack_queue;
     } else {
         struct shm_backend *backend = context->shared_backend;
-        for (
-            size_t index = 0u; index < backend->producer_count && ids.segment_count < 8u; ++index
-        ) {
+        for (size_t index = 0; index < backend->producer_count && ids.segment_count < 8; ++index) {
             ids.shm[ids.segment_count] = backend->segments[index].shmid;
             ids.sem[ids.segment_count] = backend->segments[index].semid;
             ++ids.segment_count;
@@ -492,10 +490,9 @@ static bool sem_exists(int id) {
 }
 
 static size_t count_existing(const resource_ids_t *ids) {
-    size_t existing = 0u;
-    for (size_t index = 0u; index < ids->msq_count; ++index)
-        existing += msq_exists(ids->msq[index]);
-    for (size_t index = 0u; index < ids->segment_count; ++index) {
+    size_t existing = 0;
+    for (size_t index = 0; index < ids->msq_count; ++index) existing += msq_exists(ids->msq[index]);
+    for (size_t index = 0; index < ids->segment_count; ++index) {
         existing += shm_exists(ids->shm[index]);
         existing += sem_exists(ids->sem[index]);
     }
@@ -503,44 +500,43 @@ static size_t count_existing(const resource_ids_t *ids) {
 }
 
 static size_t total_resources(const resource_ids_t *ids) {
-    return ids->msq_count + 2u * ids->segment_count;
+    return ids->msq_count + 2 * ids->segment_count;
 }
 
 static void test_close_is_local_destroy_removes(ipc_mode_t mode) {
-    ipc_context_t *context = NULL;
-    CHECK(ipc_init(&context, 2u, mode).status == MPMC_OK);
-    if (context == NULL) return;
+    ipc_context_t *context = nullptr;
+    CHECK(ipc_init(&context, 2, mode).status == MPMC_OK);
+    if (context == nullptr) return;
     live = context;
     const resource_ids_t ids = capture_ids(context);
     const size_t total = total_resources(&ids);
-    CHECK(total > 0u && count_existing(&ids) == total);
+    CHECK(total > 0 && count_existing(&ids) == total);
 
     /* Dois filhos, em sequência: o fechamento do primeiro não pode afetar o segundo. */
-    for (unsigned round = 0u; round < 2u; ++round) {
+    for (unsigned round = 0; round < 2; ++round) {
         pid_t child = fork();
         if (child == 0) {
             (void)signal(SIGALRM, SIG_DFL);
-            message_t message = {
-                .sender_pid = getpid(), .sequence = round + 1u, .operation_id = 5u};
-            mpmc_result_t sent = ipc_send(context, 1u, &message);
+            message_t message = {.sender_pid = getpid(), .sequence = round + 1, .operation_id = 5};
+            mpmc_result_t sent = ipc_send(context, 1, &message);
             ipc_worker_close(context);
             _exit(sent.status == MPMC_OK ? 0 : 1);
         }
         CHECK(child > 0);
         kids[0] = child;
-        CHECK(reap(0u, context) == 0);
+        CHECK(reap(0, context) == 0);
         /* Depois do worker_close, nenhum recurso global desapareceu e o dono ainda opera. */
         CHECK(count_existing(&ids) == total);
     }
     message_t first;
     message_t second;
-    CHECK(ipc_receive(context, 1u, &first, false).status == MPMC_OK && first.sequence == 1u);
-    CHECK(ipc_receive(context, 1u, &second, false).status == MPMC_OK && second.sequence == 2u);
+    CHECK(ipc_receive(context, 1, &first, false).status == MPMC_OK && first.sequence == 1);
+    CHECK(ipc_receive(context, 1, &second, false).status == MPMC_OK && second.sequence == 2);
     CHECK(count_existing(&ids) == total);
 
-    live = NULL;
+    live = nullptr;
     ipc_destroy(context);
-    CHECK(count_existing(&ids) == 0u);
+    CHECK(count_existing(&ids) == 0);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -550,7 +546,7 @@ static void test_close_is_local_destroy_removes(ipc_mode_t mode) {
 /** @brief Lê um inteiro de um arquivo do /proc; -1 se indisponível. */
 static long read_long(const char *path) {
     FILE *file = fopen(path, "r");
-    if (file == NULL) return -1;
+    if (file == nullptr) return -1;
     long value = -1;
     if (fscanf(file, "%ld", &value) != 1) value = -1;
     fclose(file);
@@ -569,7 +565,7 @@ static long count_objects(char kind) {
         : kind == 's'               ? "/proc/sysvipc/sem"
                                     : "/proc/sysvipc/msg";
     FILE *file = fopen(table, "r");
-    if (file != NULL) {
+    if (file != nullptr) {
         long lines = -1; /* a primeira linha é o cabeçalho */
         int ch;
         while ((ch = fgetc(file)) != EOF) {
@@ -581,11 +577,11 @@ static long count_objects(char kind) {
     char command[32];
     snprintf(command, sizeof(command), "ipcs -%c 2>/dev/null", kind);
     file = popen(command, "r");
-    if (file == NULL) return -1;
+    if (file == nullptr) return -1;
     long objects = 0;
     char line[256];
     bool any_output = false;
-    while (fgets(line, sizeof(line), file) != NULL) {
+    while (fgets(line, sizeof(line), file) != nullptr) {
         any_output = true;
         if (line[0] == kind && line[1] == ' ') ++objects;
     }
@@ -602,14 +598,14 @@ static long count_objects(char kind) {
 static void test_partial_init_rolls_back(ipc_mode_t mode) {
     const bool shm = mode == IPC_SHARED_MEMORY;
     const long limit = read_long(shm ? "/proc/sys/kernel/shmmni" : "/proc/sys/kernel/msgmni");
-    const size_t ladder[] = {128u, 1024u, 8192u, 40000u};
-    const size_t known[] = {limit > 0 ? (size_t)limit + 8u : 0u};
+    const size_t ladder[] = {128, 1024, 8192, 40000};
+    const size_t known[] = {limit > 0 ? (size_t)limit + 8 : 0};
     const size_t *candidates = limit > 0 ? known : ladder;
-    const size_t candidate_count = limit > 0 ? 1u : sizeof(ladder) / sizeof(ladder[0]);
+    const size_t candidate_count = limit > 0 ? 1 : sizeof(ladder) / sizeof(ladder[0]);
 
-    for (size_t index = 0u; index < candidate_count; ++index) {
+    for (size_t index = 0; index < candidate_count; ++index) {
         const size_t producers = candidates[index];
-        if (producers > 60000u) break;
+        if (producers > 60000) break;
         const long shm_before = count_objects('m');
         const long sem_before = count_objects('s');
         const long msq_before = count_objects('q');
@@ -623,7 +619,7 @@ static void test_partial_init_rolls_back(ipc_mode_t mode) {
         /* A falha acontece depois de muitos recursos já criados. */
         CHECK(result.status == MPMC_ERR_SYS || result.status == MPMC_ERR_SHUTDOWN);
         CHECK(result.system_errno != 0);
-        CHECK(context == NULL);
+        CHECK(context == nullptr);
         if (shm_before >= 0 && sem_before >= 0 && msq_before >= 0) {
             CHECK(count_objects('m') == shm_before);
             CHECK(count_objects('s') == sem_before);
@@ -642,11 +638,11 @@ static void test_partial_init_rolls_back(ipc_mode_t mode) {
 int main(void) {
     struct sigaction action = {.sa_handler = on_alarm};
     sigemptyset(&action.sa_mask);
-    if (sigaction(SIGALRM, &action, NULL) == -1) {
+    if (sigaction(SIGALRM, &action, nullptr) == -1) {
         perror("sigaction");
         return 1;
     }
-    alarm(120u);
+    alarm(120);
 
     test_workers_have_no_paradigm_branches();
     test_same_worker_code_same_outcome();
@@ -656,9 +652,9 @@ int main(void) {
     test_partial_init_rolls_back(IPC_SHARED_MEMORY);
     test_partial_init_rolls_back(IPC_MESSAGE_QUEUE);
 
-    alarm(0u);
+    alarm(0);
     printf("%u verificações de paridade de transporte, %u falhas\n", checks, failures);
-    if (failures != 0u) return 1;
+    if (failures != 0) return 1;
     puts("Transport parity tests passed.");
     return 0;
 }

@@ -559,18 +559,18 @@ static void test_argument_guards(void) {
     command_t c = make_sentinel();
 
     CHECK(
-        command_parse(NULL, &c).status == MPMC_ERR_INVALID_ARG,
+        command_parse(nullptr, &c).status == MPMC_ERR_INVALID_ARG,
         "line NULL deveria retornar INVALID_ARG"
     );
     CHECK(sentinel_intact(&c), "*out tocado com line NULL");
 
     CHECK(
-        command_parse("produz 1 1 1", NULL).status == MPMC_ERR_INVALID_ARG,
+        command_parse("produz 1 1 1", nullptr).status == MPMC_ERR_INVALID_ARG,
         "out NULL deveria retornar INVALID_ARG"
     );
 
     CHECK(
-        command_validate(NULL, 4).status == MPMC_ERR_INVALID_ARG,
+        command_validate(nullptr, 4).status == MPMC_ERR_INVALID_ARG,
         "validate com command NULL deveria retornar INVALID_ARG"
     );
 }

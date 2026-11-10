@@ -36,7 +36,7 @@ mpmc_result_t sysv_msg_create(int *out_msqid) {
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
 
-    if (out_msqid == NULL)
+    if (out_msqid == nullptr)
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
@@ -61,14 +61,14 @@ mpmc_result_t sysv_msg_send(int msqid, long type, const void *payload, size_t si
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
     diagnostic_scope.resource_id = msqid;
 
-    if ((size > 0 && payload == NULL) || size > SIZE_MAX - offsetof(msg_envelope_t, mtext)) {
+    if ((size > 0 && payload == nullptr) || size > SIZE_MAX - offsetof(msg_envelope_t, mtext)) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
     }
 
     msg_envelope_t *envelope = envelope_alloc(size);
-    if (envelope == NULL) {
+    if (envelope == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope,
             (mpmc_result_t){
@@ -107,7 +107,9 @@ mpmc_result_t sysv_msg_receive(
 
     return mpmc_diagnostic_end(
         &diagnostic_scope,
-        sysv_msg_receive_typed(msqid, desired_type, out_payload, capacity, nowait, out_size, NULL)
+        sysv_msg_receive_typed(
+            msqid, desired_type, out_payload, capacity, nowait, out_size, nullptr
+        )
     );
 }
 
@@ -124,7 +126,7 @@ mpmc_result_t sysv_msg_receive_typed(
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
     diagnostic_scope.resource_id = msqid;
 
-    if (out_size == NULL || (capacity > 0 && out_payload == NULL)
+    if (out_size == nullptr || (capacity > 0 && out_payload == nullptr)
         || capacity > SIZE_MAX - offsetof(msg_envelope_t, mtext)) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
@@ -132,7 +134,7 @@ mpmc_result_t sysv_msg_receive_typed(
     }
 
     msg_envelope_t *envelope = envelope_alloc(capacity);
-    if (envelope == NULL) {
+    if (envelope == nullptr) {
         return mpmc_diagnostic_end(
             &diagnostic_scope,
             (mpmc_result_t){
@@ -153,7 +155,7 @@ mpmc_result_t sysv_msg_receive_typed(
         }
         free(envelope);
         *out_size = received;
-        if (out_type != NULL) {
+        if (out_type != nullptr) {
             *out_type = received_type;
         }
         return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
@@ -168,7 +170,7 @@ mpmc_result_t sysv_msg_remove(int msqid) {
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
     diagnostic_scope.resource_id = msqid;
 
-    if (msgctl(msqid, IPC_RMID, NULL) == -1)
+    if (msgctl(msqid, IPC_RMID, nullptr) == -1)
         return mpmc_diagnostic_end(&diagnostic_scope, msg_error_result(errno));
 
     return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});

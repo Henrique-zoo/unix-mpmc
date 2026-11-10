@@ -19,7 +19,7 @@ mpmc_status_t producer_message_next(
     producer_sequence_t *sequence,
     const producer_job_t *job
 ) {
-    if (out == NULL || sequence == NULL || job == NULL || job->operation_id == 0u
+    if (out == nullptr || sequence == nullptr || job == nullptr || job->operation_id == 0
         || (job->ack_mode != PRODUCER_ACK_WAIT && job->ack_mode != PRODUCER_ACK_NONE)) {
         return MPMC_ERR_INVALID_ARG;
     }
@@ -32,7 +32,7 @@ mpmc_status_t producer_message_next(
         return MPMC_ERR_SYS;
     }
 
-    uint32_t next = sequence->last_sequence + 1u;
+    uint32_t next = sequence->last_sequence + 1;
     *out = (message_t){
         .sender_pid = getpid(),
         .sequence = next,
@@ -57,14 +57,14 @@ mpmc_result_t producer_run_with_result(
         );
 
     *out = (producer_result_t){.error = {.status = MPMC_ERR_INVALID_ARG}};
-    if (transport == NULL || job == NULL || job->operation_id == 0u
+    if (transport == nullptr || job == nullptr || job->operation_id == 0
         || job->message_count < MPMC_MIN_MESSAGES || job->message_count > MPMC_MAX_MESSAGES
         || (job->ack_mode != PRODUCER_ACK_WAIT && job->ack_mode != PRODUCER_ACK_NONE)) {
         return mpmc_diagnostic_end(&diagnostic_scope, out->error);
     }
 
     size_t producer_count = ipc_producer_count(transport);
-    if (producer_count == 0u) {
+    if (producer_count == 0) {
         return mpmc_diagnostic_end(
             &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
         );
@@ -84,9 +84,9 @@ mpmc_result_t producer_run_with_result(
         ack_started = true;
     }
 
-    producer_sequence_t sequence = {0};
+    producer_sequence_t sequence = {};
     mpmc_result_t result = {.status = MPMC_OK};
-    for (unsigned sent = 0u; sent < job->message_count; ++sent) {
+    for (unsigned sent = 0; sent < job->message_count; ++sent) {
         message_t message;
         mpmc_status_t status = producer_message_next(&message, &sequence, job);
         if (status != MPMC_OK) {
@@ -98,7 +98,7 @@ mpmc_result_t producer_run_with_result(
         }
 
         size_t destination = job->producer_id;
-        if (destination == 0u) {
+        if (destination == 0) {
             status = producer_route_destination(message.sequence, producer_count, &destination);
             if (status != MPMC_OK) {
                 result = (mpmc_result_t){.status = status};

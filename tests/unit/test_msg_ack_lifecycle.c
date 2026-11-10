@@ -54,27 +54,27 @@ static ipc_context_t *volatile live;
 
 static void remove_live_queues(void) {
     ipc_context_t *context = live;
-    if (context == NULL || context->message_backend == NULL) return;
+    if (context == nullptr || context->message_backend == nullptr) return;
     msg_backend_t *backend = context->message_backend;
-    for (size_t index = 0u; index < backend->producer_count; ++index)
-        (void)msgctl(backend->data_queues[index], IPC_RMID, NULL);
-    (void)msgctl(backend->event_queue, IPC_RMID, NULL);
-    (void)msgctl(backend->ack_queue, IPC_RMID, NULL);
+    for (size_t index = 0; index < backend->producer_count; ++index)
+        (void)msgctl(backend->data_queues[index], IPC_RMID, nullptr);
+    (void)msgctl(backend->event_queue, IPC_RMID, nullptr);
+    (void)msgctl(backend->ack_queue, IPC_RMID, nullptr);
 }
 
 static void on_alarm(int signal_number) {
     (void)signal_number;
-    for (size_t index = 0u; index < MAX_KIDS; ++index)
+    for (size_t index = 0; index < MAX_KIDS; ++index)
         if (kids[index] > 0) (void)kill(kids[index], SIGKILL);
     remove_live_queues();
     static const char message[] = "ALARME: teste travou; filhos mortos\n";
-    (void)!write(STDERR_FILENO, message, sizeof(message) - 1u);
+    (void)!write(STDERR_FILENO, message, sizeof(message) - 1);
     _exit(3);
 }
 
 static void on_fatal(int signal_number) {
     if (getpid() == owner_pid) {
-        for (size_t index = 0u; index < MAX_KIDS; ++index)
+        for (size_t index = 0; index < MAX_KIDS; ++index)
             if (kids[index] > 0) (void)kill(kids[index], SIGKILL);
         remove_live_queues();
     }
@@ -83,7 +83,7 @@ static void on_fatal(int signal_number) {
 
 static void tick(void) {
     const struct timespec delay = {.tv_sec = 0, .tv_nsec = 2000000};
-    (void)nanosleep(&delay, NULL);
+    (void)nanosleep(&delay, nullptr);
 }
 
 static unsigned long elapsed_ms(const struct timespec *start) {
@@ -117,14 +117,14 @@ static ipc_context_t *make_context(
     unsigned ack_slots,
     unsigned event_slots
 ) {
-    ipc_context_t *context = NULL;
+    ipc_context_t *context = nullptr;
     if (ipc_init(&context, producers, IPC_MESSAGE_QUEUE).status != MPMC_OK) {
         ++failures;
-        return NULL;
+        return nullptr;
     }
     live = context;
     msg_backend_t *backend = backend_of(context);
-    for (size_t index = 0u; index < producers; ++index)
+    for (size_t index = 0; index < producers; ++index)
         CHECK(
             set_qbytes(backend->data_queues[index], (unsigned long)data_slots * sizeof(message_t))
         );
@@ -139,14 +139,14 @@ static ipc_context_t *make_context(
 static void destroy_and_check(ipc_context_t *context) {
     msg_backend_t *backend = backend_of(context);
     int ids[16];
-    size_t count = 0u;
-    for (size_t index = 0u; index < backend->producer_count && count < 13u; ++index)
+    size_t count = 0;
+    for (size_t index = 0; index < backend->producer_count && count < 13; ++index)
         ids[count++] = backend->data_queues[index];
     ids[count++] = backend->event_queue;
     ids[count++] = backend->ack_queue;
-    live = NULL;
+    live = nullptr;
     ipc_destroy(context);
-    for (size_t index = 0u; index < count; ++index) CHECK(queued(ids[index]) == ULONG_MAX);
+    for (size_t index = 0; index < count; ++index) CHECK(queued(ids[index]) == ULONG_MAX);
 }
 
 static int exit_code(mpmc_result_t result) {
@@ -177,7 +177,7 @@ static pid_t spawn_consumer(ipc_context_t *context, size_t queue, unsigned n) {
         consumer_job_t job = {.producer_id = queue,
             .message_count = n,
             .ack_mode = CONSUMER_BLOCKING,
-            .operation_id = 1000u + n};
+            .operation_id = 1000 + n};
         consumer_result_t result;
         _exit(exit_code(consumer_run(context, &job, &result)));
     }
@@ -192,7 +192,7 @@ static int reap(size_t slot, unsigned deadline_ms, ipc_context_t *context) {
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
-        if (context != NULL) (void)ipc_poll_events(context);
+        if (context != nullptr) (void)ipc_poll_events(context);
         int status = 0;
         pid_t pid = waitpid(kids[slot], &status, WNOHANG);
         if (pid == kids[slot]) {
@@ -230,68 +230,68 @@ static bool still_running_after(size_t slot, unsigned ms) {
 }
 
 /** @brief Ids cumulativos para que nenhuma operação reuse um operation_id. */
-static uint64_t next_op = 1u;
+static uint64_t next_op = 1;
 
 /**
  * @brief C1 + C3: cinco produtores (quatro ack=1, um striped, um ack=2), quatro
  * consumidores, filas de dados de 3 posições, 2 ACKs e 2 eventos.
  */
 static void test_many_producers_full_queues(void) {
-    ipc_context_t *context = make_context(2u, 3u, 2u, 2u);
-    if (context == NULL) return;
+    ipc_context_t *context = make_context(2, 3, 2, 2);
+    if (context == nullptr) return;
     const uint64_t base = next_op;
-    next_op += 5u;
-    kids[0] = spawn_producer(context, 1u, 30u, PRODUCER_ACK_WAIT, base + 0u);
-    kids[1] = spawn_producer(context, 1u, 11u, PRODUCER_ACK_WAIT, base + 1u);
-    kids[2] = spawn_producer(context, 2u, 25u, PRODUCER_ACK_WAIT, base + 2u);
-    kids[3] = spawn_producer(context, 0u, 40u, PRODUCER_ACK_WAIT, base + 3u);
-    kids[4] = spawn_producer(context, 2u, 9u, PRODUCER_ACK_NONE, base + 4u);
+    next_op += 5;
+    kids[0] = spawn_producer(context, 1, 30, PRODUCER_ACK_WAIT, base + 0);
+    kids[1] = spawn_producer(context, 1, 11, PRODUCER_ACK_WAIT, base + 1);
+    kids[2] = spawn_producer(context, 2, 25, PRODUCER_ACK_WAIT, base + 2);
+    kids[3] = spawn_producer(context, 0, 40, PRODUCER_ACK_WAIT, base + 3);
+    kids[4] = spawn_producer(context, 2, 9, PRODUCER_ACK_NONE, base + 4);
     /* fila 1: 30 + 11 + 20 (striped) = 61; fila 2: 25 + 20 + 9 = 54. */
-    kids[5] = spawn_consumer(context, 1u, 31u);
-    kids[6] = spawn_consumer(context, 1u, 30u);
-    kids[7] = spawn_consumer(context, 2u, 27u);
-    kids[8] = spawn_consumer(context, 2u, 27u);
-    for (size_t slot = 0u; slot < 9u; ++slot) {
+    kids[5] = spawn_consumer(context, 1, 31);
+    kids[6] = spawn_consumer(context, 1, 30);
+    kids[7] = spawn_consumer(context, 2, 27);
+    kids[8] = spawn_consumer(context, 2, 27);
+    for (size_t slot = 0; slot < 9; ++slot) {
         CHECK(kids[slot] > 0);
         if (kids[slot] > 0) CHECK(reap(slot, DEADLINE_MS, context) == 0);
     }
     CHECK(ipc_poll_events(context).status == MPMC_OK);
-    uint64_t first = 0u, second = 0u;
-    CHECK(ipc_consumed_count(context, 1u, &first).status == MPMC_OK);
-    CHECK(ipc_consumed_count(context, 2u, &second).status == MPMC_OK);
-    CHECK(first == 61u && second == 54u);
+    uint64_t first = 0, second = 0;
+    CHECK(ipc_consumed_count(context, 1, &first).status == MPMC_OK);
+    CHECK(ipc_consumed_count(context, 2, &second).status == MPMC_OK);
+    CHECK(first == 61 && second == 54);
     /* Cada produtor recebeu exatamente os próprios ACKs: nada sobrou. */
     msg_backend_t *backend = backend_of(context);
-    CHECK(queued(backend->ack_queue) == 0u);
-    CHECK(queued(backend->data_queues[0]) == 0u);
-    CHECK(queued(backend->data_queues[1]) == 0u);
+    CHECK(queued(backend->ack_queue) == 0);
+    CHECK(queued(backend->data_queues[0]) == 0);
+    CHECK(queued(backend->data_queues[1]) == 0);
     destroy_and_check(context);
 }
 
 /** @brief C2: o produtor ack=1 não conclui antes do consumo de todas as
  * mensagens. */
 static void test_producer_waits_for_consumption(void) {
-    ipc_context_t *context = make_context(1u, 16u, 16u, 16u);
-    if (context == NULL) return;
+    ipc_context_t *context = make_context(1, 16, 16, 16);
+    if (context == nullptr) return;
     const uint64_t operation = next_op++;
-    kids[0] = spawn_producer(context, 1u, 5u, PRODUCER_ACK_WAIT, operation);
+    kids[0] = spawn_producer(context, 1, 5, PRODUCER_ACK_WAIT, operation);
     CHECK(kids[0] > 0);
 
     /* Inserção concluída, mas nada consumido: o produtor continua esperando. */
-    CHECK(still_running_after(0u, OBSERVE_MS));
+    CHECK(still_running_after(0, OBSERVE_MS));
     msg_backend_t *backend = backend_of(context);
-    CHECK(queued(backend->data_queues[0]) == 5u);
+    CHECK(queued(backend->data_queues[0]) == 5);
 
     /* Consumo parcial (3 de 5): ainda não pode concluir. */
-    kids[1] = spawn_consumer(context, 1u, 3u);
-    CHECK(kids[1] > 0 && reap(1u, DEADLINE_MS, context) == 0);
-    CHECK(still_running_after(0u, OBSERVE_MS));
+    kids[1] = spawn_consumer(context, 1, 3);
+    CHECK(kids[1] > 0 && reap(1, DEADLINE_MS, context) == 0);
+    CHECK(still_running_after(0, OBSERVE_MS));
 
     /* As duas últimas liberam o produtor. */
-    kids[1] = spawn_consumer(context, 1u, 2u);
-    CHECK(kids[1] > 0 && reap(1u, DEADLINE_MS, context) == 0);
-    CHECK(reap(0u, DEADLINE_MS, context) == 0);
-    CHECK(queued(backend->ack_queue) == 0u);
+    kids[1] = spawn_consumer(context, 1, 2);
+    CHECK(kids[1] > 0 && reap(1, DEADLINE_MS, context) == 0);
+    CHECK(reap(0, DEADLINE_MS, context) == 0);
+    CHECK(queued(backend->ack_queue) == 0);
     destroy_and_check(context);
 }
 
@@ -300,31 +300,31 @@ static void test_producer_waits_for_consumption(void) {
  * libera o produtor ack=1 que ainda não teve as suas consumidas.
  */
 static void test_other_producer_does_not_satisfy_wait(void) {
-    ipc_context_t *context = make_context(1u, 16u, 16u, 16u);
-    if (context == NULL) return;
+    ipc_context_t *context = make_context(1, 16, 16, 16);
+    if (context == nullptr) return;
     const uint64_t first = next_op++;
     const uint64_t second = next_op++;
-    kids[0] = spawn_producer(context, 1u, 4u, PRODUCER_ACK_WAIT, first);
+    kids[0] = spawn_producer(context, 1, 4, PRODUCER_ACK_WAIT, first);
     CHECK(kids[0] > 0);
     /* O segundo só começa depois que o primeiro enfileirou suas 4 mensagens. */
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
-    while (queued(backend_of(context)->data_queues[0]) < 4u && elapsed_ms(&start) < DEADLINE_MS)
+    while (queued(backend_of(context)->data_queues[0]) < 4 && elapsed_ms(&start) < DEADLINE_MS)
         tick();
-    kids[1] = spawn_producer(context, 1u, 3u, PRODUCER_ACK_WAIT, second);
+    kids[1] = spawn_producer(context, 1, 3, PRODUCER_ACK_WAIT, second);
     CHECK(kids[1] > 0);
-    while (queued(backend_of(context)->data_queues[0]) < 7u && elapsed_ms(&start) < DEADLINE_MS)
+    while (queued(backend_of(context)->data_queues[0]) < 7 && elapsed_ms(&start) < DEADLINE_MS)
         tick();
 
     /* FIFO: as 4 primeiras mensagens são do primeiro produtor. O segundo deve
      * continuar esperando depois delas. */
-    kids[2] = spawn_consumer(context, 1u, 4u);
-    CHECK(kids[2] > 0 && reap(2u, DEADLINE_MS, context) == 0);
-    CHECK(reap(0u, DEADLINE_MS, context) == 0);
-    CHECK(still_running_after(1u, OBSERVE_MS));
-    kids[2] = spawn_consumer(context, 1u, 3u);
-    CHECK(kids[2] > 0 && reap(2u, DEADLINE_MS, context) == 0);
-    CHECK(reap(1u, DEADLINE_MS, context) == 0);
+    kids[2] = spawn_consumer(context, 1, 4);
+    CHECK(kids[2] > 0 && reap(2, DEADLINE_MS, context) == 0);
+    CHECK(reap(0, DEADLINE_MS, context) == 0);
+    CHECK(still_running_after(1, OBSERVE_MS));
+    kids[2] = spawn_consumer(context, 1, 3);
+    CHECK(kids[2] > 0 && reap(2, DEADLINE_MS, context) == 0);
+    CHECK(reap(1, DEADLINE_MS, context) == 0);
     destroy_and_check(context);
 }
 
@@ -333,42 +333,42 @@ static void test_other_producer_does_not_satisfy_wait(void) {
  * operação e o consumo das mensagens restantes termina com Q_ack de 2 posições.
  */
 static void test_sigterm_and_abandon(void) {
-    ipc_context_t *context = make_context(1u, 16u, 2u, 16u);
-    if (context == NULL) return;
+    ipc_context_t *context = make_context(1, 16, 2, 16);
+    if (context == nullptr) return;
     const uint64_t operation = next_op++;
-    kids[0] = spawn_producer(context, 1u, 6u, PRODUCER_ACK_WAIT, operation);
+    kids[0] = spawn_producer(context, 1, 6, PRODUCER_ACK_WAIT, operation);
     CHECK(kids[0] > 0);
     msg_backend_t *backend = backend_of(context);
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
-    while (queued(backend->data_queues[0]) < 6u && elapsed_ms(&start) < DEADLINE_MS) tick();
-    CHECK(still_running_after(0u, 100u));
+    while (queued(backend->data_queues[0]) < 6 && elapsed_ms(&start) < DEADLINE_MS) tick();
+    CHECK(still_running_after(0, 100));
     CHECK(kill(kids[0], SIGTERM) == 0);
-    CHECK(reap(0u, DEADLINE_MS, context) == 128 + SIGTERM);
+    CHECK(reap(0, DEADLINE_MS, context) == 128 + SIGTERM);
 
     /* Sem abandon os ACKs tardios lotariam Q_ack; o supervisor os descarta. */
     CHECK(ipc_ack_abandon(context, operation).status == MPMC_OK);
-    kids[1] = spawn_consumer(context, 1u, 6u);
-    CHECK(kids[1] > 0 && reap(1u, DEADLINE_MS, context) == 0);
+    kids[1] = spawn_consumer(context, 1, 6);
+    CHECK(kids[1] > 0 && reap(1, DEADLINE_MS, context) == 0);
     CHECK(ipc_poll_events(context).status == MPMC_OK);
-    CHECK(queued(backend->ack_queue) == 0u);
-    CHECK(queued(backend->data_queues[0]) == 0u);
+    CHECK(queued(backend->ack_queue) == 0);
+    CHECK(queued(backend->data_queues[0]) == 0);
     destroy_and_check(context);
 }
 
 /** @brief C4: remover a fila de ACK (shutdown) libera ack_wait com erro. */
 static void test_ack_queue_removal_releases_ack_wait(void) {
-    ipc_context_t *context = make_context(1u, 16u, 16u, 16u);
-    if (context == NULL) return;
-    kids[0] = spawn_producer(context, 1u, 3u, PRODUCER_ACK_WAIT, next_op++);
+    ipc_context_t *context = make_context(1, 16, 16, 16);
+    if (context == nullptr) return;
+    kids[0] = spawn_producer(context, 1, 3, PRODUCER_ACK_WAIT, next_op++);
     CHECK(kids[0] > 0);
     msg_backend_t *backend = backend_of(context);
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
-    while (queued(backend->data_queues[0]) < 3u && elapsed_ms(&start) < DEADLINE_MS) tick();
-    CHECK(still_running_after(0u, 100u));
-    CHECK(msgctl(backend->ack_queue, IPC_RMID, NULL) == 0);
-    CHECK(reap(0u, DEADLINE_MS, NULL) == 100 + (int)MPMC_ERR_SHUTDOWN);
+    while (queued(backend->data_queues[0]) < 3 && elapsed_ms(&start) < DEADLINE_MS) tick();
+    CHECK(still_running_after(0, 100));
+    CHECK(msgctl(backend->ack_queue, IPC_RMID, nullptr) == 0);
+    CHECK(reap(0, DEADLINE_MS, nullptr) == 100 + (int)MPMC_ERR_SHUTDOWN);
     backend->ack_queue = -1;
     destroy_and_check(context);
 }
@@ -376,21 +376,21 @@ static void test_ack_queue_removal_releases_ack_wait(void) {
 /** @brief C4: remover a fila de dados libera o produtor ack=1 preso na fila
  * cheia (laço de envio com drenagem e backoff). */
 static void test_data_queue_removal_releases_send_loop(void) {
-    ipc_context_t *context = make_context(1u, 2u, 16u, 16u);
-    if (context == NULL) return;
-    kids[0] = spawn_producer(context, 1u, 10u, PRODUCER_ACK_WAIT, next_op++);
+    ipc_context_t *context = make_context(1, 2, 16, 16);
+    if (context == nullptr) return;
+    kids[0] = spawn_producer(context, 1, 10, PRODUCER_ACK_WAIT, next_op++);
     CHECK(kids[0] > 0);
     msg_backend_t *backend = backend_of(context);
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
-    while (queued(backend->data_queues[0]) < 2u && elapsed_ms(&start) < DEADLINE_MS) tick();
-    CHECK(still_running_after(0u, 100u));
+    while (queued(backend->data_queues[0]) < 2 && elapsed_ms(&start) < DEADLINE_MS) tick();
+    CHECK(still_running_after(0, 100));
     int removed = backend->data_queues[0];
-    CHECK(msgctl(removed, IPC_RMID, NULL) == 0);
+    CHECK(msgctl(removed, IPC_RMID, nullptr) == 0);
     /* O laço usa IPC_NOWAIT: o Linux devolve EINVAL (e não EIDRM) a msgsnd() numa
      * fila já removida, que o wrapper classifica como INVALID_ARG. O que importa
      * ao critério é que o produtor termine logo e com falha. */
-    int rc = reap(0u, DEADLINE_MS, NULL);
+    int rc = reap(0, DEADLINE_MS, nullptr);
     CHECK(rc == 100 + (int)MPMC_ERR_SHUTDOWN || rc == 100 + (int)MPMC_ERR_INVALID_ARG);
     backend->data_queues[0] = -1;
     destroy_and_check(context);
@@ -399,14 +399,14 @@ static void test_data_queue_removal_releases_send_loop(void) {
 /** @brief C4: remover a fila de ACK libera consumidor preso em msgsnd(Q_ack
  * cheia). */
 static void test_ack_queue_removal_releases_consumer(void) {
-    ipc_context_t *context = make_context(1u, 16u, 1u, 16u);
-    if (context == NULL) return;
+    ipc_context_t *context = make_context(1, 16, 1, 16);
+    if (context == nullptr) return;
     msg_backend_t *backend = backend_of(context);
     const uint64_t operation = next_op++;
     const uint64_t foreign = next_op++;
-    CHECK(ipc_ack_begin(context, operation, 1u).status == MPMC_OK);
-    message_t message = {.sender_pid = getpid(), .sequence = 1u, .operation_id = operation};
-    CHECK(ipc_send(context, 1u, &message).status == MPMC_OK);
+    CHECK(ipc_ack_begin(context, operation, 1).status == MPMC_OK);
+    message_t message = {.sender_pid = getpid(), .sequence = 1, .operation_id = operation};
+    CHECK(ipc_send(context, 1, &message).status == MPMC_OK);
     /* Enche Q_ack com ACK de outra operação que ninguém drena. */
     ack_event_t occupant = {.operation_id = foreign};
     CHECK(
@@ -414,12 +414,12 @@ static void test_ack_queue_removal_releases_consumer(void) {
         == MPMC_OK
     );
 
-    kids[0] = spawn_consumer(context, 1u, 1u);
+    kids[0] = spawn_consumer(context, 1, 1);
     CHECK(kids[0] > 0);
-    CHECK(still_running_after(0u, OBSERVE_MS));
-    CHECK(queued(backend->data_queues[0]) == 0u);
-    CHECK(msgctl(backend->ack_queue, IPC_RMID, NULL) == 0);
-    CHECK(reap(0u, DEADLINE_MS, NULL) == 100 + (int)MPMC_ERR_SHUTDOWN);
+    CHECK(still_running_after(0, OBSERVE_MS));
+    CHECK(queued(backend->data_queues[0]) == 0);
+    CHECK(msgctl(backend->ack_queue, IPC_RMID, nullptr) == 0);
+    CHECK(reap(0, DEADLINE_MS, nullptr) == 100 + (int)MPMC_ERR_SHUTDOWN);
     backend->ack_queue = -1;
     (void)ipc_ack_end(context, operation);
     destroy_and_check(context);
@@ -430,10 +430,10 @@ static bool install_handlers(void) {
     struct sigaction fatal_action = {.sa_handler = on_fatal};
     sigemptyset(&alarm_action.sa_mask);
     sigemptyset(&fatal_action.sa_mask);
-    return sigaction(SIGALRM, &alarm_action, NULL) == 0
-        && sigaction(SIGINT, &fatal_action, NULL) == 0
-        && sigaction(SIGTERM, &fatal_action, NULL) == 0
-        && sigaction(SIGHUP, &fatal_action, NULL) == 0;
+    return sigaction(SIGALRM, &alarm_action, nullptr) == 0
+        && sigaction(SIGINT, &fatal_action, nullptr) == 0
+        && sigaction(SIGTERM, &fatal_action, nullptr) == 0
+        && sigaction(SIGHUP, &fatal_action, nullptr) == 0;
 }
 
 int main(void) {
@@ -442,7 +442,7 @@ int main(void) {
         perror("sigaction");
         return 1;
     }
-    alarm(120u);
+    alarm(120);
     test_many_producers_full_queues();
     test_producer_waits_for_consumption();
     test_other_producer_does_not_satisfy_wait();
@@ -450,9 +450,9 @@ int main(void) {
     test_ack_queue_removal_releases_ack_wait();
     test_data_queue_removal_releases_send_loop();
     test_ack_queue_removal_releases_consumer();
-    alarm(0u);
+    alarm(0);
     printf("%u verificações de ciclo de vida de ACK MSG, %u falhas\n", checks, failures);
-    if (failures != 0u) return 1;
+    if (failures != 0) return 1;
     puts("Message ACK lifecycle tests passed.");
     return 0;
 }

@@ -54,7 +54,7 @@ typedef struct {
     bool collected;
 } fixture_child_t;
 
-static struct ipc_context g_ipc_context = {.marker = 53u};
+static struct ipc_context g_ipc_context = {.marker = 53};
 
 static struct {
     bool active;
@@ -108,7 +108,7 @@ pid_t mpmc_test_fork(void) {
 
 pid_t mpmc_test_waitpid(pid_t pid, int *status, int options) {
     ++g_fixture.waitpid_calls;
-    if (!g_fixture.active || status == NULL) {
+    if (!g_fixture.active || status == nullptr) {
         errno = EINVAL;
         return -1;
     }
@@ -118,7 +118,7 @@ pid_t mpmc_test_waitpid(pid_t pid, int *status, int options) {
         return -1;
     }
 
-    for (size_t index = 0u; index < FIXTURE_CHILDREN; ++index) {
+    for (size_t index = 0; index < FIXTURE_CHILDREN; ++index) {
         fixture_child_t *child = &g_fixture.children[index];
         if (child->pid != pid) continue;
         if (!child->ready || child->collected) return 0;
@@ -133,7 +133,7 @@ pid_t mpmc_test_waitpid(pid_t pid, int *status, int options) {
 }
 
 int mpmc_test_clock_gettime(clockid_t clock_id, struct timespec *out) {
-    if (!g_fixture.active || out == NULL) {
+    if (!g_fixture.active || out == nullptr) {
         errno = EINVAL;
         return -1;
     }
@@ -159,10 +159,10 @@ int mpmc_test_clock_gettime(clockid_t clock_id, struct timespec *out) {
 }
 
 mpmc_result_t mpmc_test_ipc_init(ipc_context_t **out, size_t producer_count, ipc_mode_t mode) {
-    if (!g_fixture.active || out == NULL) {
+    if (!g_fixture.active || out == nullptr) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
-    *out = NULL;
+    *out = nullptr;
     if (producer_count != FIXTURE_PRODUCERS || mode != IPC_SHARED_MEMORY) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
@@ -205,7 +205,7 @@ mpmc_result_t mpmc_test_ipc_consumed_count(
     size_t producer_id,
     uint64_t *out_count
 ) {
-    if (!g_fixture.active || context != &g_ipc_context || out_count == NULL || producer_id == 0u
+    if (!g_fixture.active || context != &g_ipc_context || out_count == nullptr || producer_id == 0
         || producer_id > FIXTURE_PRODUCERS) {
         g_fixture.bad_ipc_context = true;
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
@@ -215,7 +215,7 @@ mpmc_result_t mpmc_test_ipc_consumed_count(
         g_fixture.count_ids[g_fixture.count_calls] = producer_id;
     }
     ++g_fixture.count_calls;
-    *out_count = g_fixture.consumed[producer_id - 1u];
+    *out_count = g_fixture.consumed[producer_id - 1];
     return (mpmc_result_t){.status = MPMC_OK};
 }
 
@@ -226,9 +226,9 @@ mpmc_result_t mpmc_test_ipc_consumed_count(
 static command_t make_command(command_kind_t kind) {
     return (command_t){
         .kind = kind,
-        .producer_id = 1u,
-        .message_count = 1u,
-        .ack_mode = 2u,
+        .producer_id = 1,
+        .message_count = 1,
+        .ack_mode = 2,
     };
 }
 
@@ -277,13 +277,13 @@ static void reset_fixture(void) {
     g_fixture.fail_clock[4] = true;
     g_fixture.fail_clock[7] = true;
 
-    g_fixture.consumed[0] = 17u;
-    g_fixture.consumed[1] = 29u;
-    g_fixture.consumed[2] = 41u;
+    g_fixture.consumed[0] = 17;
+    g_fixture.consumed[1] = 29;
+    g_fixture.consumed[2] = 41;
 }
 
 static bool report_for_pid(const supervisor_t *supervisor, pid_t pid, child_report_t *out) {
-    for (size_t index = 0u; index < supervisor_report_count(supervisor); ++index) {
+    for (size_t index = 0; index < supervisor_report_count(supervisor); ++index) {
         child_report_t candidate;
         if (supervisor_report_get(supervisor, index, &candidate).status != MPMC_OK) {
             return false;
@@ -297,12 +297,12 @@ static bool report_for_pid(const supervisor_t *supervisor, pid_t pid, child_repo
 }
 
 static mpmc_result_t capture_report(const supervisor_t *supervisor, char *buffer, size_t size) {
-    if (buffer == NULL || size < 2u) {
+    if (buffer == nullptr || size < 2) {
         return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
     }
 
     FILE *file = tmpfile();
-    if (file == NULL) {
+    if (file == nullptr) {
         return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
     }
 
@@ -313,7 +313,7 @@ static mpmc_result_t capture_report(const supervisor_t *supervisor, char *buffer
         return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = saved_errno};
     }
 
-    size_t length = fread(buffer, 1u, size - 1u, file);
+    size_t length = fread(buffer, 1, size - 1, file);
     bool read_failed = ferror(file) != 0;
     buffer[length] = '\0';
     (void)fclose(file);
@@ -343,7 +343,7 @@ static void check_report_line(
         end,
         duration
     );
-    CHECK(strstr(output, expected) != NULL, "linha esperada ausente: %s", expected);
+    CHECK(strstr(output, expected) != nullptr, "linha esperada ausente: %s", expected);
 }
 
 /* ------------------------------------------------------------------ */
@@ -353,18 +353,19 @@ static void check_report_line(
 static void test_controlled_report_presentation(void) {
     reset_fixture();
 
-    supervisor_t *supervisor = NULL;
+    supervisor_t *supervisor = nullptr;
     mpmc_result_t result = supervisor_create(&supervisor, FIXTURE_PRODUCERS, IPC_SHARED_MEMORY);
     CHECK(
-        result.status == MPMC_OK && supervisor != NULL, "supervisor_create deve aceitar a fixture"
+        result.status == MPMC_OK && supervisor != nullptr,
+        "supervisor_create deve aceitar a fixture"
     );
     CHECK(result.system_errno == 0, "criação bem-sucedida deve zerar system_errno");
-    CHECK(g_fixture.init_calls == 1u, "IPC controlado inicializado uma vez");
+    CHECK(g_fixture.init_calls == 1, "IPC controlado inicializado uma vez");
     CHECK(
         supervisor_producer_count(supervisor) == FIXTURE_PRODUCERS, "quantidade lógica configurada"
     );
 
-    if (supervisor == NULL) {
+    if (supervisor == nullptr) {
         g_fixture.active = false;
         return;
     }
@@ -373,13 +374,13 @@ static void test_controlled_report_presentation(void) {
     command_t consume = make_command(COMMAND_CONSUME);
 
     CHECK(
-        supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_OK, "despacho do PID 4101"
+        supervisor_dispatch(supervisor, &produce, nullptr).status == MPMC_OK, "despacho do PID 4101"
     );
     CHECK(
-        supervisor_dispatch(supervisor, &consume, NULL).status == MPMC_OK, "despacho do PID 4102"
+        supervisor_dispatch(supervisor, &consume, nullptr).status == MPMC_OK, "despacho do PID 4102"
     );
     CHECK(
-        supervisor_dispatch(supervisor, &produce, NULL).status == MPMC_OK, "despacho do PID 4103"
+        supervisor_dispatch(supervisor, &produce, nullptr).status == MPMC_OK, "despacho do PID 4103"
     );
     CHECK(g_fixture.fork_calls == FIXTURE_CHILDREN, "três PIDs simulados");
 
@@ -388,13 +389,15 @@ static void test_controlled_report_presentation(void) {
      * A compactação interna do vetor não deve afetar a identidade dos relatórios.
      */
     CHECK(
-        supervisor_reap(supervisor, false, NULL).status == MPMC_OK, "primeira coleta não bloqueante"
+        supervisor_reap(supervisor, false, nullptr).status == MPMC_OK,
+        "primeira coleta não bloqueante"
     );
-    CHECK(supervisor_report_count(supervisor) == 2u, "dois relatórios na primeira coleta");
+    CHECK(supervisor_report_count(supervisor) == 2, "dois relatórios na primeira coleta");
 
     g_fixture.children[0].ready = true;
     CHECK(
-        supervisor_reap(supervisor, false, NULL).status == MPMC_OK, "segunda coleta não bloqueante"
+        supervisor_reap(supervisor, false, nullptr).status == MPMC_OK,
+        "segunda coleta não bloqueante"
     );
     CHECK(supervisor_report_count(supervisor) == FIXTURE_CHILDREN, "todos os filhos recolhidos");
 
@@ -403,7 +406,7 @@ static void test_controlled_report_presentation(void) {
     CHECK(report_for_pid(supervisor, 4101, &report), "relatório do PID 4101 encontrado");
     if (report_for_pid(supervisor, 4101, &report)) {
         CHECK(
-            report.operation_id == 1u && report.kind == COMMAND_PRODUCE,
+            report.operation_id == 1 && report.kind == COMMAND_PRODUCE,
             "PID 4101 associado à operação 1 de produção"
         );
         CHECK(
@@ -411,7 +414,7 @@ static void test_controlled_report_presentation(void) {
             "PID 4101 terminou com sucesso"
         );
         CHECK(
-            report.duration_ns == 200000000u, "PID 4101 atravessou a mudança de segundo com 200 ms"
+            report.duration_ns == 200000000, "PID 4101 atravessou a mudança de segundo com 200 ms"
         );
         CHECK(report.duration_ns < UINT64_C(1000000000), "duração positiva sem underflow");
     }
@@ -419,7 +422,7 @@ static void test_controlled_report_presentation(void) {
     CHECK(report_for_pid(supervisor, 4102, &report), "relatório do PID 4102 encontrado");
     if (report_for_pid(supervisor, 4102, &report)) {
         CHECK(
-            report.operation_id == 2u && report.kind == COMMAND_CONSUME,
+            report.operation_id == 2 && report.kind == COMMAND_CONSUME,
             "PID 4102 associado à operação 2 de consumo"
         );
         CHECK(
@@ -427,7 +430,7 @@ static void test_controlled_report_presentation(void) {
             "PID 4102 terminou por SIGTERM"
         );
         CHECK(
-            report.duration_ns == 0u,
+            report.duration_ns == 0,
             "falha de CLOCK_MONOTONIC na duração individual resulta em zero"
         );
     }
@@ -435,7 +438,7 @@ static void test_controlled_report_presentation(void) {
     CHECK(report_for_pid(supervisor, 4103, &report), "relatório do PID 4103 encontrado");
     if (report_for_pid(supervisor, 4103, &report)) {
         CHECK(
-            report.operation_id == 3u && report.kind == COMMAND_PRODUCE,
+            report.operation_id == 3 && report.kind == COMMAND_PRODUCE,
             "PID 4103 associado à operação 3 de produção"
         );
         CHECK(
@@ -443,25 +446,25 @@ static void test_controlled_report_presentation(void) {
             "PID 4103 terminou com código de falha"
         );
         CHECK(
-            report.duration_ns == 0u,
+            report.duration_ns == 0,
             "regressão do relógio não produz duração negativa nem underflow"
         );
     }
 
     /* Só o produtor que falhou (PID 4103, operação 3) tem seus ACKs descartados. */
     CHECK(
-        g_fixture.abandon_calls == 1u && g_fixture.abandoned_id == 3u,
+        g_fixture.abandon_calls == 1 && g_fixture.abandoned_id == 3,
         "ACKs abandonados apenas para o produtor com falha (chamadas=%zu, operação=%" PRIu64 ")",
         g_fixture.abandon_calls,
         g_fixture.abandoned_id
     );
 
-    CHECK(g_fixture.waitpid_calls == 4u, "somente os quatro estados esperados foram consultados");
+    CHECK(g_fixture.waitpid_calls == 4, "somente os quatro estados esperados foram consultados");
     CHECK(!g_fixture.bad_wait_options, "reap utilizou WNOHANG nos cenários não bloqueantes");
 
     /* O relatório final deve ser impresso após o encerramento do supervisor. */
     const size_t polls_before_shutdown = g_fixture.poll_calls;
-    CHECK(supervisor_shutdown(supervisor, NULL).status == MPMC_OK, "shutdown sem filhos ativos");
+    CHECK(supervisor_shutdown(supervisor, nullptr).status == MPMC_OK, "shutdown sem filhos ativos");
     CHECK(g_fixture.poll_calls > polls_before_shutdown, "shutdown processou eventos IPC pendentes");
     CHECK(supervisor_report_count(supervisor) == FIXTURE_CHILDREN, "relatórios preservados");
 
@@ -470,19 +473,19 @@ static void test_controlled_report_presentation(void) {
     result = capture_report(supervisor, output, sizeof output);
     CHECK(result.status == MPMC_OK, "falha do relógio total não impede a apresentação");
     CHECK(
-        strstr(output, "Tempo total de operação do mpmc: 0.000 s") != NULL,
+        strstr(output, "Tempo total de operação do mpmc: 0.000 s") != nullptr,
         "falha do relógio total apresenta duração zero"
     );
-    CHECK(strstr(output, "Filhos recolhidos: 3\n") != NULL, "total de filhos recolhidos");
+    CHECK(strstr(output, "Filhos recolhidos: 3\n") != nullptr, "total de filhos recolhidos");
 
-    check_report_line(output, 4101, 1u, "produz", "código 0 (sucesso)", "0.200 s");
-    check_report_line(output, 4102, 2u, "consome", "sinal 15", "0.000 s");
-    check_report_line(output, 4103, 3u, "produz", "código 7 (falha)", "0.000 s");
+    check_report_line(output, 4101, 1, "produz", "código 0 (sucesso)", "0.200 s");
+    check_report_line(output, 4102, 2, "consome", "sinal 15", "0.000 s");
+    check_report_line(output, 4103, 3, "produz", "código 7 (falha)", "0.000 s");
 
     CHECK(
-        strstr(output, "Consumidos pela estrutura 1: 17\n") != NULL
-            && strstr(output, "Consumidos pela estrutura 2: 29\n") != NULL
-            && strstr(output, "Consumidos pela estrutura 3: 41\n") != NULL,
+        strstr(output, "Consumidos pela estrutura 1: 17\n") != nullptr
+            && strstr(output, "Consumidos pela estrutura 2: 29\n") != nullptr
+            && strstr(output, "Consumidos pela estrutura 3: 41\n") != nullptr,
         "relatório apresenta as três contagens lógicas controladas"
     );
 
@@ -490,17 +493,17 @@ static void test_controlled_report_presentation(void) {
     result = capture_report(supervisor, output, sizeof output);
     CHECK(result.status == MPMC_OK, "relatório com relógio disponível");
     CHECK(
-        strstr(output, "Tempo total de operação do mpmc: 4.000 s") != NULL,
+        strstr(output, "Tempo total de operação do mpmc: 4.000 s") != nullptr,
         "tempo total calculado desde a criação do supervisor"
     );
 
-    const size_t expected_count_ids[] = {1u, 2u, 3u, 1u, 2u, 3u};
-    CHECK(g_fixture.count_calls == 6u, "cada impressão consultou as três estruturas");
-    for (size_t index = 0u; index < 6u; ++index) {
+    const size_t expected_count_ids[] = {1, 2, 3, 1, 2, 3};
+    CHECK(g_fixture.count_calls == 6, "cada impressão consultou as três estruturas");
+    for (size_t index = 0; index < 6; ++index) {
         CHECK(
             g_fixture.count_ids[index] == expected_count_ids[index],
             "consulta de contagem %zu usa a estrutura lógica esperada",
-            index + 1u
+            index + 1
         );
     }
 
@@ -511,9 +514,9 @@ static void test_controlled_report_presentation(void) {
 
     /* Todos os filhos simulados foram recolhidos; nenhum sinal é enviado a PIDs fictícios. */
     supervisor_destroy(supervisor);
-    CHECK(g_fixture.destroy_calls == 1u, "contexto IPC destruído exatamente uma vez");
+    CHECK(g_fixture.destroy_calls == 1, "contexto IPC destruído exatamente uma vez");
 
-    for (size_t index = 0u; index < FIXTURE_CHILDREN; ++index) {
+    for (size_t index = 0; index < FIXTURE_CHILDREN; ++index) {
         CHECK(
             g_fixture.children[index].collected,
             "PID %ld foi recolhido pela fixture",
@@ -528,7 +531,7 @@ int main(void) {
     test_controlled_report_presentation();
 
     printf("%u verificações, %u falhas\n", g_checks, g_failures);
-    return g_failures == 0u ? EXIT_SUCCESS : EXIT_FAILURE;
+    return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 /** @brief Entradas não executadas: os filhos são controlados pela fixture de fork. */

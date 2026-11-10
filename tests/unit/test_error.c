@@ -55,19 +55,19 @@ int main(void) {
     errno = EINVAL;
     length = mpmc_error_format(error, description, sizeof description);
     CHECK(length > 0 && (size_t)length == strlen(description));
-    CHECK(strstr(description, strerror(EACCES)) != NULL);
+    CHECK(strstr(description, strerror(EACCES)) != nullptr);
     CHECK(error.status == MPMC_ERR_SYS && error.system_errno == EACCES);
 
     error = (mpmc_result_t){.status = MPMC_ERR_WOULD_BLOCK, .system_errno = EAGAIN};
     length = mpmc_error_format(error, description, sizeof description);
     CHECK(length > 0);
-    CHECK(strstr(description, strerror(EAGAIN)) != NULL);
-    CHECK(mpmc_error_format(error, NULL, 0) == length);
+    CHECK(strstr(description, strerror(EAGAIN)) != nullptr);
+    CHECK(mpmc_error_format(error, nullptr, 0) == length);
 
     char small[5] = {'?', '?', '?', '?', '!'};
     CHECK(mpmc_error_format(error, small, 4) == length);
     CHECK(small[3] == '\0' && small[4] == '!');
-    CHECK(mpmc_error_format(error, NULL, 1) < 0);
+    CHECK(mpmc_error_format(error, nullptr, 1) < 0);
 
     error = (mpmc_result_t){.status = (mpmc_status_t)-1};
     CHECK(mpmc_error_format(error, description, sizeof description) > 0);

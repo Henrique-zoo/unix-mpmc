@@ -62,7 +62,7 @@ static void inject_sem_failure(
 mpmc_result_t mpmc_test_sem_change(int semid, unsigned index, short delta, bool nowait) {
     if (sem_failure.enabled && sem_failure.semid == semid && sem_failure.index == index
         && sem_failure.delta == delta) {
-        if (sem_failure.skip_matches > 0U) {
+        if (sem_failure.skip_matches > 0) {
             sem_failure.skip_matches--;
         } else {
             mpmc_result_t failure = sem_failure.failure;
@@ -114,8 +114,8 @@ static notification_t make_notification(
 }
 
 static void notify_direct(const notification_t *notification) {
-    CHECK(notification != NULL);
-    if (notification == NULL) return;
+    CHECK(notification != nullptr);
+    if (notification == nullptr) return;
 
     check_result(
         shm_backend_ack_notify_consumed(
@@ -137,7 +137,7 @@ static bool track_child(pid_t child) {
     }
 
     (void)kill(child, SIGKILL);
-    (void)waitpid(child, NULL, 0);
+    (void)waitpid(child, nullptr, 0);
     CHECK(false);
     return false;
 }
@@ -163,7 +163,7 @@ static pid_t spawn_notifications(const notification_t *notifications, size_t cou
             if (result.status != MPMC_OK) _exit(10);
         }
 
-        if (shm_backend_worker_close(owned_backend, NULL).status != MPMC_OK) {
+        if (shm_backend_worker_close(owned_backend, nullptr).status != MPMC_OK) {
             _exit(11);
         }
 
@@ -233,26 +233,26 @@ static void cleanup(void) {
 
     for (size_t index = 0; index < CHILD_CAPACITY; index++) {
         if (children[index] > 0) {
-            while (waitpid(children[index], NULL, 0) < 0 && errno == EINTR) {
+            while (waitpid(children[index], nullptr, 0) < 0 && errno == EINTR) {
             }
             children[index] = 0;
         }
     }
 
-    if (owned_backend != NULL) {
+    if (owned_backend != nullptr) {
         shm_backend_t *backend = owned_backend;
-        owned_backend = NULL;
-        (void)shm_backend_destroy(backend, NULL);
+        owned_backend = nullptr;
+        (void)shm_backend_destroy(backend, nullptr);
     }
 }
 
 /** @brief Valida argumentos, estados inexistentes e índices lógicos. */
 static void test_argument_validation(void) {
-    check_result(shm_backend_ack_begin(NULL, 1, 1), MPMC_ERR_INVALID_ARG, 0);
+    check_result(shm_backend_ack_begin(nullptr, 1, 1), MPMC_ERR_INVALID_ARG, 0);
     check_result(shm_backend_ack_begin(owned_backend, 0, 1), MPMC_ERR_INVALID_ARG, 0);
     check_result(shm_backend_ack_begin(owned_backend, 1, 0), MPMC_ERR_INVALID_ARG, 0);
     check_result(
-        shm_backend_ack_begin(owned_backend, 1, MPMC_MAX_MESSAGES + 1U), MPMC_ERR_INVALID_ARG, 0
+        shm_backend_ack_begin(owned_backend, 1, MPMC_MAX_MESSAGES + 1), MPMC_ERR_INVALID_ARG, 0
     );
 
     check_result(shm_backend_ack_wait(owned_backend, 99999), MPMC_ERR_STATE, 0);
@@ -267,7 +267,9 @@ static void test_argument_validation(void) {
     check_result(
         shm_backend_ack_notify_consumed(owned_backend, 4, &message), MPMC_ERR_INVALID_INDEX, 0
     );
-    check_result(shm_backend_ack_notify_consumed(owned_backend, 1, NULL), MPMC_ERR_INVALID_ARG, 0);
+    check_result(
+        shm_backend_ack_notify_consumed(owned_backend, 1, nullptr), MPMC_ERR_INVALID_ARG, 0
+    );
 }
 
 /**
@@ -391,7 +393,7 @@ static pid_t spawn_delayed_notification(const notification_t *notification) {
             _exit(13);
         }
 
-        if (shm_backend_worker_close(owned_backend, NULL).status != MPMC_OK) {
+        if (shm_backend_worker_close(owned_backend, nullptr).status != MPMC_OK) {
             _exit(14);
         }
 
@@ -560,7 +562,7 @@ static void test_end_rejected_while_waiting(void) {
             _exit(20);
         }
 
-        if (shm_backend_worker_close(owned_backend, NULL).status != MPMC_OK) {
+        if (shm_backend_worker_close(owned_backend, nullptr).status != MPMC_OK) {
             _exit(21);
         }
 
@@ -930,7 +932,7 @@ int main(void) {
     };
     sigemptyset(&action.sa_mask);
 
-    if (sigaction(SIGALRM, &action, NULL) != 0) {
+    if (sigaction(SIGALRM, &action, nullptr) != 0) {
         perror("sigaction");
         return EXIT_FAILURE;
     }
@@ -939,12 +941,12 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
-    mpmc_result_t result = shm_backend_create(&owned_backend, 3, NULL);
+    mpmc_result_t result = shm_backend_create(&owned_backend, 3, nullptr);
     CHECK(result.status == MPMC_OK);
     CHECK(result.system_errno == 0);
-    CHECK(owned_backend != NULL);
+    CHECK(owned_backend != nullptr);
 
-    if (owned_backend != NULL) {
+    if (owned_backend != nullptr) {
         test_argument_validation();
         test_early_notifications_across_structures();
         test_reuse_slot_after_early_notifications();
