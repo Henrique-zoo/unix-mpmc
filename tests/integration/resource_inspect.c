@@ -4,6 +4,7 @@
  * @ingroup tests
  */
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/msg.h>
@@ -18,6 +19,15 @@ union inspect_semun {
 /** @brief Retorna zero se o recurso existe/foi removido, um se ausente e dois em falha. */
 int main(int argc, char *argv[]) {
     if (argc != 4) return 2;
+    if (strcmp(argv[1], "create") == 0) {
+        int created = -1;
+        if (strcmp(argv[2], "sem") == 0) created = semget(IPC_PRIVATE, 1, 0600);
+        if (strcmp(argv[2], "shm") == 0) created = shmget(IPC_PRIVATE, 2048, 0600);
+        if (strcmp(argv[2], "msg") == 0) created = msgget(IPC_PRIVATE, 0600);
+        if (created < 0) return 2;
+        printf("%d\n", created);
+        return 0;
+    }
     bool remove = strcmp(argv[1], "remove") == 0;
     int command = remove ? IPC_RMID : IPC_STAT;
     int id = (int)strtol(argv[3], nullptr, 10);
