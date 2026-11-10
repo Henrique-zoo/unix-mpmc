@@ -338,6 +338,7 @@ static void test_successful_creation(void) {
     CHECK(backend.ack_semid == 700);
 
     CHECK(sem_values[SHM_ACK_SEM_MUTEX] == 1);
+    CHECK(sem_values[SHM_ACK_SEM_AVAILABLE] == SHM_ACK_OPERATION_CAPACITY);
 
     for (unsigned index = 0; index < SHM_ACK_OPERATION_CAPACITY; ++index) {
         CHECK(sem_values[SHM_ACK_SEM_NOTIFICATION_BASE + index] == 0);

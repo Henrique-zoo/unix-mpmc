@@ -758,11 +758,7 @@ static void test_capacity_counter_and_reuse(void) {
         );
     }
 
-    check_result(
-        shm_backend_ack_begin(owned_backend, FIRST_OPERATION_ID + OPERATION_COUNT, 1),
-        MPMC_ERR_NO_SPACE,
-        0
-    );
+    CHECK(semctl(owned_backend->ack_semid, SHM_ACK_SEM_AVAILABLE, GETVAL) == 0);
 
     for (uint32_t sequence = 1; sequence <= LAST_EXPECTED; sequence++) {
         notification_t notification = make_notification(

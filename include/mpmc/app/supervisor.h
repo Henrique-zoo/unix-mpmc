@@ -74,7 +74,7 @@ typedef struct {
  * @brief Recebe um diagnóstico individual de falha durante o shutdown.
  * @param error Diagnóstico válido somente durante esta chamada.
  * @param user_data Dados fornecidos pelo chamador, sem interpretação pelo
- * supervisor; pode ser NULL se a callback não precisar de estado adicional.
+ * supervisor; pode ser nullptr se a callback não precisar de estado adicional.
  * @details A callback é executada sincronamente, no fluxo normal do shutdown,
  * fora dos tratadores de sinais, uma vez para cada falha reportada.
  *
@@ -131,14 +131,16 @@ typedef struct {
     pid_t pid;             /**< PID do filho. */
     command_kind_t kind;   /**< Tipo de trabalho executado. */
     uint64_t operation_id; /**< Identidade da operação atribuída no despacho. */
-    uint64_t duration_ns;  /**< Duração em nanossegundos (nunca negativa). */
-    child_end_t end;       /**< Forma de término. */
-    int value;             /**< Código de saída ou sinal, conforme `end`. */
+    uint64_t
+        duration_ns; /**< Duração em nanossegundos, válida somente quando duration_error é OK. */
+    mpmc_result_t duration_error; /**< Falha da medição; não é representada por um zero fictício. */
+    child_end_t end;              /**< Forma de término. */
+    int value;                    /**< Código de saída ou sinal, conforme `end`. */
 } child_report_t;
 
 /**
  * @brief Cria o estado de supervisão, o self-pipe e o contexto IPC global.
- * @param out Recebe a instância alocada; em falha recebe NULL.
+ * @param out Recebe a instância alocada; em falha recebe nullptr.
  * @param producer_count Quantidade de estruturas lógicas, estritamente positiva.
  * @param mode Paradigma IPC_SHARED_MEMORY (1) ou IPC_MESSAGE_QUEUE (2).
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
@@ -154,7 +156,7 @@ typedef struct {
  *   system_errno preserva o errno retornado por ipc_init().
  * @details Também cria o canal de eventos (self-pipe) não bloqueante usado para
  * acordar o loop de controle; veja supervisor_event_fd().
- * @post Em falha, *out permanece NULL quando out é válido e os recursos locais
+ * @post Em falha, *out permanece nullptr quando out é válido e os recursos locais
  * parciais são liberados. O rollback de IPC cabe a ipc_init(); o supervisor não
  * destrói um contexto que não chegou a adquirir.
  * @par Propriedade
@@ -166,7 +168,7 @@ mpmc_result_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_m
  * @brief Despacha um comando validado e retorna sem esperar um worker concluir.
  * @param supervisor Instância inicializada.
  * @param command Comando validado para esta instância.
- * @param reporter Destino dos diagnósticos do comando shutdown; pode ser NULL.
+ * @param reporter Destino dos diagnósticos do comando shutdown; pode ser nullptr.
  * Nos comandos de trabalho, não é utilizado.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: filho criado e registrado, ou shutdown concluído; system_errno é zero. O sucesso do
@@ -201,19 +203,21 @@ mpmc_result_t supervisor_dispatch(
  * @param blocking Se false, usa waitpid(..., WNOHANG) repetidamente; se true,
  * espera até não haver mais filhos registrados (utilizar após cancelamento).
  * @param reporter Destino opcional das falhas de coleta, registro e eventos;
- * pode ser NULL, inclusive nas coletas normais fora do shutdown.
+ * pode ser nullptr, inclusive nas coletas normais fora do shutdown.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: verificação/coleta concluída ou nenhum filho pronto para coleta; system_errno é
  *   zero.
  * - MPMC_ERR_INVALID_ARG: supervisor nulo, com system_errno zero; ou msgrcv()
  *   rejeitou argumentos na drenagem de eventos, com errno em system_errno.
- * - MPMC_ERR_STATE: evento de consumo inconsistente; system_errno é zero.
+ * - MPMC_ERR_STATE: evento de consumo inconsistente ou instante do filho anterior ao início;
+ *   system_errno é zero.
  * - MPMC_ERR_SHUTDOWN: msgrcv() encontrou a fila de eventos removida;
  *   system_errno contém EIDRM capturado nessa chamada.
  * - MPMC_ERR_SYS: falha em waitpid(), read(), malloc() ou msgrcv() na coleta ou
  *   drenagem de eventos, com o errno capturado
- *   em system_errno. O campo é zero para EOF inesperado no pipe, estado de término inesperado ou
- *   falta de capacidade para registrar o relatório.
+ *   em system_errno, inclusive falhas de clock_gettime() ao medir filhos. O campo é zero para EOF
+ * inesperado no pipe, estado de término inesperado ou falta de capacidade para registrar o
+ * relatório.
  *
  * ECHILD é preservado em system_errno quando o estado de um filho registrado não está mais
  * disponível. EINTR em waitpid() ou read() é repetido. O término do filho por código de falha ou
@@ -225,8 +229,8 @@ mpmc_result_t supervisor_dispatch(
  * é executado fora do contexto de sinal.
  * @note O retorno preserva o primeiro erro, inclusive se a drenagem de eventos
  * falhar antes da coleta. Cada falha individual também chega ao reporter.
- * Falha na medição da duração mantém o fallback de duração zero; não é tratada
- * como erro de coleta nem como diagnóstico de shutdown.
+ * Falha na medição conserva o relatório com duration_error e é propagada,
+ * sem impedir a coleta dos demais filhos.
  */
 mpmc_result_t supervisor_reap(
     supervisor_t *supervisor,
@@ -237,7 +241,7 @@ mpmc_result_t supervisor_reap(
 /**
  * @brief Impede novos comandos, termina filhos e os recolhe.
  * @param supervisor Supervisor que ainda detém os recursos globais.
- * @param reporter Destino opcional de todas as falhas individuais; pode ser NULL.
+ * @param reporter Destino opcional de todas as falhas individuais; pode ser nullptr.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: encerramento e coleta concluídos sem falhas reportadas, inclusive em chamadas
  *   repetidas e após SIGKILL por vencimento do prazo; system_errno é zero.
@@ -275,7 +279,7 @@ mpmc_result_t supervisor_shutdown(
 
 /**
  * @brief Retorna quantos filhos já foram recolhidos e possuem relatório.
- * @param supervisor Instância do supervisor; NULL devolve zero.
+ * @param supervisor Instância do supervisor; nullptr devolve zero.
  * @return Número de relatórios, em ordem de recolhimento.
  */
 size_t supervisor_report_count(const supervisor_t *supervisor);
@@ -307,12 +311,15 @@ mpmc_result_t supervisor_report_get(
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: relatório escrito e stream descarregado; system_errno é zero.
  * - MPMC_ERR_INVALID_ARG: supervisor ou out nulo; system_errno é zero.
- * - MPMC_ERR_SYS: falha em fputs(), fprintf() ou fflush(), com o errno capturado em
- *   system_errno. Se apenas ferror() indicar erro no stream após o descarregamento, system_errno
- *   é zero.
+ * - MPMC_ERR_SYS: falha em clock_gettime(CLOCK_MONOTONIC), fprintf() ou fflush(),
+ *   com o errno capturado em system_errno. Se apenas ferror() indicar erro,
+ *   system_errno é zero. Falhas do processamento de eventos/contagens são propagadas.
+ * - MPMC_ERR_STATE: relógio total anterior ao início ou evento de consumo inconsistente;
+ *   system_errno é zero.
  *
- * Falha em clock_gettime() faz o tempo total informado ser zero; essa falha não é retornada como
- * MPMC_ERR_SYS.
+ * Falha na medição total imprime indisponível e não impede apresentar os demais dados.
+ * O primeiro erro é retornado e todas as falhas observadas são comunicadas ao observador.
+ * Medições individuais indisponíveis já foram diagnosticadas durante supervisor_reap().
  * @details Uma linha por filho, na ordem de recolhimento: PID, operação, tipo,
  * término (`código N (sucesso|falha)` ou `sinal N`) e duração em `S.mmm s`. O tempo
  * total vai da criação do supervisor até a chamada, em CLOCK_MONOTONIC. Deve ser
@@ -322,7 +329,7 @@ mpmc_result_t supervisor_print_report(const supervisor_t *supervisor, FILE *out)
 
 /**
  * @brief Informa quantos avisos o supervisor imprimiu desde a última consulta.
- * @param supervisor Instância viva do supervisor; NULL devolve zero.
+ * @param supervisor Instância viva do supervisor; nullptr devolve zero.
  * @return Número de mensagens de término de filho escritas em stderr por
  * supervisor_reap(); o contador é zerado pela chamada.
  * @details Permite ao REPL redesenhar o prompt depois de uma saída assíncrona,
@@ -333,7 +340,7 @@ size_t supervisor_take_notices(supervisor_t *supervisor);
 /**
  * @brief Retorna a quantidade de estruturas configuradas no supervisor.
  * @param supervisor Instância inicializada.
- * @return Quantidade configurada, ou zero para NULL.
+ * @return Quantidade configurada, ou zero para nullptr.
  */
 size_t supervisor_producer_count(const supervisor_t *supervisor);
 
@@ -341,7 +348,7 @@ size_t supervisor_producer_count(const supervisor_t *supervisor);
  * @brief Processa eventos de controle sem bloquear.
  * @param supervisor Instância viva do supervisor.
  * @param reporter Destino opcional dos erros de leitura do self-pipe e da
- * drenagem de eventos IPC; pode ser NULL.
+ * drenagem de eventos IPC; pode ser nullptr.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: self-pipe e backend IPC drenados; EAGAIN/EWOULDBLOCK encerra somente
  *   a leitura do pipe, e system_errno é zero.
@@ -369,7 +376,7 @@ mpmc_result_t supervisor_poll_events(
  * @brief Retorna o descritor de leitura do canal de eventos (self-pipe).
  * @param supervisor Instância viva do supervisor.
  * @return Descritor não bloqueante para poll()/select() com POLLIN, ou -1 para
- * NULL.
+ * nullptr.
  * @details Fica legível quando supervisor_notify_signal() foi chamada desde a
  * última supervisor_poll_events(). O descritor pertence ao supervisor: o
  * chamador não deve fechá-lo nem lê-lo diretamente.
@@ -390,8 +397,8 @@ void supervisor_notify_signal(void);
 
 /**
  * @brief Libera memória local do supervisor após o encerramento.
- * @param supervisor Instância encerrada; NULL é aceito (sem efeito).
- * @pre Se não for NULL, supervisor_shutdown() já foi chamado.
+ * @param supervisor Instância encerrada; nullptr é aceito (sem efeito).
+ * @pre Se não for nullptr, supervisor_shutdown() já foi chamado.
  * @note Não substitui supervisor_shutdown() e não pode deixar IPC global órfão.
  */
 void supervisor_destroy(supervisor_t *supervisor);

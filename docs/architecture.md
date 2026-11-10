@@ -61,12 +61,12 @@ tratador de `SIGCHLD` apenas escreve um byte nele (`supervisor_notify_signal`). 
 com `poll()` em `stdin` e na ponta de leitura do pipe (`supervisor_event_fd`), de modo que o
 término de um filho acorda o loop imediatamente. `supervisor_poll_events` drena o pipe e, só
 depois, `supervisor_reap` executa `waitpid(..., WNOHANG)` fora do tratador; essa ordem
-impede perda de sinais que cheguem durante a coleta. O filho fecha sua cópia do pipe após o
-`fork`. Não chamar `printf`, `malloc` ou rotinas de IPC não assíncronas dentro do tratador
+impede perda de sinais que cheguem durante a coleta. O filho fecha a leitura do self-pipe e conserva a escrita até terminar de
+publicar diagnósticos e resultado; o pai drena esse canal antes dos pipes de resultados. Não chamar `printf`, `malloc` ou rotinas de IPC não assíncronas dentro do tratador
 de sinal.
 
 Durante `fork()`, `supervisor_dispatch` bloqueia `SIGCHLD`, `SIGINT` e `SIGTERM`. O filho só
-os libera depois de restaurar as ações padrão, e o pai os libera após registrar o PID. Sem isso,
+os libera depois de configurar suas ações de sinais, e o pai os libera após registrar o PID. Sem isso,
 um `SIGTERM` enviado por `shutdown` imediatamente após o despacho cairia no tratador herdado do
 REPL (que apenas marca uma flag) e o filho o ignoraria, travando o `waitpid()` bloqueante. O
 descritor de leitura/escrita do self-pipe é movido para fora de 0..2, para não colidir com
@@ -198,9 +198,9 @@ coordenado. A leitura de totais segue a mesma política se a liberação de MUTE
 falhar, embora preserve a saída. O contrato completo está em
 @ref shm_operation_failures.
 
-O backend propaga a falha, mas não registra uma marca de inutilização, não impede
-novas chamadas e não avisa os outros processos. A integração da reação do supervisor
-e do encerramento permanece na #20. Cada worker fecha seu estado local; somente após
+O backend propaga a falha e o diagnóstico de contexto comprometido. O supervisor
+recebe o registro do worker e inicia o encerramento coordenado; o backend não
+repara o estado para continuar novas operações. Cada worker fecha seu estado local; somente após
 recolher todos os filhos o supervisor destrói os objetos globais. Não há tentativa
 de reparar contadores ou continuar usando o contexto após uma falha fatal.
 
@@ -295,3 +295,24 @@ Após recolher todos os filhos, o supervisor marca o contexto como quiescente. A
 fachada recusa novos envios/recebimentos/esperas e lê os totais SHM sem mutex:
 um filho encerrado pode ter deixado o mutex adquirido. A pré-condição é a ausência
 comprovada de workers vivos; durante a execução a consulta continua sincronizada.
+
+
+## Admissão e custo de memória
+
+Não existe teto fixo de p: ele deve ser positivo e representável em size_t.
+A inicialização tenta criar somente os recursos solicitados e desfaz tudo em
+falha de alocação ou de limites do kernel. SHM reserva 2048 × (p + 1) bytes
+lógicos: p buffers de dados e um controle ACK. Filas MSG usam p + 2 objetos.
+Páginas, tabelas de processos, descritores e metadados do kernel têm custo adicional.
+
+O controle ACK continua com 64 registros, 1040 bytes de conteúdo em um segmento
+reservado de 2048 bytes. O conjunto possui 66 semáforos: mutex, vagas e 64 conclusões.
+Uma tabela cheia suspende a admissão de um produtor antes de seu primeiro envio,
+sem manter mutex e sem busy waiting; finalizar um lote devolve uma vaga. Isso
+limita a memória do controle, sem rejeitar o 65º comando. A espera é cancelável.
+O custo de processos filhos cresce com os trabalhos lançados, conforme o modelo
+de processos exigido pelo enunciado.
+
+Tempos usam CLOCK_MONOTONIC. Erros conservam errno e o contexto do filho;
+relatórios com duration_error exibem indisponível e permanecem disponíveis.
+O relatório final conserva contagens e estados mesmo se sua medição total falhar.

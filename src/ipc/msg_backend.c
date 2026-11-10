@@ -195,6 +195,7 @@ static mpmc_result_t msg_backend_defer_ack(msg_backend_t *backend, uint64_t oper
 
 /**
  * @brief Entrega os ACKs acumulados.
+ * @param backend Estado local com ACKs que ainda precisam ser publicados.
  * @param wait false: para na primeira Q_ack cheia e devolve MPMC_OK, mantendo o resto;
  * true: aguarda espaço (usado só ao fechar o filho).
  */
@@ -293,11 +294,8 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
             (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = allocation_errno}
         );
     }
-    for (size_t index = 0; index < producer_count; ++index) {
-        backend->data_queues[index] = -1;
-    }
-    backend->producer_count = producer_count;
-
+    // O prefixo criado é suficiente para rollback; não percorre p entradas
+    // antes de descobrir se o kernel comporta a quantidade de filas solicitada.
     for (size_t index = 0; index < producer_count; ++index) {
         mpmc_result_t result = sysv_msg_create(&backend->data_queues[index]);
         if (result.status != MPMC_OK) {
@@ -309,6 +307,7 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
             free(backend);
             return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
+        backend->producer_count = index + 1;
     }
     mpmc_result_t result = sysv_msg_create(&backend->event_queue);
     if (result.status != MPMC_OK) {

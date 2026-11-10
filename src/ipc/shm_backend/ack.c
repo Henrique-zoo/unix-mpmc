@@ -22,6 +22,8 @@ static mpmc_result_t ack_validate_backend(const shm_backend_t *backend);
 static mpmc_result_t ack_lock(shm_backend_t *backend);
 static mpmc_result_t ack_unlock(shm_backend_t *backend);
 static mpmc_result_t ack_unlock_preserving(shm_backend_t *backend, mpmc_result_t first);
+static mpmc_result_t ack_acquire_slot(shm_backend_t *backend, uint64_t operation_id, size_t *slot);
+static mpmc_result_t ack_return_slot(shm_backend_t *backend, mpmc_result_t first, bool unlock);
 static size_t ack_find_operation(const shm_backend_t *backend, uint64_t operation_id);
 static mpmc_result_t ack_drain_notification(shm_backend_t *backend, size_t slot);
 static mpmc_result_t ack_finish_wait(
@@ -64,6 +66,9 @@ mpmc_result_t shm_backend_ack_resources_create(shm_backend_t *backend) {
     if (result.status != MPMC_OK) return mpmc_diagnostic_end(&diagnostic_scope, result);
 
     result = sysv_sem_set(backend->ack_semid, SHM_ACK_SEM_MUTEX, 1);
+    if (result.status != MPMC_OK) return mpmc_diagnostic_end(&diagnostic_scope, result);
+
+    result = sysv_sem_set(backend->ack_semid, SHM_ACK_SEM_AVAILABLE, SHM_ACK_OPERATION_CAPACITY);
     if (result.status != MPMC_OK) return mpmc_diagnostic_end(&diagnostic_scope, result);
 
     for (unsigned index = 0; index < SHM_ACK_OPERATION_CAPACITY; ++index) {
@@ -140,34 +145,13 @@ mpmc_result_t shm_backend_ack_begin(
     mpmc_result_t result = ack_validate_backend(backend);
     if (result.status != MPMC_OK) return mpmc_diagnostic_end(&diagnostic_scope, result);
 
-    result = ack_lock(backend);
+    size_t free_slot;
+    result = ack_acquire_slot(backend, operation_id, &free_slot);
     if (result.status != MPMC_OK) return mpmc_diagnostic_end(&diagnostic_scope, result);
-
-    size_t free_slot = SHM_ACK_OPERATION_CAPACITY;
-
-    for (size_t index = 0; index < SHM_ACK_OPERATION_CAPACITY; ++index) {
-        uint64_t registered = backend->ack_control->records[index].operation_id;
-
-        if (registered == operation_id) {
-            return mpmc_diagnostic_end(
-                &diagnostic_scope,
-                ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE})
-            );
-        }
-
-        if (registered == 0 && free_slot == SHM_ACK_OPERATION_CAPACITY) free_slot = index;
-    }
-
-    if (free_slot == SHM_ACK_OPERATION_CAPACITY) {
-        return mpmc_diagnostic_end(
-            &diagnostic_scope,
-            ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_NO_SPACE})
-        );
-    }
 
     result = ack_drain_notification(backend, free_slot);
     if (result.status != MPMC_OK)
-        return mpmc_diagnostic_end(&diagnostic_scope, ack_unlock_preserving(backend, result));
+        return mpmc_diagnostic_end(&diagnostic_scope, ack_return_slot(backend, result, true));
 
     shm_ack_record_t *record = &backend->ack_control->records[free_slot];
 
@@ -182,7 +166,7 @@ mpmc_result_t shm_backend_ack_begin(
     if (result.status != MPMC_OK) {
         /* A liberação falhou atomicamente: o mutex continua adquirido. */
         *record = (shm_ack_record_t){};
-        return mpmc_diagnostic_end(&diagnostic_scope, ack_unlock_preserving(backend, result));
+        return mpmc_diagnostic_end(&diagnostic_scope, ack_return_slot(backend, result, true));
     }
 
     return mpmc_diagnostic_end(&diagnostic_scope, result);
@@ -284,7 +268,7 @@ mpmc_result_t shm_backend_ack_end(shm_backend_t *backend, uint64_t operation_id)
     *record = (shm_ack_record_t){};
 
     return mpmc_diagnostic_end(
-        &diagnostic_scope, ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_OK})
+        &diagnostic_scope, ack_return_slot(backend, (mpmc_result_t){.status = MPMC_OK}, true)
     );
 }
 
@@ -479,4 +463,72 @@ static mpmc_result_t ack_finish_wait(
     }
 
     return ack_unlock_preserving(backend, first);
+}
+
+/**
+ * @brief Reserva uma posição; retorna com mutex adquirido e uma vaga debitada.
+ * @details A tentativa inicial sob mutex nunca bloqueia por vaga. Se a tabela estiver
+ * cheia, libera o mutex antes da espera. Revalida duplicidade depois de readquirir,
+ * pois outros processos podem ter registrado o mesmo ID enquanto aguardava.
+ * @param backend Backend inicializado.
+ * @param operation_id ID não zero a registrar.
+ * @param slot Recebe a posição reservada somente em sucesso.
+ * @return Estrutura mpmc_result_t com MPMC_OK em sucesso, MPMC_ERR_STATE em
+ * duplicidade/inconsistência ou erro propagado de semop(): MPMC_ERR_INVALID_ARG,
+ * MPMC_ERR_INTERRUPTED, MPMC_ERR_SHUTDOWN ou MPMC_ERR_SYS, preservando errno. Falhas de mutex/vaga
+ * são compensadas antes do retorno, com cada erro de liberação observado.
+ */
+static mpmc_result_t ack_acquire_slot(shm_backend_t *backend, uint64_t operation_id, size_t *slot) {
+    mpmc_result_t result = ack_lock(backend);
+    if (result.status != MPMC_OK) return result;
+    if (ack_find_operation(backend, operation_id) != SHM_ACK_OPERATION_CAPACITY)
+        return ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_ERR_STATE});
+
+    result = sysv_sem_change(backend->ack_semid, SHM_ACK_SEM_AVAILABLE, -1, true);
+    if (result.status == MPMC_ERR_WOULD_BLOCK) {
+        result = ack_unlock_preserving(backend, (mpmc_result_t){.status = MPMC_OK});
+        if (result.status != MPMC_OK) return result;
+        result = sysv_sem_change(backend->ack_semid, SHM_ACK_SEM_AVAILABLE, -1, false);
+        if (result.status != MPMC_OK) return result;
+        result = ack_lock(backend);
+        if (result.status != MPMC_OK) return ack_return_slot(backend, result, false);
+        if (ack_find_operation(backend, operation_id) != SHM_ACK_OPERATION_CAPACITY)
+            return ack_return_slot(backend, (mpmc_result_t){.status = MPMC_ERR_STATE}, true);
+    } else if (result.status != MPMC_OK) {
+        return ack_unlock_preserving(backend, result);
+    }
+    *slot = ack_find_operation(backend, 0);
+    if (*slot == SHM_ACK_OPERATION_CAPACITY)
+        return ack_return_slot(backend, (mpmc_result_t){.status = MPMC_ERR_STATE}, true);
+    return (mpmc_result_t){.status = MPMC_OK};
+}
+
+/**
+ * @brief Devolve a reserva e tenta liberar o mutex, sem perder erros secundários.
+ * @details Uma falha de semop não aplica o incremento: uma repetição não duplica
+ * vagas. Sem mutex adquirido, somente a reserva é devolvida. Falhas persistentes
+ * tornam o contexto fatal; não se tenta reutilizá-lo depois do erro.
+ * @param backend Backend com uma vaga reservada ainda não devolvida.
+ * @param first Causa anterior, ou MPMC_OK se a devolução for a primeira operação.
+ * @param unlock Se true, o chamador também detém o mutex e deve liberá-lo.
+ * @return Estrutura mpmc_result_t com first se ele já indicava falha; caso
+ * contrário, MPMC_OK ou a primeira falha de semop(), com errno preservado.
+ * @pre A reserva pertence a esta chamada e ainda não foi devolvida.
+ */
+static mpmc_result_t ack_return_slot(shm_backend_t *backend, mpmc_result_t first, bool unlock) {
+    mpmc_diagnostic_cause("reserva da operação ACK", first);
+    mpmc_diagnostic_scope_t scope;
+    mpmc_diagnostic_begin(&scope, __func__, true, false);
+    scope.first = first;
+    for (unsigned attempt = 0; attempt < 2; ++attempt) {
+        uint64_t before = mpmc_diagnostic_count();
+        mpmc_result_t released =
+            sysv_sem_change(backend->ack_semid, SHM_ACK_SEM_AVAILABLE, 1, false);
+        if (released.status != MPMC_OK) scope.fatal = true;
+        mpmc_diagnostic_observe("devolução de vaga ACK", released, before);
+        if (released.status == MPMC_OK) break;
+        if (first.status == MPMC_OK) first = released;
+    }
+    if (unlock) first = ack_unlock_preserving(backend, first);
+    return mpmc_diagnostic_end(&scope, first);
 }

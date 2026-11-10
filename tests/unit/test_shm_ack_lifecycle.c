@@ -16,6 +16,8 @@ static int ready[2];
 static shm_backend_t *backend;
 static shm_backend_t *spectator_backend;
 static unsigned checks;
+static bool fail_slot_mutex;
+static bool slot_reserved;
 static pid_t children[16];
 #define CHECK(condition)                                                                           \
     do {                                                                                           \
@@ -62,11 +64,21 @@ static pid_t start_child(void) {
 }
 
 mpmc_result_t mpmc_test_sem_change(int id, unsigned index, short delta, bool nowait) {
-    if (getpid() != parent && index >= SHM_ACK_SEM_NOTIFICATION_BASE && delta == -1 && !nowait) {
+    if (fail_slot_mutex && slot_reserved && index == SHM_ACK_SEM_MUTEX && delta == -1) {
+        fail_slot_mutex = false;
+        return (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR};
+    }
+    if (getpid() != parent
+        && (index >= SHM_ACK_SEM_NOTIFICATION_BASE || index == SHM_ACK_SEM_AVAILABLE) && delta == -1
+        && !nowait) {
         char byte = 1;
         if (write(ready[1], &byte, 1) != 1) _exit(90);
     }
-    return sysv_sem_change(id, index, delta, nowait);
+    mpmc_result_t result = sysv_sem_change(id, index, delta, nowait);
+    if (fail_slot_mutex && index == SHM_ACK_SEM_AVAILABLE && delta == -1 && !nowait
+        && result.status == MPMC_OK)
+        slot_reserved = true;
+    return result;
 }
 static message_t message(uint64_t operation, uint32_t sequence) {
     return (message_t){.sender_pid = parent, .operation_id = operation, .sequence = sequence};
@@ -78,6 +90,14 @@ static void receive_from(size_t index) {
 static void collect(pid_t child) {
     int status;
     CHECK(waitpid(child, &status, 0) == child);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        fprintf(
+            stderr,
+            "filho %ld: wait_status=%d, exit=%d\n",
+            (long)child,
+            status,
+            WIFEXITED(status) ? WEXITSTATUS(status) : -1
+        );
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     for (size_t index = 0; index < 16; ++index) {
         if (children[index] == child) children[index] = 0;
@@ -136,6 +156,8 @@ static void test_concurrent_producers(void) {
 
 /** @brief Encerra um produtor bloqueado em ACK e preserva outro backend. */
 static void test_shutdown_waiter(void) {
+    CHECK(close(ready[0]) == 0 && close(ready[1]) == 0);
+    CHECK(pipe(ready) == 0);
     OK(shm_backend_create(&spectator_backend, 1, nullptr));
     OK(shm_backend_create(&backend, 1, nullptr));
     int old_control = backend->ack_control_shmid;
@@ -208,6 +230,55 @@ static void test_abandoned_mutex_snapshot(void) {
     close(channel[1]);
 }
 
+/** @brief Tabela cheia aguarda sem manter mutex; cancelamento não consome vagas. */
+static void test_slot_backpressure(void) {
+    for (unsigned scenario = 0; scenario < 3; ++scenario) {
+        // Nenhuma notificação de outro cenário pode satisfazer esta barreira.
+        CHECK(close(ready[0]) == 0 && close(ready[1]) == 0);
+        CHECK(pipe(ready) == 0);
+        OK(shm_backend_create(&backend, 1, nullptr));
+        for (unsigned index = 0; index < SHM_ACK_OPERATION_CAPACITY; ++index)
+            OK(shm_backend_ack_begin(backend, 10000 + index, 1));
+        CHECK(semctl(backend->ack_semid, SHM_ACK_SEM_AVAILABLE, GETVAL) == 0);
+        CHECK(shm_backend_ack_begin(backend, 10000, 1).status == MPMC_ERR_STATE);
+        pid_t child = start_child();
+        CHECK(child >= 0);
+        if (child == 0) {
+            if (scenario == 1) alarm(1);
+            fail_slot_mutex = scenario == 2;
+            mpmc_result_t result = shm_backend_ack_begin(backend, 20000, 1);
+            if (scenario != 0
+                && (result.status != MPMC_ERR_INTERRUPTED || result.system_errno != EINTR))
+                fprintf(
+                    stderr,
+                    "admissão cenário %u: status=%d errno=%d reserved=%d\n",
+                    scenario,
+                    result.status,
+                    result.system_errno,
+                    slot_reserved
+                );
+            if (scenario != 0)
+                _exit(
+                    result.status == MPMC_ERR_INTERRUPTED && result.system_errno == EINTR ? 0 : 81
+                );
+            if (result.status != MPMC_OK) _exit(82);
+            _exit(shm_backend_ack_end(backend, 20000).status == MPMC_OK ? 0 : 83);
+        }
+        char byte;
+        CHECK(read(ready[0], &byte, 1) == 1);
+        if (scenario != 1) OK(shm_backend_ack_end(backend, 10000));
+        collect(child);
+        // Espera por vaga não impede o pai de adquirir o mutex e finalizar lotes.
+        for (unsigned index = scenario == 1 ? 0 : 1; index < SHM_ACK_OPERATION_CAPACITY; ++index)
+            OK(shm_backend_ack_end(backend, 10000 + index));
+        CHECK(
+            semctl(backend->ack_semid, SHM_ACK_SEM_AVAILABLE, GETVAL) == SHM_ACK_OPERATION_CAPACITY
+        );
+        OK(shm_backend_destroy(backend, nullptr));
+        backend = nullptr;
+    }
+}
+
 int main(void) {
     parent = getpid();
     struct sigaction action = {.sa_handler = on_alarm};
@@ -275,6 +346,7 @@ int main(void) {
     test_concurrent_producers();
     test_shutdown_waiter();
     test_abandoned_mutex_snapshot();
+    test_slot_backpressure();
     close(ready[0]);
     close(ready[1]);
     alarm(0);
