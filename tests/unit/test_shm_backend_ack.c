@@ -14,6 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "mpmc/diagnostic.h"
 #include "mpmc/ipc/sem.h"
 #include "mpmc/ipc/shm_backend.h"
 #include "shm_backend_internal.h"
@@ -24,6 +25,8 @@ typedef struct {
     size_t producer_id;
     message_t message;
 } notification_t;
+
+static void capture_ack_failure(const mpmc_diagnostic_t *error, void *user_data);
 
 static unsigned checks;
 static unsigned failures;
@@ -804,12 +807,21 @@ static void test_preserving_path_recovers_unlock_failure(void) {
         (mpmc_result_t){.status = MPMC_ERR_INTERRUPTED, .system_errno = EINTR}
     );
 
+    mpmc_diagnostic_t captured[2] = {};
+    mpmc_reporter_t reporter = {.on_error = capture_ack_failure, .user_data = captured};
+    mpmc_diagnostic_set_reporter(&reporter);
+
     /*
      * O segundo begin é rejeitado por duplicidade. A falha injetada ocorre
      * ao liberar o mutex; a tentativa seguinte deve liberá-lo de verdade.
      */
     check_result(shm_backend_ack_begin(owned_backend, operation_id, 1), MPMC_ERR_STATE, 0);
 
+    mpmc_diagnostic_set_reporter(nullptr);
+    CHECK(captured[0].result.status == MPMC_ERR_STATE);
+    CHECK(captured[0].phase == MPMC_DIAGNOSTIC_OPERATION);
+    CHECK(captured[1].result.status == MPMC_ERR_INTERRUPTED);
+    CHECK(captured[1].phase == MPMC_DIAGNOSTIC_CLEANUP);
     CHECK(!sem_failure.enabled);
     check_result(shm_backend_ack_end(owned_backend, operation_id), MPMC_OK, 0);
 }
@@ -968,4 +980,12 @@ int main(void) {
 
     printf("%u verificações de ACK SHM, %u falhas\n", checks, failures);
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+/** @brief Conserva separadamente a causa e a falha de unlock na fixture de duplicidade. */
+static void capture_ack_failure(const mpmc_diagnostic_t *error, void *user_data) {
+    mpmc_diagnostic_t *captured = user_data;
+    size_t index = captured[0].result.status == MPMC_OK ? 0 : 1;
+    CHECK(captured[index].result.status == MPMC_OK);
+    captured[index] = *error;
 }

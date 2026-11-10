@@ -80,3 +80,19 @@ não representa durabilidade transacional contra morte arbitrária de processos.
 - `test_diagnostics.py`: falhas de criação, rollback com três remoções falhando,
   falha após alteração do ring, seis detaches falhando entre filho/pai e cores
   em pseudo-terminal; verifica ausência dos IDs registrados pelo próprio cenário.
+
+## Cancelamento normal
+
+Workers reais instalam tratadores mínimos de SIGINT/SIGTERM, sem SA_RESTART.
+O tratador apenas solicita `ipc_worker_cancel()`: novas operações de dados/espera
+retornam INTERRUPTED, enquanto publicações já iniciadas, ack_end e fechamento local
+continuam disponíveis. Assim, uma retirada anterior ao sinal ainda publica seu
+ACK/evento e entra no total consumido. `test_cooperative_shutdown.py` injeta SIGTERM
+exatamente nessa janela nos dois modos e verifica o consumo efetivo de uma mensagem.
+O stub DEBUG de testes mantém SIG_DFL para os cenários de morte por sinal.
+
+A auditoria das transições também cobre envio aceito antes do cancelamento,
+ACK e eventos adiados até o fechamento local, sinais repetidos nesse fechamento
+e 1200 diagnósticos sintéticos entregues integralmente sob backpressure do pipe.
+O controle negativo da fixture pode restaurar SIG_DFL antes da injeção; a suíte
+rejeitou essa reprodução do comportamento antigo, confirmando a regressão.
