@@ -99,6 +99,7 @@ static void record_shutdown_error(
 
 static mpmc_result_t open_result_pipe(int descriptors[2]);
 static void close_descriptor(int fd);
+static void cancel_worker(int signal_number);
 static void run_worker(
     supervisor_t *supervisor,
     const command_t *command,
@@ -1609,6 +1610,14 @@ static void run_worker(
         .producer_id = command->producer_id,
         .requested = command->message_count,
     };
+    struct sigaction cancellation = {.sa_handler = cancel_worker};
+    sigemptyset(&cancellation.sa_mask);
+    if (sigaction(SIGTERM, &cancellation, nullptr) == -1
+        || sigaction(SIGINT, &cancellation, nullptr) == -1) {
+        outcome.error = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+        mpmc_diagnostic_cause("sigaction(worker)", outcome.error);
+        goto cleanup;
+    }
     if (command->kind == COMMAND_PRODUCE) {
         const producer_job_t job = {
             .producer_id = command->producer_id,
@@ -1631,6 +1640,7 @@ static void run_worker(
         outcome.effective = progress.consumed_count;
     }
 
+cleanup:
     mpmc_diagnostic_cause("execução do worker", outcome.error);
     ipc_worker_close(supervisor->ipc);
     if (scope.first.status != MPMC_OK) outcome.error = scope.first;
@@ -1750,4 +1760,10 @@ static void close_descriptor(int fd) {
     mpmc_result_t result = {.status = MPMC_OK};
     if (close(fd) == -1) result = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
     (void)mpmc_diagnostic_end(&scope, result);
+}
+
+/** @brief Apenas marca cancelamento; publicação, callbacks e cleanup ocorrem fora do sinal. */
+static void cancel_worker(int signal_number) {
+    (void)signal_number;
+    ipc_worker_cancel();
 }

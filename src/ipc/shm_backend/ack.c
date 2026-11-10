@@ -370,7 +370,7 @@ static void ack_keep_first(mpmc_result_t *first, mpmc_result_t current) {
     if (first->status == MPMC_OK) *first = current;
 }
 
-/** @brief Confere o mapeamento local e a versão do layout compartilhado. */
+/** @brief Confere o mapeamento local e a identificação do controle compartilhado. */
 static mpmc_result_t ack_validate_backend(const shm_backend_t *backend) {
     if (backend->ack_control == nullptr || backend->ack_semid < 0
         || backend->ack_control->magic != SHM_ACK_CONTROL_MAGIC) {
@@ -396,10 +396,11 @@ static mpmc_result_t ack_unlock(shm_backend_t *backend) {
  * a primeira falha permanece no resultado, mesmo se a repetição concluir.
  */
 static mpmc_result_t ack_unlock_preserving(shm_backend_t *backend, mpmc_result_t first) {
+    mpmc_diagnostic_cause("operação ACK", first);
     mpmc_diagnostic_scope_t diagnostic_scope;
     mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
 
-    mpmc_diagnostic_cause("operação ACK", first);
+    diagnostic_scope.first = first;
     uint64_t before = mpmc_diagnostic_count();
     mpmc_result_t result = ack_unlock(backend);
     mpmc_diagnostic_observe("liberação do mutex ACK", result, before);

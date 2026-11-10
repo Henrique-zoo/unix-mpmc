@@ -54,7 +54,9 @@ mpmc_result_t mpmc_diagnostic_end(mpmc_diagnostic_scope_t *scope, mpmc_result_t 
     if (scope->first.status == MPMC_OK && result.status != MPMC_OK
         && result.status != MPMC_ERR_WOULD_BLOCK
         && !(scope->primitive && result.status == MPMC_ERR_INTERRUPTED)) {
-        mpmc_diagnostic_report(system_operation(scope->function), result);
+        mpmc_diagnostic_report(
+            result.system_errno != 0 ? system_operation(scope->function) : scope->function, result
+        );
     }
     mpmc_result_t outcome =
         scope->cleanup && scope->first.status != MPMC_OK ? scope->first : result;

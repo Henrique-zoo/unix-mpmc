@@ -29,11 +29,13 @@ static unsigned count, checks, failures;
 static void collect(const mpmc_diagnostic_t *error, void *user_data);
 static void test_nested(void);
 static void test_control_flow(void);
+static void test_local_validation(void);
 static void test_presentation(void);
 
 int main(void) {
     test_nested();
     test_control_flow();
+    test_local_validation();
     test_presentation();
     mpmc_diagnostic_set_reporter(nullptr);
     CHECK(!mpmc_diagnostic_enabled());
@@ -125,6 +127,10 @@ static void test_presentation(void) {
     if (out == nullptr) return;
     app_diagnostics_t state = {.output = out};
     for (unsigned index = 0; index < 3; ++index) app_diagnostic_print(&errors[index], &state);
+    mpmc_diagnostic_t striped = errors[0];
+    striped.producer_id = 0;
+    ++striped.group;
+    app_diagnostic_print(&striped, &state);
     rewind(out);
     char text[4096] = {};
     size_t size = fread(text, 1, sizeof text - 1, out);
@@ -133,5 +139,19 @@ static void test_presentation(void) {
     CHECK(strstr(text, "Ao finalizar/liberar recursos") != nullptr);
     CHECK(strstr(text, "semget()") != nullptr && strstr(text, "shmdt()") != nullptr);
     CHECK(strstr(text, "\033[") == nullptr);
+    CHECK(strstr(text, "todas as estruturas") != nullptr);
+    CHECK(strstr(text, "estrutura 0") == nullptr);
     CHECK(fclose(out) == 0);
+}
+
+/** @brief Rejeição local não é atribuída a uma syscall que não chegou a ser executada. */
+static void test_local_validation(void) {
+    mpmc_diagnostic_scope_t scope;
+    unsigned before = count;
+    mpmc_diagnostic_begin(&scope, "sysv_sem_create", false, true);
+    mpmc_result_t result =
+        mpmc_diagnostic_end(&scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG});
+    CHECK(result.status == MPMC_ERR_INVALID_ARG && result.system_errno == 0);
+    CHECK(count == before + 1);
+    CHECK(strcmp(errors[before].operation, "sysv_sem_create") == 0);
 }

@@ -60,9 +60,10 @@
  * Esperas bloqueantes não repetem EINTR; retornam MPMC_ERR_INTERRUPTED com system_errno
  * igual a EINTR. Nesse caso a operação não surtiu efeito: nenhuma mensagem foi inserida
  * ou retirada, e ACKs já contados permanecem contados. O worker decide encerrar e deve
- * então executar ipc_ack_end() (se houver) e retornar. Os filhos criados pelo supervisor
- * mantêm as ações padrão de SIGTERM e SIGINT; portanto, hoje, o cancelamento por
- * shutdown mata o filho por sinal e MPMC_ERR_INTERRUPTED não chega a ser observado.
+ * então executar ipc_ack_end() (se houver) e retornar. Os workers reais instalam
+ * tratadores mínimos de SIGTERM/SIGINT que solicitam ipc_worker_cancel(); o
+ * fechamento local pode assim publicar eventos/ACKs já devidos antes de sair.
+ * SIGKILL ao vencer o prazo continua sendo término forçado, sem garantia de cleanup local.
  * Única exceção: depois que ipc_receive() retira uma mensagem, a publicação do evento e
  * do ACK repete EINTR para não perder a contagem, e ipc_poll_events() também o repete.
  *
@@ -389,6 +390,17 @@ mpmc_result_t ipc_consumed_count(ipc_context_t *context, size_t producer_id, uin
  * @post O ponteiro context é inválido neste processo. A cópia do supervisor não é afetada.
  */
 void ipc_worker_close(ipc_context_t *context);
+
+/**
+ * @brief Solicita cancelamento cooperativo de dados e espera ACK neste processo filho.
+ * @details Apenas escreve volatile sig_atomic_t e pode ser chamada pelo tratador de
+ * SIGINT/SIGTERM. O pedido permanece ativo até o término do processo; não afeta o pai.
+ * Novos send/receive/ack_begin/ack_wait retornam MPMC_ERR_INTERRUPTED com errno zero.
+ * Operações já iniciadas concluem sua publicação; ack_end e worker_close continuam
+ * disponíveis para finalizar o trabalho e publicar estatísticas/ACKs pendentes.
+ * @note O supervisor instala o tratador somente no filho, antes do laço de trabalho.
+ */
+void ipc_worker_cancel(void);
 
 /**
  * @brief Remove definitivamente os recursos IPC e libera o contexto do pai.
