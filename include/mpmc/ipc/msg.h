@@ -32,7 +32,7 @@ mpmc_result_t sysv_msg_create(int *out_msqid);
  * @brief Envia o corpo de uma mensagem com tipo explícito.
  * @param msqid Fila System V previamente criada.
  * @param type Tipo positivo (`mtype > 0`), conforme System V.
- * @param payload Endereço do corpo binário; pode ser NULL apenas se size==0.
+ * @param payload Endereço do corpo binário; pode ser nullptr apenas se size==0.
  * @param size Quantidade de bytes do corpo (exclui o `long mtype`).
  * @param nowait Se true, passa IPC_NOWAIT a msgsnd().
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
@@ -99,7 +99,7 @@ mpmc_result_t sysv_msg_receive(
  * @param capacity Máximo de bytes que cabem no destino; não inclui long mtype.
  * @param nowait Se true, usa IPC_NOWAIT para não esperar mensagem.
  * @param[out] out_size Recebe a quantidade de bytes copiados em sucesso.
- * @param[out] out_type Recebe o mtype positivo em sucesso; NULL descarta essa informação.
+ * @param[out] out_type Recebe o mtype positivo em sucesso; nullptr descarta essa informação.
  * @return Estrutura mpmc_result_t com um dos seguintes estados do campo status:
  * - MPMC_OK: mensagem retirada e saídas preenchidas; system_errno é zero.
  * - MPMC_ERR_INVALID_ARG: out_size nulo, out_payload nulo com capacity positiva ou
