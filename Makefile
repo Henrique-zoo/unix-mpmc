@@ -5,7 +5,7 @@ CC := clang
 MODE ?= debug
 
 CPPFLAGS += -Iinclude -D_POSIX_C_SOURCE=200809L
-CFLAGS   += -std=c23 -Wall -Wextra -Wpedantic -Wshadow
+CFLAGS   += -std=c23 -Wall -Wextra -Wpedantic -Wshadow -Werror
 
 ifeq ($(MODE),debug)
   CFLAGS += -O0 -g3 -DDEBUG
@@ -454,13 +454,13 @@ $(INTEGRATION_DIR)/resource_inspect: tests/integration/resource_inspect.c
 
 # Testes básicos: o loop interativo deve aceitar o comando shutdown.
 test: all unit $(INTEGRATION_DIR)/test_repl $(PROBE_BINARY) $(INTEGRATION_DIR)/resource_inspect
-	@printf 'shutdown\n' | ./mpmc 2 1 > /dev/null
-	@printf 'shutdown\n' | ./mpmc 2 2 > /dev/null
-	@sh tests/integration/test_args.sh ./mpmc
-	@sh tests/integration/test_invalid_commands.sh ./mpmc
-	@sh tests/integration/test_repl.sh ./mpmc
-	@$(INTEGRATION_DIR)/test_repl ./mpmc
-	@python3 tests/integration/test_application.py ./mpmc
+	@printf 'shutdown\n' | $(BINARY) 2 1 > /dev/null
+	@printf 'shutdown\n' | $(BINARY) 2 2 > /dev/null
+	@sh tests/integration/test_args.sh $(BINARY)
+	@sh tests/integration/test_invalid_commands.sh $(BINARY)
+	@sh tests/integration/test_repl.sh $(BINARY)
+	@$(INTEGRATION_DIR)/test_repl $(BINARY)
+	@python3 tests/integration/test_application.py $(BINARY)
 	@python3 tests/integration/test_shutdown_resources.py $(PROBE_BINARY) $(INTEGRATION_DIR)/resource_inspect
 	@python3 tests/integration/test_diagnostics.py $(PROBE_BINARY) $(INTEGRATION_DIR)/resource_inspect
 	@echo 'Unit, startup and REPL tests passed.'
