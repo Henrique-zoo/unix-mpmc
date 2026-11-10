@@ -1,3 +1,4 @@
+#include "app/diagnostics.h"
 /**
  * @file main.c
  * @brief Ponto de entrada e validação dos argumentos de inicialização.
@@ -43,6 +44,9 @@ static mpmc_result_t parse_positive_integer(const char *text, size_t *out);
  * e a sintaxe esperada para a execução.
  */
 int main(int argc, char *argv[]) {
+    app_diagnostics_t diagnostics = {.output = stderr};
+    mpmc_reporter_t reporter = {.on_error = app_diagnostic_print, .user_data = &diagnostics};
+    mpmc_diagnostic_set_reporter(&reporter);
     mpmc_config_t config;
     mpmc_result_t error = parse_args(argc, argv, &config);
     char error_text[256];
@@ -57,28 +61,38 @@ int main(int argc, char *argv[]) {
     }
 
     supervisor_t *supervisor = NULL;
+    uint64_t before = mpmc_diagnostic_count();
     error = supervisor_create(&supervisor, config.producer_count, config.mode);
     if (error.status != MPMC_OK) {
         (void)mpmc_error_format(error, error_text, sizeof error_text);
-        fprintf(stderr, "mpmc: não foi possível inicializar o supervisor: %s\n", error_text);
+        if (before == mpmc_diagnostic_count())
+            fprintf(stderr, "mpmc: não foi possível inicializar o supervisor: %s\n", error_text);
         return EXIT_FAILURE;
     }
 
+    before = mpmc_diagnostic_count();
     error = repl_run(supervisor);
     if (error.status != MPMC_OK) {
         (void)mpmc_error_format(error, error_text, sizeof error_text);
-        fprintf(stderr, "mpmc: REPL encerrado com erro: %s\n", error_text);
+        if (before == mpmc_diagnostic_count())
+            fprintf(stderr, "mpmc: REPL encerrado com erro: %s\n", error_text);
         (void)supervisor_shutdown(supervisor, NULL);
     }
+    before = mpmc_diagnostic_count();
     mpmc_result_t report_error = supervisor_print_report(supervisor, stdout);
     if (report_error.status != MPMC_OK) {
         (void)mpmc_error_format(report_error, error_text, sizeof error_text);
-        fprintf(stderr, "mpmc: falha ao apresentar o relatório: %s\n", error_text);
+        if (before == mpmc_diagnostic_count())
+            fprintf(stderr, "mpmc: falha ao apresentar o relatório: %s\n", error_text);
         if (error.status == MPMC_OK) {
             error = report_error;
         }
     }
+    mpmc_diagnostic_scope_t cleanup;
+    mpmc_diagnostic_begin(&cleanup, "supervisor_destroy", true, false);
     supervisor_destroy(supervisor);
+    mpmc_result_t cleanup_error = mpmc_diagnostic_end(&cleanup, (mpmc_result_t){.status = MPMC_OK});
+    if (error.status == MPMC_OK) error = cleanup_error;
     return error.status == MPMC_OK ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 

@@ -9,8 +9,7 @@
  *   documentados correspondem ao que msg_backend.c produz hoje.
  * - Modo 1 (memória compartilhada): ciclo de vida, envio, recebimento, contagens
  *   sincronizadas e registro/espera/finalização de ACK por operação estão implementados.
- *   A notificação automática de consumo dentro de ipc_receive() ainda está pendente (#11).
- * Itens marcados como "pendente" não podem ser verificados nesta revisão.
+ *   ipc_receive() confirma automaticamente cada mensagem efetivamente retirada.
  *
  * @par Convenção de retorno
  * As operações que podem falhar retornam mpmc_result_t. `system_errno` carrega o errno
@@ -34,8 +33,8 @@
  * de itens e interrupção da aquisição não invalidam o contexto por si mesmas.
  * As demais falhas de semop() exigem suspender o uso de dados e estatísticas do
  * contexto e encaminhar o encerramento coordenado ao supervisor. A fachada
- * apenas propaga o resultado: não marca o contexto como inválido nem avisa outros
- * processos. A integração do encerramento por falha fatal pertence à issue #20.
+ * propaga o resultado e os diagnósticos. O supervisor observa falhas fatais dos
+ * workers e inicia o encerramento coordenado, impedindo novos trabalhos.
  *
  * @par Propriedade dos recursos
  * - O supervisor cria o contexto com ipc_init() e o remove uma única vez com
@@ -52,9 +51,10 @@
  * falhas ocorridas ao liberar recursos. ipc_ack_end() é chamada em sucesso, falha ou
  * cancelamento sempre que ipc_ack_begin() tiver retornado MPMC_OK; se o trabalho
  * terminou sem erro e ipc_ack_end() falhar, esse resultado passa a ser o do trabalho.
- * ipc_worker_close() e ipc_destroy() não têm canal de erro: o backend de filas ignora
- * falhas de msgctl(IPC_RMID), e o de memória compartilhada as entrega só a um
- * shm_cleanup_reporter_t que a fachada ainda não repassa (pendente: #16).
+ * ipc_worker_close() e ipc_destroy() preservam suas assinaturas void; todas as
+ * falhas individuais são entregues ao observador comum de diagnostic.h.
+ * O ponto de entrada do worker e main() agregam os erros do fechamento ao resultado
+ * principal. Veja @ref flow_diagnostics para propriedade, hierarquia e apresentação.
  *
  * @par Interrupção
  * Esperas bloqueantes não repetem EINTR; retornam MPMC_ERR_INTERRUPTED com system_errno

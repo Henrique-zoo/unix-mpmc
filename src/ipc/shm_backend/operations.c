@@ -10,6 +10,7 @@
 #include <assert.h>
 #include <sys/sem.h>
 
+#include "mpmc/diagnostic.h"
 #include "mpmc/error.h"
 #include "mpmc/ipc/sem.h"
 #include "mpmc/ipc/shm_backend.h"
@@ -30,12 +31,19 @@ mpmc_result_t shm_backend_send(
     size_t producer_id,
     const message_t *message
 ) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (backend == NULL || message == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
 
     if (producer_id == 0 || producer_id > backend->producer_count) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX}
+        );
     }
 
     shm_segment_t *segment = &backend->segments[producer_id - 1];
@@ -57,9 +65,10 @@ mpmc_result_t shm_backend_send(
     };
 
     mpmc_result_t result = sysv_sem_apply(segment->semid, acquire, 2);
-    if (result.status != MPMC_OK) return result;
+    if (result.status != MPMC_OK) return mpmc_diagnostic_end(&diagnostic_scope, result);
 
     shm_ring_push(segment->ring, *message);
+    diagnostic_scope.fatal = true;
 
     struct sembuf release[] = {
         {
@@ -74,7 +83,7 @@ mpmc_result_t shm_backend_send(
         },
     };
 
-    return sysv_sem_apply(segment->semid, release, 2);
+    return mpmc_diagnostic_end(&diagnostic_scope, sysv_sem_apply(segment->semid, release, 2));
 }
 
 /**
@@ -92,12 +101,19 @@ mpmc_result_t shm_backend_receive(
     message_t *out,
     bool blocking
 ) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (backend == NULL || out == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
 
     if (producer_id == 0 || producer_id > backend->producer_count) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX}
+        );
     }
 
     shm_segment_t *segment = &backend->segments[producer_id - 1];
@@ -121,9 +137,10 @@ mpmc_result_t shm_backend_receive(
     };
 
     mpmc_result_t result = sysv_sem_apply(segment->semid, acquire, 2);
-    if (result.status != MPMC_OK) return result;
+    if (result.status != MPMC_OK) return mpmc_diagnostic_end(&diagnostic_scope, result);
 
     *out = shm_ring_pop(segment->ring);
+    diagnostic_scope.fatal = true;
 
     struct sembuf release[] = {
         {
@@ -140,9 +157,11 @@ mpmc_result_t shm_backend_receive(
     };
 
     result = sysv_sem_apply(segment->semid, release, 2);
-    if (result.status != MPMC_OK) return result;
+    if (result.status != MPMC_OK) return mpmc_diagnostic_end(&diagnostic_scope, result);
 
-    return shm_backend_ack_notify_consumed(backend, producer_id, out);
+    return mpmc_diagnostic_end(
+        &diagnostic_scope, shm_backend_ack_notify_consumed(backend, producer_id, out)
+    );
 }
 
 /**
@@ -155,12 +174,19 @@ mpmc_result_t shm_backend_consumed_count(
     size_t producer_id,
     uint64_t *out_count
 ) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (backend == NULL || out_count == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
 
     if (producer_id == 0 || producer_id > backend->producer_count) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX}
+        );
     }
 
     shm_segment_t *segment = &backend->segments[producer_id - 1];
@@ -169,15 +195,15 @@ mpmc_result_t shm_backend_consumed_count(
     assert(segment->semid >= 0);
 
     mpmc_result_t result = sysv_sem_change(segment->semid, SHM_SEM_MUTEX, -1, false);
-    if (result.status != MPMC_OK) return result;
+    if (result.status != MPMC_OK) return mpmc_diagnostic_end(&diagnostic_scope, result);
 
     uint64_t count = segment->ring->consumed_total;
 
     result = sysv_sem_change(segment->semid, SHM_SEM_MUTEX, 1, false);
-    if (result.status != MPMC_OK) return result;
+    if (result.status != MPMC_OK) return mpmc_diagnostic_end(&diagnostic_scope, result);
 
     *out_count = count;
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /** @details A propriedade exclusiva do pai após waitpid() substitui o mutex. */
@@ -186,10 +212,17 @@ mpmc_result_t shm_backend_final_count(
     size_t producer_id,
     uint64_t *out_count
 ) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (backend == nullptr || out_count == nullptr)
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     if (producer_id == 0 || producer_id > backend->producer_count)
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX}
+        );
     *out_count = backend->segments[producer_id - 1].ring->consumed_total;
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }

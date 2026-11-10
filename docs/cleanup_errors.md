@@ -2,6 +2,10 @@
 
 @tableofcontents
 
+O observador comum de @ref flow_diagnostics complementa os reporters específicos
+abaixo e é utilizado pela aplicação completa. Ele cobre também ACK, filas,
+transporte, workers e coordenação, incluindo chamadas com reporter específico nulo.
+
 ## O que é a callback
 
 `shm_cleanup_error_fn` é um tipo de ponteiro para função em C. O chamador escreve
@@ -55,7 +59,7 @@ O cleanup não converte essas categorias novamente para `MPMC_ERR_SYS`.
 
 Operações bem-sucedidas não geram chamadas da callback. Um `reporter == NULL` ou
 `reporter->on_error == NULL` desabilita os diagnósticos individuais, mantendo o
-resultado de retorno. Nesse caso, erros secundários do rollback não são guardados.
+resultado de retorno. Sem observador comum instalado, erros secundários do rollback não são guardados.
 
 ## Duração dos dados e propriedade
 

@@ -7,7 +7,6 @@
  * descritor de despertar do supervisor com poll(), recupera-se de entradas
  * inválidas e encaminha EOF e sinais de término pelo shutdown ordenado.
  */
-
 #include "mpmc/app/repl.h"
 
 #include <errno.h>
@@ -20,6 +19,7 @@
 
 #include "job_outcome.h"
 #include "mpmc/app/command.h"
+#include "mpmc/diagnostic.h"
 
 /** @brief Comprimento máximo aceito para uma linha de comando. */
 #define REPL_MAX_LINE 4096u
@@ -28,6 +28,8 @@
 
 /** @brief Indica que SIGINT ou SIGTERM solicitou o encerramento do REPL. */
 static volatile sig_atomic_t termination_requested;
+
+static void restore_signal_handler(int signal_number, const struct sigaction *previous);
 
 /**
  * @brief Acorda o supervisor quando um processo filho altera seu estado.
@@ -149,6 +151,7 @@ static bool is_blank_line(const char *line) {
 static void dispatch_line(supervisor_t *supervisor, char *line, bool *shutdown) {
     if (is_blank_line(line)) return;
 
+    uint64_t before = mpmc_diagnostic_count();
     command_t command;
     bool dispatch_attempted = false;
     mpmc_result_t error = command_parse(line, &command);
@@ -176,7 +179,8 @@ static void dispatch_line(supervisor_t *supervisor, char *line, bool *shutdown) 
         } else {
             (void)mpmc_error_format(error, error_text, sizeof error_text);
         }
-        fprintf(stderr, "mpmc: %s\n", error_text);
+        if (!mpmc_diagnostic_enabled() || before == mpmc_diagnostic_count())
+            fprintf(stderr, "mpmc: %s\n", error_text);
         return;
     }
 
@@ -207,20 +211,25 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
     if (result.status != MPMC_OK) return result;
 
     termination_requested = 0;
+    mpmc_diagnostic_scope_t setup;
+    mpmc_diagnostic_begin(&setup, "repl_run", false, false);
     result = install_signal_handler(SIGCHLD, handle_child_signal, &previous_chld);
-    if (result.status != MPMC_OK) return result;
+    if (result.status != MPMC_OK) return mpmc_diagnostic_end(&setup, result);
     result = install_signal_handler(SIGINT, handle_termination_signal, &previous_int);
     if (result.status != MPMC_OK) {
-        (void)sigaction(SIGCHLD, &previous_chld, NULL);
-        return result;
+        mpmc_diagnostic_cause("sigaction()", result);
+        restore_signal_handler(SIGCHLD, &previous_chld);
+        return mpmc_diagnostic_end(&setup, result);
     }
     result = install_signal_handler(SIGTERM, handle_termination_signal, &previous_term);
     if (result.status != MPMC_OK) {
-        (void)sigaction(SIGINT, &previous_int, NULL);
-        (void)sigaction(SIGCHLD, &previous_chld, NULL);
-        return result;
+        mpmc_diagnostic_cause("sigaction()", result);
+        restore_signal_handler(SIGINT, &previous_int);
+        restore_signal_handler(SIGCHLD, &previous_chld);
+        return mpmc_diagnostic_end(&setup, result);
     }
 
+    (void)mpmc_diagnostic_end(&setup, (mpmc_result_t){.status = MPMC_OK});
     result = (mpmc_result_t){.status = MPMC_OK};
     while (!shutdown && !termination_requested) {
         if (need_prompt) {
@@ -259,13 +268,17 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
         /* O supervisor é servido a cada iteração, mesmo com stdin sempre pronto: nesse caso
          * poll() nunca estoura o tempo e um filho bloqueado em msgsnd() numa fila de eventos
          * cheia ficaria sem ser drenado. A chamada não bloqueia. */
+        uint64_t before_service = mpmc_diagnostic_count();
         mpmc_result_t service_error = service_supervisor(supervisor);
         if (service_error.status != MPMC_OK) {
             char error_text[256];
             (void)mpmc_error_format(service_error, error_text, sizeof error_text);
-            fprintf(
-                stderr, "mpmc: falha ao processar eventos dos processos filhos: %s\n", error_text
-            );
+            if (!mpmc_diagnostic_enabled() || before_service == mpmc_diagnostic_count())
+                fprintf(
+                    stderr,
+                    "mpmc: falha ao processar eventos dos processos filhos: %s\n",
+                    error_text
+                );
             result = service_error;
             break;
         }
@@ -340,13 +353,27 @@ mpmc_result_t repl_run(supervisor_t *supervisor) {
         }
     }
 
-    (void)sigaction(SIGTERM, &previous_term, NULL);
-    (void)sigaction(SIGINT, &previous_int, NULL);
-    (void)sigaction(SIGCHLD, &previous_chld, NULL);
+    mpmc_diagnostic_scope_t cleanup;
+    mpmc_diagnostic_begin(&cleanup, "repl_run", true, false);
+    restore_signal_handler(SIGTERM, &previous_term);
+    restore_signal_handler(SIGINT, &previous_int);
+    restore_signal_handler(SIGCHLD, &previous_chld);
 
     mpmc_result_t shutdown_error = supervisor_shutdown(supervisor, NULL);
     if (result.status == MPMC_OK && shutdown_error.status != MPMC_OK) {
         result = shutdown_error;
     }
+    mpmc_result_t finalization = mpmc_diagnostic_end(&cleanup, shutdown_error);
+    if (result.status == MPMC_OK) result = finalization;
     return result;
+}
+
+/** @brief Restaura uma ação de sinal, comunicando falhas sem omitir outras restaurações. */
+static void restore_signal_handler(int signal_number, const struct sigaction *previous) {
+    mpmc_diagnostic_scope_t scope;
+    mpmc_diagnostic_begin(&scope, "restauração de sinais do REPL", true, false);
+    mpmc_result_t result = {.status = MPMC_OK};
+    if (sigaction(signal_number, previous, nullptr) == -1)
+        result = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+    (void)mpmc_diagnostic_end(&scope, result);
 }

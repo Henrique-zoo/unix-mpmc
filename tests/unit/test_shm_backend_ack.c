@@ -806,9 +806,7 @@ static void test_preserving_path_recovers_unlock_failure(void) {
      * O segundo begin é rejeitado por duplicidade. A falha injetada ocorre
      * ao liberar o mutex; a tentativa seguinte deve liberá-lo de verdade.
      */
-    check_result(
-        shm_backend_ack_begin(owned_backend, operation_id, 1), MPMC_ERR_INTERRUPTED, EINTR
-    );
+    check_result(shm_backend_ack_begin(owned_backend, operation_id, 1), MPMC_ERR_STATE, 0);
 
     CHECK(!sem_failure.enabled);
     check_result(shm_backend_ack_end(owned_backend, operation_id), MPMC_OK, 0);

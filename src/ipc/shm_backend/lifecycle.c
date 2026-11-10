@@ -8,11 +8,11 @@
  * pelo chamador, sem manter uma lista de diagnósticos nem imprimir mensagens.
  * @see shm_backend.h para os contratos públicos das funções.
  */
-
 #include <errno.h>
 #include <stddef.h>
 #include <stdlib.h>
 
+#include "mpmc/diagnostic.h"
 #include "mpmc/ipc/sem.h"
 #include "mpmc/ipc/shm.h"
 #include "shm_backend_internal.h"
@@ -45,18 +45,30 @@ mpmc_result_t shm_backend_create(
     size_t producer_count,
     const shm_cleanup_reporter_t *reporter
 ) {
-    if (out == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
+    if (out == NULL)
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     *out = NULL;
 
-    if (producer_count == 0) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    if (producer_count == 0)
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
 
     shm_backend_t *backend = malloc(sizeof(*backend));
 
     if (backend == NULL) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = errno,
+            }
+        );
     }
 
     *backend = (shm_backend_t){
@@ -72,10 +84,13 @@ mpmc_result_t shm_backend_create(
         int saved_errno = errno;
         free(backend);
 
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = saved_errno,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = saved_errno,
+            }
+        );
     }
 
     mpmc_result_t result;
@@ -115,16 +130,18 @@ mpmc_result_t shm_backend_create(
 
     result = shm_backend_ack_resources_create(backend);
     if (result.status != MPMC_OK) {
+        mpmc_diagnostic_cause("criação do controle ACK", result);
         (void)shm_backend_cleanup(backend, producer_count, true, reporter);
-        return result;
+        return mpmc_diagnostic_end(&diagnostic_scope, result);
     }
 
     *out = backend;
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 
 cleanup:
+    mpmc_diagnostic_cause("criação dos recursos SHM", result);
     (void)shm_backend_cleanup(backend, i + 1, true, reporter);
-    return result;
+    return mpmc_diagnostic_end(&diagnostic_scope, result);
 }
 
 /**
@@ -136,9 +153,15 @@ mpmc_result_t shm_backend_worker_close(
     shm_backend_t *backend,
     const shm_cleanup_reporter_t *reporter
 ) {
-    if (backend == NULL) return (mpmc_result_t){.status = MPMC_OK};
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
 
-    return shm_backend_cleanup(backend, backend->producer_count, false, reporter);
+    if (backend == NULL)
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
+
+    return mpmc_diagnostic_end(
+        &diagnostic_scope, shm_backend_cleanup(backend, backend->producer_count, false, reporter)
+    );
 }
 
 /**
@@ -147,9 +170,15 @@ mpmc_result_t shm_backend_worker_close(
  * visitado. Trata backend nulo antes de consultar producer_count.
  */
 mpmc_result_t shm_backend_destroy(shm_backend_t *backend, const shm_cleanup_reporter_t *reporter) {
-    if (backend == NULL) return (mpmc_result_t){.status = MPMC_OK};
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
 
-    return shm_backend_cleanup(backend, backend->producer_count, true, reporter);
+    if (backend == NULL)
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
+
+    return mpmc_diagnostic_end(
+        &diagnostic_scope, shm_backend_cleanup(backend, backend->producer_count, true, reporter)
+    );
 }
 
 /**
@@ -227,6 +256,9 @@ static mpmc_result_t shm_backend_cleanup(
     bool remove_global,
     const shm_cleanup_reporter_t *reporter
 ) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
+
     mpmc_result_t result = {.status = MPMC_OK};
 
     /*
@@ -244,7 +276,9 @@ static mpmc_result_t shm_backend_cleanup(
             shm_segment_t *segment = &backend->segments[i];
 
             if (segment->ring != NULL) {
+                uint64_t before = mpmc_diagnostic_count();
                 mpmc_result_t current = sysv_shm_detach(segment->ring);
+                mpmc_diagnostic_observe("sysv_shm_detach", current, before);
 
                 record_cleanup_error(
                     &result, current, reporter, SHM_CLEANUP_DETACH, i + 1, segment->shmid
@@ -252,7 +286,9 @@ static mpmc_result_t shm_backend_cleanup(
             }
 
             if (remove_global && segment->semid >= 0) {
+                uint64_t before = mpmc_diagnostic_count();
                 mpmc_result_t current = sysv_sem_remove(segment->semid);
+                mpmc_diagnostic_observe("sysv_sem_remove", current, before);
 
                 record_cleanup_error(
                     &result, current, reporter, SHM_CLEANUP_SEM_REMOVE, i + 1, segment->semid
@@ -260,7 +296,9 @@ static mpmc_result_t shm_backend_cleanup(
             }
 
             if (remove_global && segment->shmid >= 0) {
+                uint64_t before = mpmc_diagnostic_count();
                 mpmc_result_t current = sysv_shm_remove(segment->shmid);
+                mpmc_diagnostic_observe("sysv_shm_remove", current, before);
 
                 record_cleanup_error(
                     &result, current, reporter, SHM_CLEANUP_REMOVE, i + 1, segment->shmid
@@ -272,5 +310,5 @@ static mpmc_result_t shm_backend_cleanup(
     free(backend->segments);
     free(backend);
 
-    return result;
+    return mpmc_diagnostic_end(&diagnostic_scope, result);
 }

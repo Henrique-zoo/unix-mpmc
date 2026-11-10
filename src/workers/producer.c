@@ -11,6 +11,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "mpmc/diagnostic.h"
 #include "producer_routing.h"
 
 mpmc_status_t producer_message_next(
@@ -47,22 +48,30 @@ mpmc_result_t producer_run_with_result(
     const producer_job_t *job,
     producer_result_t *out
 ) {
-    if (out == nullptr) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
+    if (out == nullptr)
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
 
     *out = (producer_result_t){.error = {.status = MPMC_ERR_INVALID_ARG}};
     if (transport == NULL || job == NULL || job->operation_id == 0u
         || job->message_count < MPMC_MIN_MESSAGES || job->message_count > MPMC_MAX_MESSAGES
         || (job->ack_mode != PRODUCER_ACK_WAIT && job->ack_mode != PRODUCER_ACK_NONE)) {
-        return out->error;
+        return mpmc_diagnostic_end(&diagnostic_scope, out->error);
     }
 
     size_t producer_count = ipc_producer_count(transport);
     if (producer_count == 0u) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
     if (job->producer_id > producer_count) {
         out->error = (mpmc_result_t){.status = MPMC_ERR_INVALID_INDEX};
-        return out->error;
+        return mpmc_diagnostic_end(&diagnostic_scope, out->error);
     }
 
     bool ack_started = false;
@@ -70,7 +79,7 @@ mpmc_result_t producer_run_with_result(
         mpmc_result_t result = ipc_ack_begin(transport, job->operation_id, job->message_count);
         if (result.status != MPMC_OK) {
             out->error = result;
-            return result;
+            return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
         ack_started = true;
     }
@@ -108,17 +117,23 @@ mpmc_result_t producer_run_with_result(
     }
 
     if (ack_started) {
+        mpmc_diagnostic_cause("execução do produtor", result);
         mpmc_result_t end_result = ipc_ack_end(transport, job->operation_id);
         if (result.status == MPMC_OK) {
             result = end_result;
         }
     }
     out->error = result;
-    return result;
+    return mpmc_diagnostic_end(&diagnostic_scope, result);
 }
 
 /** @details Mantém a interface simples para chamadores que não consultam progresso. */
 mpmc_result_t producer_run(ipc_context_t *transport, const producer_job_t *job) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     producer_result_t result;
-    return producer_run_with_result(transport, job, &result);
+    return mpmc_diagnostic_end(
+        &diagnostic_scope, producer_run_with_result(transport, job, &result)
+    );
 }

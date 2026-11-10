@@ -2,11 +2,12 @@
  * @file test_shm_backend_ack_cleanup.c
  * @brief Testes isolados de falhas e novas tentativas de cleanup dos recursos ACK.
  */
-
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "mpmc/diagnostic.h"
 #include "mpmc/error.h"
 #include "mpmc/ipc/sem.h"
 #include "mpmc/ipc/shm.h"
@@ -121,7 +122,20 @@ static void test_failed_global_removals_preserve_ids(void) {
     CHECK(backend.ack_control_shmid == -1);
 }
 
+/** @brief Copia as causas de todas as liberações sem alterar o primeiro resultado. */
+static void collect_cleanup(const mpmc_diagnostic_t *error, void *user_data) {
+    int *causes = user_data;
+    unsigned slot = (unsigned)causes[0]++;
+    CHECK(slot < 3);
+    if (slot < 3) causes[slot + 1] = error->result.system_errno;
+    CHECK(error->phase == MPMC_DIAGNOSTIC_CLEANUP);
+    errno = ERANGE;
+}
+
 static void test_cleanup_preserves_first_error_and_continues(void) {
+    int causes[4] = {};
+    mpmc_reporter_t reporter = {.on_error = collect_cleanup, .user_data = causes};
+    mpmc_diagnostic_set_reporter(&reporter);
     shm_backend_t backend;
     reset_backend(&backend);
 
@@ -139,6 +153,8 @@ static void test_cleanup_preserves_first_error_and_continues(void) {
     CHECK(backend.ack_control != NULL);
     CHECK(backend.ack_semid == 20);
     CHECK(backend.ack_control_shmid == 10);
+    CHECK(causes[0] == 3 && causes[1] == 5 && causes[2] == 13 && causes[3] == 1);
+    mpmc_diagnostic_set_reporter(nullptr);
 }
 
 int main(void) {

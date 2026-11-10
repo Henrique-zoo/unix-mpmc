@@ -47,6 +47,10 @@ UNIT_DIR := $(BUILD_DIR)/unit
 SHM_BACKEND_DIR := src/ipc/shm_backend
 WORKERS_DIR := src/workers
 APP_DIR := src/app
+DIAGNOSTIC_OBJECT := $(BUILD_DIR)/diagnostic.o
+
+$(patsubst tests/unit/%.c,$(UNIT_DIR)/%,$(wildcard tests/unit/test_*.c)): $(DIAGNOSTIC_OBJECT)
+
 SHM_RING_OBJECT := $(BUILD_DIR)/ipc/shm_backend/shm_ring.o
 SHM_OPERATIONS_OBJECT := $(BUILD_DIR)/ipc/shm_backend/operations.o
 
@@ -323,7 +327,7 @@ $(UNIT_DIR)/test_msg_stress: tests/unit/test_msg_stress.c src/ipc/msg_backend.c 
 		src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/unit/test_msg_stress.c src/ipc/msg.c src/error.c \
-		$(LDLIBS) -o $@
+		$(DIAGNOSTIC_OBJECT) $(LDLIBS) -o $@
 
 # Correlação de ACK com filas System V reais: o teste inclui msg_backend.c para ler os
 # identificadores privados das filas, por isso o objeto do backend não é ligado de novo.
@@ -331,7 +335,7 @@ $(UNIT_DIR)/test_msg_ack_concurrency: tests/unit/test_msg_ack_concurrency.c \
 		src/ipc/msg_backend.c src/ipc/msg.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/unit/test_msg_ack_concurrency.c src/ipc/msg.c src/error.c \
-		$(LDLIBS) -o $@
+		$(DIAGNOSTIC_OBJECT) $(LDLIBS) -o $@
 
 $(UNIT_DIR)/test_msg_ack_lifecycle: tests/unit/test_msg_ack_lifecycle.c \
 		src/ipc/msg_backend.c src/ipc/transport.c $(WORKERS_DIR)/producer.c \
@@ -342,7 +346,7 @@ $(UNIT_DIR)/test_msg_ack_lifecycle: tests/unit/test_msg_ack_lifecycle.c \
 	$(CC) $(CPPFLAGS) -I$(WORKERS_DIR) $(CFLAGS) tests/unit/test_msg_ack_lifecycle.c \
 		$(WORKERS_DIR)/producer.c $(WORKERS_DIR)/producer_routing.c $(WORKERS_DIR)/consumer.c \
 		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
-		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c $(LDLIBS) -o $@
+		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c $(DIAGNOSTIC_OBJECT) $(LDLIBS) -o $@
 
 $(UNIT_DIR)/test_transport_parity: tests/unit/test_transport_parity.c \
 		src/ipc/msg_backend.c src/ipc/transport.c $(WORKERS_DIR)/producer.c \
@@ -354,13 +358,17 @@ $(UNIT_DIR)/test_transport_parity: tests/unit/test_transport_parity.c \
 		tests/unit/test_transport_parity.c \
 		$(WORKERS_DIR)/producer.c $(WORKERS_DIR)/producer_routing.c $(WORKERS_DIR)/consumer.c \
 		$(SHM_BACKEND_DIR)/lifecycle.c $(SHM_BACKEND_DIR)/ack.c $(SHM_RING_OBJECT) $(SHM_OPERATIONS_OBJECT) \
-		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c $(LDLIBS) -o $@
+		src/ipc/msg.c src/ipc/shm.c src/ipc/sem.c src/error.c $(DIAGNOSTIC_OBJECT) $(LDLIBS) -o $@
 
 $(UNIT_DIR)/test_isolation: tests/unit/test_isolation.c src/app/command.c src/error.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 
-unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
+$(UNIT_DIR)/test_diagnostic: tests/unit/test_diagnostic.c src/app/diagnostics.c src/error.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+unit: $(UNIT_DIR)/test_diagnostic $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg \
 		$(UNIT_DIR)/test_error $(UNIT_DIR)/test_sem $(UNIT_DIR)/test_shm \
 		$(UNIT_DIR)/test_shm_backend $(UNIT_DIR)/test_shm_backend_ack \
 		$(UNIT_DIR)/test_shm_backend_ack_cleanup $(UNIT_DIR)/test_shm_backend_ack_create \
@@ -378,6 +386,7 @@ unit: $(UNIT_DIR)/test_command $(UNIT_DIR)/test_supervisor $(UNIT_DIR)/test_msg 
 		$(UNIT_DIR)/test_transport $(UNIT_DIR)/test_protocol_properties \
 		$(UNIT_DIR)/test_supervisor_report $(UNIT_DIR)/test_supervisor_shutdown \
 		$(UNIT_DIR)/test_job_outcome $(UNIT_DIR)/test_outcome_repl
+	@$(UNIT_DIR)/test_diagnostic
 	@$(UNIT_DIR)/test_command
 	@$(UNIT_DIR)/test_supervisor
 	@$(UNIT_DIR)/test_supervisor_report
@@ -420,8 +429,31 @@ $(INTEGRATION_DIR)/test_repl: tests/integration/test_repl.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LDLIBS) -o $@
 
+# Executável de prova: mesmos módulos da aplicação, syscalls observadas somente nos wrappers.
+PROBE_BINARY := $(INTEGRATION_DIR)/mpmc_probe
+PROBE_OBJECTS := $(filter-out $(BUILD_DIR)/ipc/sem.o $(BUILD_DIR)/ipc/shm.o $(BUILD_DIR)/ipc/msg.o,$(OBJECTS))
+
+$(INTEGRATION_DIR)/probe_sem.o: src/ipc/sem.c include/mpmc/diagnostic.h Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Dsemget=mpmc_probe_semget -Dsemop=mpmc_probe_semop -c $< -o $@
+
+$(INTEGRATION_DIR)/probe_shm.o: src/ipc/shm.c include/mpmc/diagnostic.h Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Dshmget=mpmc_probe_shmget -Dshmdt=mpmc_probe_shmdt -c $< -o $@
+
+$(INTEGRATION_DIR)/probe_msg.o: src/ipc/msg.c include/mpmc/diagnostic.h Makefile
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Dmsgget=mpmc_probe_msgget -Dmsgctl=mpmc_probe_msgctl -c $< -o $@
+
+$(PROBE_BINARY): $(PROBE_OBJECTS) $(INTEGRATION_DIR)/probe_sem.o $(INTEGRATION_DIR)/probe_shm.o $(INTEGRATION_DIR)/probe_msg.o tests/integration/probe_syscalls.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+$(INTEGRATION_DIR)/resource_inspect: tests/integration/resource_inspect.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LDLIBS) -o $@
+
 # Testes básicos: o loop interativo deve aceitar o comando shutdown.
-test: all unit $(INTEGRATION_DIR)/test_repl
+test: all unit $(INTEGRATION_DIR)/test_repl $(PROBE_BINARY) $(INTEGRATION_DIR)/resource_inspect
 	@printf 'shutdown\n' | ./mpmc 2 1 > /dev/null
 	@printf 'shutdown\n' | ./mpmc 2 2 > /dev/null
 	@sh tests/integration/test_args.sh ./mpmc
@@ -429,6 +461,7 @@ test: all unit $(INTEGRATION_DIR)/test_repl
 	@sh tests/integration/test_repl.sh ./mpmc
 	@$(INTEGRATION_DIR)/test_repl ./mpmc
 	@python3 tests/integration/test_application.py ./mpmc
+	@python3 tests/integration/test_diagnostics.py $(PROBE_BINARY) $(INTEGRATION_DIR)/resource_inspect
 	@echo 'Unit, startup and REPL tests passed.'
 
 docs:

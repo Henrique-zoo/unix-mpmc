@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <time.h>
 
+#include "mpmc/diagnostic.h"
 #include "mpmc/ipc/msg.h"
 
 typedef struct {
@@ -229,33 +230,51 @@ static mpmc_result_t msg_backend_flush_acks(msg_backend_t *backend, bool wait) {
 }
 
 static mpmc_result_t msg_backend_remove_created(msg_backend_t *backend) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
+
     for (size_t index = 0u; index < backend->producer_count; ++index) {
         if (backend->data_queues[index] != -1) {
-            (void)sysv_msg_remove(backend->data_queues[index]);
+            uint64_t before = mpmc_diagnostic_count();
+            mpmc_result_t removed = sysv_msg_remove(backend->data_queues[index]);
+            mpmc_diagnostic_observe("msgctl(IPC_RMID)", removed, before);
         }
     }
     if (backend->event_queue != -1) {
-        (void)sysv_msg_remove(backend->event_queue);
+        uint64_t before = mpmc_diagnostic_count();
+        mpmc_result_t removed = sysv_msg_remove(backend->event_queue);
+        mpmc_diagnostic_observe("msgctl(IPC_RMID)", removed, before);
     }
     if (backend->ack_queue != -1) {
-        (void)sysv_msg_remove(backend->ack_queue);
+        uint64_t before = mpmc_diagnostic_count();
+        mpmc_result_t removed = sysv_msg_remove(backend->ack_queue);
+        mpmc_diagnostic_observe("msgctl(IPC_RMID)", removed, before);
     }
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (out == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
     *out = NULL;
     if (producer_count == 0u || producer_count > SIZE_MAX / sizeof(int)
         || producer_count > SIZE_MAX / sizeof(uint64_t)) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
 
     msg_backend_t *backend = calloc(1u, sizeof(*backend));
     if (backend == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno}
+        );
     }
     *backend = (msg_backend_t){.event_queue = -1, .ack_queue = -1};
 
@@ -269,7 +288,10 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
         free(backend->consumed_counts);
         free(backend->pending_events);
         free(backend);
-        return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = allocation_errno};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = allocation_errno}
+        );
     }
     for (size_t index = 0u; index < producer_count; ++index) {
         backend->data_queues[index] = -1;
@@ -279,34 +301,37 @@ mpmc_result_t msg_backend_create(msg_backend_t **out, size_t producer_count) {
     for (size_t index = 0u; index < producer_count; ++index) {
         mpmc_result_t result = sysv_msg_create(&backend->data_queues[index]);
         if (result.status != MPMC_OK) {
+            mpmc_diagnostic_cause("criação das filas de dados", result);
             msg_backend_remove_created(backend);
             free(backend->pending_events);
             free(backend->consumed_counts);
             free(backend->data_queues);
             free(backend);
-            return result;
+            return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
     }
     mpmc_result_t result = sysv_msg_create(&backend->event_queue);
     if (result.status != MPMC_OK) {
+        mpmc_diagnostic_cause("criação das filas de controle", result);
         msg_backend_remove_created(backend);
         free(backend->pending_events);
         free(backend->consumed_counts);
         free(backend->data_queues);
         free(backend);
-        return result;
+        return mpmc_diagnostic_end(&diagnostic_scope, result);
     }
     result = sysv_msg_create(&backend->ack_queue);
     if (result.status != MPMC_OK) {
+        mpmc_diagnostic_cause("criação das filas de controle", result);
         msg_backend_remove_created(backend);
         free(backend->pending_events);
         free(backend->consumed_counts);
         free(backend->data_queues);
         free(backend);
-        return result;
+        return mpmc_diagnostic_end(&diagnostic_scope, result);
     }
     *out = backend;
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 mpmc_result_t msg_backend_send(
@@ -314,40 +339,48 @@ mpmc_result_t msg_backend_send(
     size_t producer_id,
     const message_t *message
 ) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (backend == NULL || message == NULL || producer_id == 0u
         || producer_id > backend->producer_count) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
     ack_registration_t *registration = message->operation_id == 0u
         ? NULL
         : msg_backend_find_registration(backend, message->operation_id);
     if (registration == NULL) {
-        return sysv_msg_send(
-            backend->data_queues[producer_id - 1u], 1, message, sizeof(*message), false
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            sysv_msg_send(
+                backend->data_queues[producer_id - 1u], 1, message, sizeof(*message), false
+            )
         );
     }
 
     if (registration->received >= registration->expected) {
-        return (mpmc_result_t){.status = MPMC_ERR_STATE};
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_STATE});
     }
     for (;;) {
         mpmc_result_t result = sysv_msg_send(
             backend->data_queues[producer_id - 1u], 2, message, sizeof(*message), true
         );
         if (result.status == MPMC_OK) {
-            return result;
+            return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
         if (result.status != MPMC_ERR_WOULD_BLOCK) {
-            return result;
+            return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
 
         result = msg_backend_ack_drain(backend, registration, true);
         if (result.status != MPMC_OK) {
-            return result;
+            return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
         result = msg_backend_ack_backoff();
         if (result.status != MPMC_OK) {
-            return result;
+            return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
     }
 }
@@ -358,9 +391,14 @@ mpmc_result_t msg_backend_receive(
     message_t *out,
     bool blocking
 ) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (backend == NULL || out == NULL || producer_id == 0u
         || producer_id > backend->producer_count) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
 
     /* ACKs devidos por retiradas anteriores sem espera: tenta entregá-los sem esperar,
@@ -368,7 +406,7 @@ mpmc_result_t msg_backend_receive(
     if (backend->pending_ack_count != 0u) {
         mpmc_result_t flushed = msg_backend_flush_acks(backend, false);
         if (flushed.status != MPMC_OK) {
-            return flushed;
+            return mpmc_diagnostic_end(&diagnostic_scope, flushed);
         }
     }
 
@@ -378,13 +416,14 @@ mpmc_result_t msg_backend_receive(
         backend->data_queues[producer_id - 1u], 0, out, sizeof(*out), !blocking, &received, &type
     );
     if (result.status != MPMC_OK) {
-        return result;
+        return mpmc_diagnostic_end(&diagnostic_scope, result);
     }
+    diagnostic_scope.fatal = true;
     if ((size_t)received != sizeof(*out)) {
-        return (mpmc_result_t){.status = MPMC_ERR_STATE};
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_STATE});
     }
     if (type != 1 && type != 2) {
-        return (mpmc_result_t){.status = MPMC_ERR_STATE};
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_STATE});
     }
 
     if (type == 2) {
@@ -400,7 +439,7 @@ mpmc_result_t msg_backend_receive(
             result = msg_backend_defer_ack(backend, out->operation_id);
         }
         if (result.status != MPMC_OK) {
-            return result;
+            return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
     }
 
@@ -415,10 +454,10 @@ mpmc_result_t msg_backend_receive(
     if (blocking) {
         result = msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), false);
         if (result.status != MPMC_OK) {
-            return result;
+            return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
         *pending = 0u;
-        return (mpmc_result_t){.status = MPMC_OK};
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
     }
 
     /*
@@ -433,9 +472,9 @@ mpmc_result_t msg_backend_receive(
     } else if (result.status == MPMC_ERR_WOULD_BLOCK) {
         ++*pending;
     } else {
-        return result;
+        return mpmc_diagnostic_end(&diagnostic_scope, result);
     }
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 mpmc_result_t msg_backend_ack_begin(
@@ -443,24 +482,31 @@ mpmc_result_t msg_backend_ack_begin(
     uint64_t operation_id,
     unsigned expected
 ) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (backend == NULL || operation_id == 0u || operation_id > (uint64_t)LONG_MAX || expected == 0u
         || expected > 1024u) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
     if (msg_backend_find_registration(backend, operation_id) != NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_STATE};
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_STATE});
     }
     if (backend->registration_count == backend->registration_capacity) {
         size_t capacity =
             backend->registration_capacity == 0u ? 8u : backend->registration_capacity * 2u;
         if (capacity < backend->registration_capacity
             || capacity > SIZE_MAX / sizeof(*backend->registrations)) {
-            return (mpmc_result_t){.status = MPMC_ERR_SYS};
+            return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_SYS});
         }
         ack_registration_t *registrations =
             realloc(backend->registrations, capacity * sizeof(*registrations));
         if (registrations == NULL) {
-            return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+            return mpmc_diagnostic_end(
+                &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno}
+            );
         }
         backend->registrations = registrations;
         backend->registration_capacity = capacity;
@@ -470,35 +516,45 @@ mpmc_result_t msg_backend_ack_begin(
         .expected = expected,
         .received = 0u,
     };
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 mpmc_result_t msg_backend_ack_wait(msg_backend_t *backend, uint64_t operation_id) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (backend == NULL || operation_id == 0u) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
     ack_registration_t *registration = msg_backend_find_registration(backend, operation_id);
     if (registration == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_STATE};
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_STATE});
     }
     while (registration->received < registration->expected) {
         bool received = false;
         mpmc_result_t result =
             msg_backend_ack_receive(backend, registration, false, true, &received);
         if (result.status != MPMC_OK) {
-            return result;
+            return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
     }
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 mpmc_result_t msg_backend_ack_end(msg_backend_t *backend, uint64_t operation_id) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
+
     if (backend == NULL || operation_id == 0u) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
     ack_registration_t *registration = msg_backend_find_registration(backend, operation_id);
     if (registration == NULL) {
-        return (mpmc_result_t){.status = MPMC_OK};
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
     }
     mpmc_result_t result = msg_backend_ack_drain(backend, registration, false);
     for (size_t index = 0u; index < backend->registration_count; ++index) {
@@ -507,12 +563,17 @@ mpmc_result_t msg_backend_ack_end(msg_backend_t *backend, uint64_t operation_id)
             break;
         }
     }
-    return result;
+    return mpmc_diagnostic_end(&diagnostic_scope, result);
 }
 
 mpmc_result_t msg_backend_poll_events(msg_backend_t *backend) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (backend == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
     for (;;) {
         consumption_event_t event;
@@ -526,12 +587,14 @@ mpmc_result_t msg_backend_poll_events(msg_backend_t *backend) {
             break;
         }
         if (result.status != MPMC_OK) {
-            return result;
+            return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
         if ((size_t)received != sizeof(event) || event.producer_id == 0u
             || event.producer_id > backend->producer_count
             || UINT64_MAX - backend->consumed_counts[event.producer_id - 1u] < event.count) {
-            return (mpmc_result_t){.status = MPMC_ERR_STATE};
+            return mpmc_diagnostic_end(
+                &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_STATE}
+            );
         }
         backend->consumed_counts[event.producer_id - 1u] += event.count;
     }
@@ -545,12 +608,17 @@ mpmc_result_t msg_backend_poll_events(msg_backend_t *backend) {
             first = purged;
         }
     }
-    return first;
+    return mpmc_diagnostic_end(&diagnostic_scope, first);
 }
 
 mpmc_result_t msg_backend_ack_abandon(msg_backend_t *backend, uint64_t operation_id) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (backend == NULL || operation_id == 0u || operation_id > (uint64_t)LONG_MAX) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
     bool known = false;
     for (size_t index = 0u; index < backend->abandoned_count; ++index) {
@@ -562,18 +630,25 @@ mpmc_result_t msg_backend_ack_abandon(msg_backend_t *backend, uint64_t operation
                 backend->abandoned_capacity == 0u ? 8u : backend->abandoned_capacity * 2u;
             if (capacity < backend->abandoned_capacity
                 || capacity > SIZE_MAX / sizeof(*backend->abandoned)) {
-                return (mpmc_result_t){.status = MPMC_ERR_SYS};
+                return mpmc_diagnostic_end(
+                    &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_SYS}
+                );
             }
             uint64_t *grown = realloc(backend->abandoned, capacity * sizeof(*grown));
             if (grown == NULL) {
-                return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+                return mpmc_diagnostic_end(
+                    &diagnostic_scope,
+                    (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno}
+                );
             }
             backend->abandoned = grown;
             backend->abandoned_capacity = capacity;
         }
         backend->abandoned[backend->abandoned_count++] = operation_id;
     }
-    return msg_backend_purge_operation(backend, operation_id);
+    return mpmc_diagnostic_end(
+        &diagnostic_scope, msg_backend_purge_operation(backend, operation_id)
+    );
 }
 
 mpmc_result_t msg_backend_consumed_count(
@@ -581,27 +656,43 @@ mpmc_result_t msg_backend_consumed_count(
     size_t producer_id,
     uint64_t *out_count
 ) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (backend == NULL || out_count == NULL || producer_id == 0u
         || producer_id > backend->producer_count) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
     *out_count = backend->consumed_counts[producer_id - 1u];
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 void msg_backend_worker_close(msg_backend_t *backend) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
+
     if (backend == NULL) {
-        return;
+        {
+            (void)mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
+            return;
+        }
     }
     /* Entrega os consumos acumulados por receives sem espera. Este é o único ponto em que
-     * o filho pode aguardar Q_evt, e já fora de qualquer consumo; erros (por exemplo
-     * EIDRM depois do destroy do supervisor) não têm a quem ser reportados. */
-    (void)msg_backend_flush_acks(backend, true);
+     * o filho pode aguardar Q_evt, e já fora de qualquer consumo; erros são encaminhados ao
+     * observador instalado no processo. */
+    uint64_t before = mpmc_diagnostic_count();
+    mpmc_result_t flushed = msg_backend_flush_acks(backend, true);
+    mpmc_diagnostic_observe("entrega dos ACKs pendentes", flushed, before);
     for (size_t index = 0u; index < backend->producer_count; ++index) {
         if (backend->pending_events[index] != 0u) {
             consumption_event_t event = {
                 .producer_id = index + 1u, .count = backend->pending_events[index]};
-            (void)msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), false);
+            before = mpmc_diagnostic_count();
+            mpmc_result_t sent =
+                msg_backend_send_retry(backend->event_queue, 1, &event, sizeof(event), false);
+            mpmc_diagnostic_observe("entrega dos contadores pendentes", sent, before);
         }
     }
     free(backend->data_queues);
@@ -611,11 +702,18 @@ void msg_backend_worker_close(msg_backend_t *backend) {
     free(backend->abandoned);
     free(backend->pending_acks);
     free(backend);
+    (void)mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 void msg_backend_destroy(msg_backend_t *backend) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
+
     if (backend == NULL) {
-        return;
+        {
+            (void)mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
+            return;
+        }
     }
     msg_backend_remove_created(backend);
     free(backend->data_queues);
@@ -625,4 +723,5 @@ void msg_backend_destroy(msg_backend_t *backend) {
     free(backend->abandoned);
     free(backend->pending_acks);
     free(backend);
+    (void)mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }

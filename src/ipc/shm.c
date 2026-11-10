@@ -5,12 +5,13 @@
  *
  * @see shm.h para os contratos públicos das funções.
  */
-
 #include "mpmc/ipc/shm.h"
 
 #include <errno.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+
+#include "mpmc/diagnostic.h"
 
 static mpmc_result_t shm_error_result(int error);
 
@@ -19,14 +20,20 @@ static mpmc_result_t shm_error_result(int error);
  * também é aceito como resultado válido.
  */
 mpmc_result_t sysv_shm_create(size_t size, int *out_shmid) {
-    if (out_shmid == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+
+    if (out_shmid == NULL)
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     int shmid = shmget(IPC_PRIVATE, size, 0600);
 
-    if (shmid == -1) return shm_error_result(errno);
+    if (shmid == -1) return mpmc_diagnostic_end(&diagnostic_scope, shm_error_result(errno));
 
     *out_shmid = shmid;
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /**
@@ -34,14 +41,22 @@ mpmc_result_t sysv_shm_create(size_t size, int *out_shmid) {
  * NULL não é o sentinela de erro dessa chamada.
  */
 mpmc_result_t sysv_shm_attach(int shmid, void **out_addr) {
-    if (out_addr == NULL) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+    diagnostic_scope.resource_id = shmid;
+
+    if (out_addr == NULL)
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     void *address = shmat(shmid, NULL, 0);
 
-    if (address == (void *)-1) return shm_error_result(errno);
+    if (address == (void *)-1)
+        return mpmc_diagnostic_end(&diagnostic_scope, shm_error_result(errno));
 
     *out_addr = address;
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /**
@@ -49,9 +64,13 @@ mpmc_result_t sysv_shm_attach(int shmid, void **out_addr) {
  * A chamada é executada uma única vez e seu errno é capturado antes da tradução.
  */
 mpmc_result_t sysv_shm_detach(const void *address) {
-    if (shmdt(address) == -1) return shm_error_result(errno);
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    if (shmdt(address) == -1)
+        return mpmc_diagnostic_end(&diagnostic_scope, shm_error_result(errno));
+
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /**
@@ -59,9 +78,14 @@ mpmc_result_t sysv_shm_detach(const void *address) {
  * buffer struct shmid_ds. O identificador é validado pela própria chamada.
  */
 mpmc_result_t sysv_shm_remove(int shmid) {
-    if (shmctl(shmid, IPC_RMID, NULL) == -1) return shm_error_result(errno);
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+    diagnostic_scope.resource_id = shmid;
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    if (shmctl(shmid, IPC_RMID, NULL) == -1)
+        return mpmc_diagnostic_end(&diagnostic_scope, shm_error_result(errno));
+
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /**
@@ -69,9 +93,14 @@ mpmc_result_t sysv_shm_remove(int shmid) {
  * alocação de memória temporária. O errno é copiado antes de qualquer outra chamada.
  */
 mpmc_result_t sysv_shm_stat(int shmid, struct shmid_ds *out_info) {
-    if (shmctl(shmid, IPC_STAT, out_info) == -1) return shm_error_result(errno);
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, true);
+    diagnostic_scope.resource_id = shmid;
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    if (shmctl(shmid, IPC_STAT, out_info) == -1)
+        return mpmc_diagnostic_end(&diagnostic_scope, shm_error_result(errno));
+
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /**

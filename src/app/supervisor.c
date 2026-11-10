@@ -8,7 +8,6 @@
  * controle em resposta a SIGCHLD. A integração dos backends IPC permanece
  * como ponto de extensão em supervisor_poll_events().
  */
-
 #include "mpmc/app/supervisor.h"
 
 #include <errno.h>
@@ -25,8 +24,10 @@
 #include <unistd.h>
 
 #include "job_outcome.h"
+#include "mpmc/diagnostic.h"
 #include "mpmc/workers/consumer.h"
 #include "mpmc/workers/producer.h"
+#include "worker_event.h"
 
 /** @brief Capacidade da fila de eventos de resultado pendentes de apresentação. */
 #define SUPERVISOR_MAX_PENDING_OUTCOMES 32u
@@ -39,7 +40,9 @@ typedef struct {
     struct timespec started; /**< Instante CLOCK_MONOTONIC capturado antes de fork(). */
     int result_fd;           /**< Leitura não bloqueante do resultado deste filho. */
     size_t result_bytes;     /**< Bytes recebidos do registro atômico. */
+    worker_event_t event;    /**< Frame atualmente recebido. */
     job_outcome_t outcome;   /**< Resultado transmitido pelo filho. */
+    bool reporting_failure;  /**< Está comunicando falhas e fechando seu contexto. */
     bool outcome_received;   /**< Resultado validado e apresentado. */
 } child_record_t;
 
@@ -58,6 +61,7 @@ struct supervisor {
     size_t report_capacity;     /**< Capacidade alocada do vetor de relatórios. */
 
     uint64_t next_operation_id; /**< Próximo identificador; zero indica esgotamento. */
+    bool compromised;           /**< Falha fatal observada em um worker. */
     bool shutting_down;         /**< Impede novos despachos após shutdown. */
 
     int event_pipe[2];   /**< Self-pipe: leitura em [0], escrita em [1]. */
@@ -94,6 +98,7 @@ static void record_shutdown_error(
 );
 
 static mpmc_result_t open_result_pipe(int descriptors[2]);
+static void close_descriptor(int fd);
 static void run_worker(
     supervisor_t *supervisor,
     const command_t *command,
@@ -157,7 +162,7 @@ static mpmc_result_t move_above_stdio(int *fd) {
         };
     }
 
-    (void)close(*fd);
+    close_descriptor(*fd);
     *fd = moved;
 
     return (mpmc_result_t){.status = MPMC_OK};
@@ -176,7 +181,7 @@ static void close_event_pipe(supervisor_t *supervisor) {
 
     for (size_t end = 0; end < 2; ++end) {
         if (supervisor->event_pipe[end] != -1) {
-            (void)close(supervisor->event_pipe[end]);
+            close_descriptor(supervisor->event_pipe[end]);
             supervisor->event_pipe[end] = -1;
         }
     }
@@ -320,21 +325,32 @@ static mpmc_result_t ensure_report_capacity(supervisor_t *supervisor) {
  * o rollback dos objetos globais pertence à inicialização do backend.
  */
 mpmc_result_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_mode_t mode) {
-    if (out == nullptr) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
+    if (out == nullptr)
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
 
     *out = nullptr;
 
     if (producer_count == 0 || (mode != IPC_SHARED_MEMORY && mode != IPC_MESSAGE_QUEUE)) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
 
     supervisor_t *supervisor = calloc(1, sizeof(*supervisor));
 
     if (supervisor == nullptr) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = errno,
+            }
+        );
     }
 
     if (clock_gettime(CLOCK_MONOTONIC, &supervisor->created_at) == -1) {
@@ -342,10 +358,13 @@ mpmc_result_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_m
 
         free(supervisor);
 
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = clock_errno,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = clock_errno,
+            }
+        );
     }
 
     supervisor->producer_count = producer_count;
@@ -355,7 +374,7 @@ mpmc_result_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_m
     if (error.status != MPMC_OK) {
         free(supervisor);
 
-        return error;
+        return mpmc_diagnostic_end(&diagnostic_scope, error);
     }
 
     error = ipc_init(&supervisor->ipc, producer_count, mode);
@@ -364,26 +383,33 @@ mpmc_result_t supervisor_create(supervisor_t **out, size_t producer_count, ipc_m
         close_event_pipe(supervisor);
         free(supervisor);
 
-        return error;
+        return mpmc_diagnostic_end(&diagnostic_scope, error);
     }
     *out = supervisor;
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /** @details Copia o evento para a fila interna; a impressão ocorre em supervisor_reap(). */
 mpmc_result_t supervisor_queue_outcome(supervisor_t *supervisor, const job_outcome_t *outcome) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (supervisor == NULL || outcome == NULL) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
     if (job_outcome_format(outcome, NULL, 0u) < 0) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
     if (supervisor->pending_outcome_count >= SUPERVISOR_MAX_PENDING_OUTCOMES) {
-        return (mpmc_result_t){.status = MPMC_ERR_NO_SPACE};
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_NO_SPACE});
     }
     supervisor->pending_outcomes[supervisor->pending_outcome_count++] = *outcome;
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /**
@@ -459,7 +485,13 @@ mpmc_result_t supervisor_poll_events(
     supervisor_t *supervisor,
     const supervisor_shutdown_reporter_t *reporter
 ) {
-    if (supervisor == nullptr) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
+    if (supervisor == nullptr)
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
 
     mpmc_result_t result = {.status = MPMC_OK};
     unsigned char sink[64];
@@ -486,7 +518,7 @@ mpmc_result_t supervisor_poll_events(
 
             record_shutdown_error(&result, &error, reporter);
 
-            return result;
+            return mpmc_diagnostic_end(&diagnostic_scope, result);
         }
 
         const supervisor_shutdown_error_t error = {
@@ -496,7 +528,7 @@ mpmc_result_t supervisor_poll_events(
 
         record_shutdown_error(&result, &error, reporter);
 
-        return result;
+        return mpmc_diagnostic_end(&diagnostic_scope, result);
     }
 }
 
@@ -535,40 +567,53 @@ mpmc_result_t supervisor_dispatch(
     const command_t *command,
     const supervisor_shutdown_reporter_t *reporter
 ) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (supervisor == nullptr || command == nullptr) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
 
-    if (command->kind == COMMAND_SHUTDOWN) return supervisor_shutdown(supervisor, reporter);
+    if (command->kind == COMMAND_SHUTDOWN)
+        return mpmc_diagnostic_end(&diagnostic_scope, supervisor_shutdown(supervisor, reporter));
 
-    if (supervisor->shutting_down) return (mpmc_result_t){.status = MPMC_ERR_SHUTDOWN};
+    if (supervisor->shutting_down)
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_SHUTDOWN});
 
     if (command->kind != COMMAND_PRODUCE && command->kind != COMMAND_CONSUME) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
 
-    if (supervisor->next_operation_id == 0u) return (mpmc_result_t){.status = MPMC_ERR_STATE};
+    if (supervisor->next_operation_id == 0u)
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_STATE});
 
     mpmc_result_t error = ensure_child_capacity(supervisor);
 
-    if (error.status != MPMC_OK) return error;
+    if (error.status != MPMC_OK) return mpmc_diagnostic_end(&diagnostic_scope, error);
 
     error = ensure_report_capacity(supervisor);
 
-    if (error.status != MPMC_OK) return error;
+    if (error.status != MPMC_OK) return mpmc_diagnostic_end(&diagnostic_scope, error);
 
     struct timespec started;
 
     if (clock_gettime(CLOCK_MONOTONIC, &started) == -1) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = errno,
+            }
+        );
     }
 
     int result_pipe[2];
     error = open_result_pipe(result_pipe);
-    if (error.status != MPMC_OK) return error;
+    if (error.status != MPMC_OK) return mpmc_diagnostic_end(&diagnostic_scope, error);
 
     sigset_t block_set;
     sigset_t old_set;
@@ -580,9 +625,14 @@ mpmc_result_t supervisor_dispatch(
 
     if (sigprocmask(SIG_BLOCK, &block_set, &old_set) == -1) {
         int saved_errno = errno;
-        (void)close(result_pipe[0]);
-        (void)close(result_pipe[1]);
-        return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = saved_errno};
+        mpmc_diagnostic_cause(
+            "sigprocmask()", (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = saved_errno}
+        );
+        close_descriptor(result_pipe[0]);
+        close_descriptor(result_pipe[1]);
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = saved_errno}
+        );
     }
 
     const uint64_t operation_id = supervisor->next_operation_id;
@@ -590,23 +640,29 @@ mpmc_result_t supervisor_dispatch(
 
     if (child == -1) {
         int fork_error = errno;
-        (void)close(result_pipe[0]);
-        (void)close(result_pipe[1]);
+        mpmc_diagnostic_cause(
+            "fork()", (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = fork_error}
+        );
+        close_descriptor(result_pipe[0]);
+        close_descriptor(result_pipe[1]);
 
         (void)sigprocmask(SIG_SETMASK, &old_set, nullptr);
 
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = fork_error,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = fork_error,
+            }
+        );
     }
 
     if (child == 0) {
-        (void)close(result_pipe[0]);
-        (void)close(supervisor->event_pipe[0]);
+        close_descriptor(result_pipe[0]);
+        close_descriptor(supervisor->event_pipe[0]);
         for (size_t index = 0; index < supervisor->child_count; ++index) {
             if (supervisor->children[index].result_fd >= 0) {
-                (void)close(supervisor->children[index].result_fd);
+                close_descriptor(supervisor->children[index].result_fd);
             }
         }
 
@@ -626,7 +682,7 @@ mpmc_result_t supervisor_dispatch(
         run_worker(supervisor, command, operation_id, result_pipe[1]);
     }
 
-    (void)close(result_pipe[1]);
+    close_descriptor(result_pipe[1]);
 
     supervisor->children[supervisor->child_count++] = (child_record_t){
         .pid = child,
@@ -639,13 +695,16 @@ mpmc_result_t supervisor_dispatch(
     supervisor->next_operation_id = operation_id == UINT64_MAX ? 0u : operation_id + 1u;
 
     if (sigprocmask(SIG_SETMASK, &old_set, nullptr) == -1) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = errno,
+            }
+        );
     }
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /**
@@ -655,7 +714,7 @@ mpmc_result_t supervisor_dispatch(
  */
 static void remove_child(supervisor_t *supervisor, size_t index) {
     if (supervisor->children[index].result_fd >= 0) {
-        (void)close(supervisor->children[index].result_fd);
+        close_descriptor(supervisor->children[index].result_fd);
     }
     supervisor->children[index] = supervisor->children[supervisor->child_count - 1];
     --supervisor->child_count;
@@ -780,7 +839,13 @@ mpmc_result_t supervisor_reap(
     bool blocking,
     const supervisor_shutdown_reporter_t *reporter
 ) {
-    if (supervisor == nullptr) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
+    if (supervisor == nullptr)
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
 
     mpmc_result_t result = supervisor_poll_events(supervisor, reporter);
 
@@ -910,7 +975,7 @@ mpmc_result_t supervisor_reap(
         remove_child(supervisor, index);
     }
 
-    return result;
+    return mpmc_diagnostic_end(&diagnostic_scope, result);
 }
 
 /** @details Usa um único prazo monotônico para todos os filhos. Erros na
@@ -922,7 +987,13 @@ mpmc_result_t supervisor_shutdown(
     supervisor_t *supervisor,
     const supervisor_shutdown_reporter_t *reporter
 ) {
-    if (supervisor == nullptr) return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
+    if (supervisor == nullptr)
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
 
     supervisor->shutting_down = true;
 
@@ -930,7 +1001,7 @@ mpmc_result_t supervisor_shutdown(
 
     if (supervisor->child_count == 0) {
         ipc_quiesce(supervisor->ipc);
-        return result;
+        return mpmc_diagnostic_end(&diagnostic_scope, result);
     }
 
     struct timespec deadline = {};
@@ -967,7 +1038,7 @@ mpmc_result_t supervisor_shutdown(
 
     if (supervisor->child_count == 0) ipc_quiesce(supervisor->ipc);
 
-    return result;
+    return mpmc_diagnostic_end(&diagnostic_scope, result);
 }
 
 /**
@@ -1017,14 +1088,19 @@ static void format_end(const child_report_t *report, char *buffer, size_t size) 
  * contém ">>", para não ser confundida com o prompt.
  */
 mpmc_result_t supervisor_print_report(const supervisor_t *supervisor, FILE *out) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (supervisor == nullptr || out == nullptr) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
 
     mpmc_result_t event_error = ipc_poll_events((ipc_context_t *)supervisor->ipc);
 
     if (event_error.status != MPMC_OK) {
-        return event_error;
+        return mpmc_diagnostic_end(&diagnostic_scope, event_error);
     }
 
     struct timespec now;
@@ -1035,25 +1111,34 @@ mpmc_result_t supervisor_print_report(const supervisor_t *supervisor, FILE *out)
     }
 
     if (fputs("\nRelatório de execução\n----------------------\n", out) == EOF) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = errno,
+            }
+        );
     }
 
     if (supervisor->report_count == 0) {
         if (fputs("Nenhum processo filho foi executado.\n", out) == EOF) {
-            return (mpmc_result_t){
-                .status = MPMC_ERR_SYS,
-                .system_errno = errno,
-            };
+            return mpmc_diagnostic_end(
+                &diagnostic_scope,
+                (mpmc_result_t){
+                    .status = MPMC_ERR_SYS,
+                    .system_errno = errno,
+                }
+            );
         }
     } else {
         if (fputs("PID      OP     TIPO     TÉRMINO                DURAÇÃO\n", out) == EOF) {
-            return (mpmc_result_t){
-                .status = MPMC_ERR_SYS,
-                .system_errno = errno,
-            };
+            return mpmc_diagnostic_end(
+                &diagnostic_scope,
+                (mpmc_result_t){
+                    .status = MPMC_ERR_SYS,
+                    .system_errno = errno,
+                }
+            );
         }
 
         for (size_t index = 0; index < supervisor->report_count; ++index) {
@@ -1074,27 +1159,36 @@ mpmc_result_t supervisor_print_report(const supervisor_t *supervisor, FILE *out)
                     duration_text
                 )
                 < 0) {
-                return (mpmc_result_t){
-                    .status = MPMC_ERR_SYS,
-                    .system_errno = errno,
-                };
+                return mpmc_diagnostic_end(
+                    &diagnostic_scope,
+                    (mpmc_result_t){
+                        .status = MPMC_ERR_SYS,
+                        .system_errno = errno,
+                    }
+                );
             }
         }
     }
 
     if (fprintf(out, "Filhos recolhidos: %zu\n", supervisor->report_count) < 0) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = errno,
+            }
+        );
     }
 
     if (supervisor->child_count > 0) {
         if (fprintf(out, "Filhos ainda ativos: %zu\n", supervisor->child_count) < 0) {
-            return (mpmc_result_t){
-                .status = MPMC_ERR_SYS,
-                .system_errno = errno,
-            };
+            return mpmc_diagnostic_end(
+                &diagnostic_scope,
+                (mpmc_result_t){
+                    .status = MPMC_ERR_SYS,
+                    .system_errno = errno,
+                }
+            );
         }
     }
 
@@ -1103,12 +1197,14 @@ mpmc_result_t supervisor_print_report(const supervisor_t *supervisor, FILE *out)
         mpmc_result_t count_error = ipc_consumed_count(supervisor->ipc, producer_id, &consumed);
 
         if (count_error.status != MPMC_OK) {
-            return count_error;
+            return mpmc_diagnostic_end(&diagnostic_scope, count_error);
         }
 
         if (fprintf(out, "Consumidos pela estrutura %zu: %" PRIu64 "\n", producer_id, consumed)
             < 0) {
-            return (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+            return mpmc_diagnostic_end(
+                &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno}
+            );
         }
     }
 
@@ -1117,22 +1213,29 @@ mpmc_result_t supervisor_print_report(const supervisor_t *supervisor, FILE *out)
     format_duration(total_text, sizeof total_text, total_ns);
 
     if (fprintf(out, "Tempo total de operação do mpmc: %s\n", total_text) < 0) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = errno,
+            }
+        );
     }
 
     if (fflush(out) != 0) {
-        return (mpmc_result_t){
-            .status = MPMC_ERR_SYS,
-            .system_errno = errno,
-        };
+        return mpmc_diagnostic_end(
+            &diagnostic_scope,
+            (mpmc_result_t){
+                .status = MPMC_ERR_SYS,
+                .system_errno = errno,
+            }
+        );
     }
 
-    if (ferror(out)) return (mpmc_result_t){.status = MPMC_ERR_SYS};
+    if (ferror(out))
+        return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_SYS});
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /** @details Consulta simples do número de relatórios acumulados. */
@@ -1146,17 +1249,28 @@ mpmc_result_t supervisor_report_get(
     size_t index,
     child_report_t *out
 ) {
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, false, false);
+
     if (supervisor == nullptr || out == nullptr || index >= supervisor->report_count) {
-        return (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG};
+        return mpmc_diagnostic_end(
+            &diagnostic_scope, (mpmc_result_t){.status = MPMC_ERR_INVALID_ARG}
+        );
     }
     *out = supervisor->reports[index];
 
-    return (mpmc_result_t){.status = MPMC_OK};
+    return mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /** @details Libera os vetores de filhos e relatórios e fecha o self-pipe. */
 void supervisor_destroy(supervisor_t *supervisor) {
-    if (supervisor == nullptr) return;
+    mpmc_diagnostic_scope_t diagnostic_scope;
+    mpmc_diagnostic_begin(&diagnostic_scope, __func__, true, false);
+
+    if (supervisor == nullptr) {
+        (void)mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
+        return;
+    }
 
     close_event_pipe(supervisor);
     ipc_destroy(supervisor->ipc);
@@ -1164,6 +1278,7 @@ void supervisor_destroy(supervisor_t *supervisor) {
     free(supervisor->children);
     free(supervisor->reports);
     free(supervisor);
+    (void)mpmc_diagnostic_end(&diagnostic_scope, (mpmc_result_t){.status = MPMC_OK});
 }
 
 /**
@@ -1186,6 +1301,11 @@ static mpmc_result_t signal_children(
     mpmc_result_t result = {.status = MPMC_OK};
 
     for (size_t i = 0; i < supervisor->child_count; i++) {
+        // O emissor de diagnósticos tem o prazo comum para concluir seu cleanup.
+        // SIGKILL continua abrangendo todos os filhos ao vencer o prazo.
+        if (signal_number == SIGTERM && supervisor->children[i].reporting_failure
+            && !supervisor->children[i].outcome_received)
+            continue;
         pid_t child_pid = supervisor->children[i].pid;
 
         if (kill(child_pid, signal_number) == -1) {
@@ -1415,6 +1535,27 @@ static void record_shutdown_error(
         *first = current;
     }
 
+    static const char *const names[] = {
+        "kill()",
+        "waitpid()",
+        "registro do relatório",
+        "clock_gettime()",
+        "poll()",
+        "read(self-pipe)",
+        "eventos IPC",
+        "sigaction(SIGCHLD)",
+        "sigprocmask(SIG_UNBLOCK)",
+        "restauração de SIGCHLD",
+        "restauração da máscara de sinais",
+        "read(resultado do worker)",
+        "abandono de ACK",
+    };
+    if (error->operation != SUPERVISOR_POLL_IPC_EVENTS
+        && error->operation != SUPERVISOR_ABANDON_ACK)
+        mpmc_diagnostic_report(names[error->operation], current);
+    else
+        mpmc_diagnostic_cause(names[error->operation], current);
+
     if (reporter != nullptr && reporter->on_error != nullptr) {
         reporter->on_error(error, reporter->user_data);
     }
@@ -1430,19 +1571,38 @@ static mpmc_result_t open_result_pipe(int descriptors[2]) {
         result = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
     }
     if (result.status != MPMC_OK) {
-        (void)close(descriptors[0]);
-        (void)close(descriptors[1]);
+        mpmc_diagnostic_cause("fcntl()", result);
+        close_descriptor(descriptors[0]);
+        close_descriptor(descriptors[1]);
     }
     return result;
 }
 
-/** @brief Executa um único trabalho e transmite valores, nunca ponteiros do heap. */
+/** @brief Estado do emissor do filho; o pai drena o pipe enquanto o filho vive. */
+typedef struct {
+    int result_fd; /**< Canal de frames. */
+    int wake_fd;   /**< Self-pipe do pai. */
+    bool failed;   /**< Não foi possível entregar um frame. */
+} worker_sink_t;
+
+static bool send_worker_event(worker_sink_t *sink, const worker_event_t *event);
+static void send_worker_diagnostic(const mpmc_diagnostic_t *error, void *user_data);
+
+/** @brief Executa o trabalho e entrega todos os diagnósticos antes do resultado. */
 static void run_worker(
     supervisor_t *supervisor,
     const command_t *command,
     uint64_t operation_id,
     int result_fd
 ) {
+    mpmc_diagnostic_after_fork(operation_id, command->producer_id);
+    worker_sink_t sink = {.result_fd = result_fd, .wake_fd = supervisor->event_pipe[1]};
+    mpmc_reporter_t reporter = {.on_error = send_worker_diagnostic, .user_data = &sink};
+    mpmc_diagnostic_set_reporter(&reporter);
+    mpmc_diagnostic_scope_t scope;
+    mpmc_diagnostic_begin(
+        &scope, command->kind == COMMAND_PRODUCE ? "producer_run" : "consumer_run", false, false
+    );
     job_outcome_t outcome = {
         .command = command->kind,
         .operation_id = operation_id,
@@ -1470,23 +1630,37 @@ static void run_worker(
         outcome.error = consumer_run(supervisor->ipc, &job, &progress);
         outcome.effective = progress.consumed_count;
     }
+
+    mpmc_diagnostic_cause("execução do worker", outcome.error);
+    ipc_worker_close(supervisor->ipc);
+    if (scope.first.status != MPMC_OK) outcome.error = scope.first;
+    outcome.error = mpmc_diagnostic_end(&scope, outcome.error);
     outcome.kind = outcome.error.status == MPMC_OK     ? JOB_OUTCOME_COMPLETED
         : outcome.error.status == MPMC_ERR_WOULD_BLOCK ? JOB_OUTCOME_PARTIAL
         : outcome.error.status == MPMC_ERR_INTERRUPTED || outcome.error.status == MPMC_ERR_SHUTDOWN
         ? JOB_OUTCOME_CANCELLED
         : JOB_OUTCOME_KERNEL_ERROR;
+    worker_event_t event = {.kind = WORKER_EVENT_OUTCOME, .outcome = outcome};
+    (void)send_worker_event(&sink, &event);
+    _exit(outcome.error.status == MPMC_OK && !sink.failed ? EXIT_SUCCESS : EXIT_FAILURE);
+}
 
-    ipc_worker_close(supervisor->ipc);
-    static_assert(sizeof(outcome) <= 512, "resultado deve caber em PIPE_BUF mínimo");
+/** @brief Um frame cabe atomicamente no mínimo POSIX; EINTR anterior à escrita é repetido. */
+static bool send_worker_event(worker_sink_t *sink, const worker_event_t *event) {
     ssize_t sent;
     do {
-        sent = write(result_fd, &outcome, sizeof outcome);
+        sent = write(sink->result_fd, event, sizeof *event);
     } while (sent == -1 && errno == EINTR);
+    if (sent != sizeof *event) sink->failed = true;
     unsigned char wake = 1;
-    (void)write(supervisor->event_pipe[1], &wake, 1);
-    (void)close(result_fd);
-    (void)close(supervisor->event_pipe[1]);
-    _exit(outcome.error.status == MPMC_OK && sent == sizeof outcome ? EXIT_SUCCESS : EXIT_FAILURE);
+    (void)write(sink->wake_fd, &wake, 1);
+    return !sink->failed;
+}
+
+/** @brief Serializa cada erro imediatamente; não há uma fila local que possa descartar erros. */
+static void send_worker_diagnostic(const mpmc_diagnostic_t *error, void *user_data) {
+    worker_event_t event = {.kind = WORKER_EVENT_DIAGNOSTIC, .diagnostic = *error};
+    (void)send_worker_event(user_data, &event);
 }
 
 /** @brief Drena canais próprios e apresenta resultados sem aguardar o fim dos filhos. */
@@ -1498,16 +1672,42 @@ static mpmc_result_t drain_worker_results(
     for (size_t index = 0; index < supervisor->child_count; ++index) {
         child_record_t *child = &supervisor->children[index];
         if (child->result_fd < 0 || child->outcome_received) continue;
-        while (child->result_bytes < sizeof child->outcome) {
-            unsigned char *destination = (unsigned char *)&child->outcome;
+        while (!child->outcome_received) {
+            unsigned char *destination = (unsigned char *)&child->event;
             ssize_t count = read(
                 child->result_fd,
                 destination + child->result_bytes,
-                sizeof child->outcome - child->result_bytes
+                sizeof child->event - child->result_bytes
             );
             if (count > 0) {
                 child->result_bytes += (size_t)count;
-                continue;
+                if (child->result_bytes != sizeof child->event) continue;
+                child->result_bytes = 0;
+                if (child->event.kind == WORKER_EVENT_DIAGNOSTIC) {
+                    mpmc_diagnostic_t *error = &child->event.diagnostic;
+                    if (error->process_pid != child->pid
+                        || error->operation_id != child->operation_id) {
+                        result = (mpmc_result_t){.status = MPMC_ERR_STATE};
+                        break;
+                    }
+                    error->function[sizeof error->function - 1] = '\0';
+                    error->operation[sizeof error->operation - 1] = '\0';
+                    child->reporting_failure = true;
+                    mpmc_diagnostic_deliver(error);
+                    ++supervisor->notice_count;
+                    if (error->fatal || error->result.status == MPMC_ERR_STATE
+                        || (error->result.system_errno != 0
+                            && error->result.status != MPMC_ERR_INTERRUPTED))
+                        supervisor->compromised = true;
+                    continue;
+                }
+                if (child->event.kind != WORKER_EVENT_OUTCOME) {
+                    result = (mpmc_result_t){.status = MPMC_ERR_STATE};
+                    break;
+                }
+                child->outcome = child->event.outcome;
+                child->outcome_received = true;
+                break;
             }
             if (count < 0 && errno == EINTR) continue;
             if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
@@ -1519,12 +1719,11 @@ static mpmc_result_t drain_worker_results(
                 };
                 record_shutdown_error(&result, &error, reporter);
             }
-            (void)close(child->result_fd);
+            close_descriptor(child->result_fd);
             child->result_fd = -1;
             break;
         }
-        if (child->result_bytes == sizeof child->outcome) {
-            child->outcome_received = true;
+        if (child->outcome_received) {
             if (child->outcome.operation_id != child->operation_id
                 || child->outcome.command != child->kind) {
                 result = (mpmc_result_t){.status = MPMC_ERR_STATE};
@@ -1537,5 +1736,18 @@ static mpmc_result_t drain_worker_results(
             }
         }
     }
+    if (supervisor->compromised && !supervisor->shutting_down && result.status == MPMC_OK)
+        result = (mpmc_result_t){.status = MPMC_ERR_SHUTDOWN};
     return result;
+}
+
+/** @brief Fecha uma vez, reportando erro sem repetir close() sobre um FD potencialmente
+ * reutilizado. */
+static void close_descriptor(int fd) {
+    mpmc_diagnostic_scope_t scope;
+    mpmc_diagnostic_begin(&scope, "close", true, false);
+    scope.resource_id = fd;
+    mpmc_result_t result = {.status = MPMC_OK};
+    if (close(fd) == -1) result = (mpmc_result_t){.status = MPMC_ERR_SYS, .system_errno = errno};
+    (void)mpmc_diagnostic_end(&scope, result);
 }
