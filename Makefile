@@ -64,7 +64,7 @@ $(UNIT_DIR)/supervisor_report_for_test.o: src/app/supervisor.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) \
 		-Dfork=mpmc_test_fork -Dwaitpid=mpmc_test_waitpid \
         -Dproducer_run_with_result=mpmc_test_producer_run -Dconsumer_run=mpmc_test_consumer_run \
-        -Dipc_worker_close=mpmc_test_worker_close \
+        -Dipc_worker_close=mpmc_test_worker_close -Dipc_worker_cancel=mpmc_test_worker_cancel \
 		-Dclock_gettime=mpmc_test_clock_gettime \
 		-Dipc_init=mpmc_test_ipc_init -Dipc_destroy=mpmc_test_ipc_destroy \
         -Dipc_quiesce=mpmc_test_quiesce \
@@ -85,7 +85,7 @@ $(UNIT_DIR)/supervisor_shutdown_for_test.o: src/app/supervisor.c \
 	$(CC) $(CPPFLAGS) $(CFLAGS) \
 		-Dfork=mpmc_shutdown_test_fork -Dkill=mpmc_shutdown_test_kill \
         -Dproducer_run_with_result=mpmc_test_producer_run -Dconsumer_run=mpmc_test_consumer_run \
-        -Dipc_worker_close=mpmc_test_worker_close \
+        -Dipc_worker_close=mpmc_test_worker_close -Dipc_worker_cancel=mpmc_test_worker_cancel \
 		-Dclock_gettime=mpmc_shutdown_test_clock_gettime -Dpoll=mpmc_shutdown_test_poll \
 		'-Dsigaction(...)=mpmc_shutdown_test_sigaction(__VA_ARGS__)' \
 		-Dsigprocmask=mpmc_shutdown_test_sigprocmask -Dwaitpid=mpmc_shutdown_test_waitpid \
@@ -461,6 +461,7 @@ test: all unit $(INTEGRATION_DIR)/test_repl $(PROBE_BINARY) $(INTEGRATION_DIR)/r
 	@sh tests/integration/test_repl.sh $(BINARY)
 	@$(INTEGRATION_DIR)/test_repl $(BINARY)
 	@python3 tests/integration/test_application.py $(BINARY)
+	@python3 tests/integration/test_cooperative_shutdown.py $(PROBE_BINARY)
 	@python3 tests/integration/test_shutdown_resources.py $(PROBE_BINARY) $(INTEGRATION_DIR)/resource_inspect
 	@python3 tests/integration/test_diagnostics.py $(PROBE_BINARY) $(INTEGRATION_DIR)/resource_inspect
 	@echo 'Unit, startup and REPL tests passed.'

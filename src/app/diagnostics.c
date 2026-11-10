@@ -21,14 +21,18 @@ void app_diagnostic_print(const mpmc_diagnostic_t *error, void *user_data) {
         !state->started || state->group != error->group || state->process_pid != error->process_pid;
     if (new_group) {
         fprintf(out, "%smpmc: falha em %s", red, error->function);
-        if (error->operation_id != 0)
+        if (error->operation_id != 0) {
             fprintf(
                 out,
-                " (operação %" PRIu64 ", processo %ld, estrutura %zu)",
+                " (operação %" PRIu64 ", processo %ld, ",
                 error->operation_id,
-                (long)error->process_pid,
-                error->producer_id
+                (long)error->process_pid
             );
+            if (error->producer_id == 0)
+                fputs("todas as estruturas)", out);
+            else
+                fprintf(out, "estrutura %zu)", error->producer_id);
+        }
         fprintf(out, ".%s\n", reset);
     }
     if (new_group || state->phase != error->phase) {

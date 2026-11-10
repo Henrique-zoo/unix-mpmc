@@ -3,6 +3,8 @@
 import os
 import pty
 import signal
+import selectors
+import time
 import subprocess
 import sys
 import tempfile
@@ -35,8 +37,19 @@ def run_case(binary, helper, mode, flags, commands="shutdown\n", terminal=False)
                 # Mantém stdin aberto: a saída deve ser provocada pela falha fatal, não por EOF.
                 process.stdin.write(b"produz 1 1 2\n")
                 process.stdin.flush()
-                process.wait(timeout=8)
-                output = process.stdout.read()
+                selector = selectors.DefaultSelector()
+                selector.register(process.stdout, selectors.EVENT_READ)
+                deadline = time.monotonic() + 8
+                output = b""
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    assert remaining > 0, output.decode(errors="replace")
+                    for key, _ in selector.select(remaining):
+                        chunk = os.read(key.fd, 65536)
+                        if chunk: output += chunk
+                        else: selector.unregister(key.fileobj)
+                selector.close()
+                process.wait(timeout=3)
             else:
                 output = process.communicate(commands.encode(), timeout=8)[0]
             if master is not None:
@@ -100,6 +113,9 @@ def main():
     # Três associações no filho e três no pai, todas observadas.
     assert text.count("shmdt()") == 6, text
     assert "falha em supervisor_destroy" in text, text
+    text = run_case(binary, helper, 1,
+        {"MPMC_PROBE_FAIL_RELEASE": "1", "MPMC_PROBE_FAIL_DETACH": "1", "MPMC_PROBE_DIAGNOSTIC_FLOOD": "1"}, commands=None)
+    assert text.count("detalhe de cleanup injetado") == 1200, text
     print("Diagnósticos reais: rollback, múltiplas falhas, pipe do worker, cores e isolamento aprovados.")
 
 
