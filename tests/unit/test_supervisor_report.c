@@ -12,8 +12,8 @@
  * Verifica:
  * - associação entre PID, operation_id, tipo e estado de término;
  * - saída normal, código de falha e interrupção por sinal;
- * - duração positiva entre segundos, duração zero por regressão do relógio e
- *   duração zero quando clock_gettime() falha;
+ * - duração positiva entre segundos e indisponibilidade explícita por regressão
+ *   do relógio ou falha de clock_gettime();
  * - tempo total do processo principal, inclusive quando o relógio falha;
  * - contagens controladas para todas as estruturas lógicas 1..p;
  * - apresentação de cada linha sem pressupor a ordem de coleta dos filhos.
@@ -33,9 +33,11 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "mpmc/app/command.h"
 #include "mpmc/app/supervisor.h"
+#include "mpmc/diagnostic.h"
 #include "mpmc/error.h"
 #include "mpmc/ipc/transport.h"
 
@@ -79,6 +81,10 @@ static struct {
     bool bad_ipc_context;
 } g_fixture;
 
+static mpmc_diagnostic_t measured_errors[4];
+static size_t measured_count;
+static void test_clock_and_write_errors(void);
+static void capture_measurement_error(const mpmc_diagnostic_t *error, void *user_data);
 static unsigned g_checks;
 static unsigned g_failures;
 
@@ -352,6 +358,8 @@ static void check_report_line(
 
 static void test_controlled_report_presentation(void) {
     reset_fixture();
+    mpmc_reporter_t reporter = {.on_error = capture_measurement_error};
+    mpmc_diagnostic_set_reporter(&reporter);
 
     supervisor_t *supervisor = nullptr;
     mpmc_result_t result = supervisor_create(&supervisor, FIXTURE_PRODUCERS, IPC_SHARED_MEMORY);
@@ -389,8 +397,8 @@ static void test_controlled_report_presentation(void) {
      * A compactação interna do vetor não deve afetar a identidade dos relatórios.
      */
     CHECK(
-        supervisor_reap(supervisor, false, nullptr).status == MPMC_OK,
-        "primeira coleta não bloqueante"
+        supervisor_reap(supervisor, false, nullptr).status == MPMC_ERR_SYS,
+        "primeira coleta preserva a falha de relógio sem perder os relatórios"
     );
     CHECK(supervisor_report_count(supervisor) == 2, "dois relatórios na primeira coleta");
 
@@ -430,8 +438,9 @@ static void test_controlled_report_presentation(void) {
             "PID 4102 terminou por SIGTERM"
         );
         CHECK(
-            report.duration_ns == 0,
-            "falha de CLOCK_MONOTONIC na duração individual resulta em zero"
+            report.duration_error.status == MPMC_ERR_SYS
+                && report.duration_error.system_errno == EIO,
+            "falha de CLOCK_MONOTONIC preserva o erro da medição"
         );
     }
 
@@ -446,8 +455,8 @@ static void test_controlled_report_presentation(void) {
             "PID 4103 terminou com código de falha"
         );
         CHECK(
-            report.duration_ns == 0,
-            "regressão do relógio não produz duração negativa nem underflow"
+            report.duration_error.status == MPMC_ERR_STATE,
+            "regressão do relógio é marcada como indisponibilidade, sem underflow"
         );
     }
 
@@ -471,16 +480,19 @@ static void test_controlled_report_presentation(void) {
     /* Relatório após a primeira falha do relógio total. */
     char output[4096];
     result = capture_report(supervisor, output, sizeof output);
-    CHECK(result.status == MPMC_OK, "falha do relógio total não impede a apresentação");
     CHECK(
-        strstr(output, "Tempo total de operação do mpmc: 0.000 s") != nullptr,
-        "falha do relógio total apresenta duração zero"
+        result.status == MPMC_ERR_SYS && result.system_errno == EIO,
+        "falha do relógio total é retornada após apresentar os demais dados"
+    );
+    CHECK(
+        strstr(output, "Tempo total de operação do mpmc: indisponível") != nullptr,
+        "falha do relógio total não inventa uma duração"
     );
     CHECK(strstr(output, "Filhos recolhidos: 3\n") != nullptr, "total de filhos recolhidos");
 
     check_report_line(output, 4101, 1, "produz", "código 0 (sucesso)", "0.200 s");
-    check_report_line(output, 4102, 2, "consome", "sinal 15", "0.000 s");
-    check_report_line(output, 4103, 3, "produz", "código 7 (falha)", "0.000 s");
+    check_report_line(output, 4102, 2, "consome", "sinal 15", "indisponível");
+    check_report_line(output, 4103, 3, "produz", "código 7 (falha)", "indisponível");
 
     CHECK(
         strstr(output, "Consumidos pela estrutura 1: 17\n") != nullptr
@@ -524,11 +536,24 @@ static void test_controlled_report_presentation(void) {
         );
     }
 
+    CHECK(measured_count == 3, "cada falha de medição é diagnosticada uma única vez");
+    CHECK(
+        measured_errors[0].result.system_errno == EIO && measured_errors[0].resource_id == 4102,
+        "erro individual preserva errno e PID"
+    );
+    CHECK(
+        measured_errors[1].result.status == MPMC_ERR_STATE
+            && measured_errors[1].resource_id == 4103,
+        "regressão individual preserva contexto"
+    );
+    CHECK(measured_errors[2].result.system_errno == EIO, "erro total preserva errno");
+    mpmc_diagnostic_set_reporter(nullptr);
     g_fixture.active = false;
 }
 
 int main(void) {
     test_controlled_report_presentation();
+    test_clock_and_write_errors();
 
     printf("%u verificações, %u falhas\n", g_checks, g_failures);
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -565,4 +590,57 @@ void mpmc_test_quiesce(ipc_context_t *context) {
 
 /** @brief Cancelamento não é executado nos filhos controlados desta fixture. */
 void mpmc_test_worker_cancel(void) {
+}
+
+/** @brief Copia cada erro de medição antes de o registro temporário deixar de existir. */
+static void capture_measurement_error(const mpmc_diagnostic_t *error, void *user_data) {
+    (void)user_data;
+    CHECK(measured_count < 4, "não duplicar diagnóstico propagado");
+    if (measured_count < 4) measured_errors[measured_count++] = *error;
+}
+
+/** @brief EIO no relógio e EPIPE na saída são preservados sem substituir a primeira causa. */
+static void test_clock_and_write_errors(void) {
+    reset_fixture();
+    measured_count = 0;
+    mpmc_reporter_t reporter = {.on_error = capture_measurement_error};
+    mpmc_diagnostic_set_reporter(&reporter);
+    supervisor_t *supervisor = nullptr;
+    CHECK(
+        supervisor_create(&supervisor, FIXTURE_PRODUCERS, IPC_SHARED_MEMORY).status == MPMC_OK,
+        "supervisor para falhas simultâneas"
+    );
+    if (supervisor == nullptr) return;
+    int output[2];
+    if (pipe(output) == -1) {
+        CHECK(false, "pipe da saída que falhará");
+        supervisor_destroy(supervisor);
+        mpmc_diagnostic_set_reporter(nullptr);
+        g_fixture.active = false;
+        return;
+    }
+    CHECK(close(output[0]) == 0, "sem leitor, a escrita devolve EPIPE");
+    FILE *file = fdopen(output[1], "w");
+    if (file == nullptr) {
+        CHECK(false, "stream do pipe");
+        (void)close(output[1]);
+        supervisor_destroy(supervisor);
+        mpmc_diagnostic_set_reporter(nullptr);
+        g_fixture.active = false;
+        return;
+    }
+    struct sigaction ignored = {.sa_handler = SIG_IGN}, previous;
+    sigemptyset(&ignored.sa_mask);
+    CHECK(sigaction(SIGPIPE, &ignored, &previous) == 0, "converter SIGPIPE em EPIPE observável");
+    g_fixture.fail_clock[g_fixture.clock_index] = true;
+    mpmc_result_t result = supervisor_print_report(supervisor, file);
+    CHECK(result.status == MPMC_ERR_SYS && result.system_errno == EIO, "primeira causa preservada");
+    CHECK(measured_count == 2, "um diagnóstico para cada falha");
+    CHECK(measured_errors[0].result.system_errno == EIO, "erro do relógio");
+    CHECK(measured_errors[1].result.system_errno == EPIPE, "erro posterior de escrita");
+    (void)fclose(file);
+    CHECK(sigaction(SIGPIPE, &previous, nullptr) == 0, "restaurar SIGPIPE");
+    supervisor_destroy(supervisor);
+    mpmc_diagnostic_set_reporter(nullptr);
+    g_fixture.active = false;
 }
