@@ -443,7 +443,7 @@ $(INTEGRATION_DIR)/probe_shm.o: src/ipc/shm.c include/mpmc/diagnostic.h Makefile
 
 $(INTEGRATION_DIR)/probe_msg.o: src/ipc/msg.c include/mpmc/diagnostic.h Makefile
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Dmsgget=mpmc_probe_msgget -Dmsgctl=mpmc_probe_msgctl -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Dmsgget=mpmc_probe_msgget -Dmsgctl=mpmc_probe_msgctl -Dmsgrcv=mpmc_probe_msgrcv -Dmsgsnd=mpmc_probe_msgsnd -c $< -o $@
 
 $(PROBE_BINARY): $(PROBE_OBJECTS) $(INTEGRATION_DIR)/probe_sem.o $(INTEGRATION_DIR)/probe_shm.o $(INTEGRATION_DIR)/probe_msg.o tests/integration/probe_syscalls.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
@@ -461,6 +461,7 @@ test: all unit $(INTEGRATION_DIR)/test_repl $(PROBE_BINARY) $(INTEGRATION_DIR)/r
 	@sh tests/integration/test_repl.sh ./mpmc
 	@$(INTEGRATION_DIR)/test_repl ./mpmc
 	@python3 tests/integration/test_application.py ./mpmc
+	@python3 tests/integration/test_shutdown_resources.py $(PROBE_BINARY) $(INTEGRATION_DIR)/resource_inspect
 	@python3 tests/integration/test_diagnostics.py $(PROBE_BINARY) $(INTEGRATION_DIR)/resource_inspect
 	@echo 'Unit, startup and REPL tests passed.'
 

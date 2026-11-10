@@ -359,3 +359,38 @@ em três estruturas, produção sem espera seguida de consumo parcial, 1024 mens
 com contrapressão e seis produtores concorrentes na mesma estrutura. Repete todos
 os cenários em SHM e MSG, confere resultados, contagens e número de filhos, e encerra
 somente o grupo de processos criado por cada cenário se alguma asserção falhar.
+
+## Matriz final do executável e auditoria de shutdown
+
+`test_application.py` executa o programa distribuído nos modos 1 e 2. Verifica
+consumidor antes do produtor, produção sem espera antes de haver consumidor,
+ACK somente após a última mensagem, striped divisível e não divisível por p,
+consumo parcial/zero, índices inválidos sem novos filhos, n=1024 e vários
+produtores/consumidores na mesma estrutura. As verificações usam propriedades,
+contagens e identidade das operações; a prova de FIFO/metadados está nas suítes
+nativas dos backends e de paridade, pois o CLI não imprime cada mensagem.
+
+`test_shutdown_resources.py` usa `mpmc_probe`, ligado aos mesmos módulos da
+aplicação com syscalls observadas somente nos wrappers de teste. Um pipe adicional
+informa quando o worker vai aguardar um recurso indisponível: dados, espaço ou
+ACK. Só então o teste envia shutdown. São três repetições por espera e paradigma,
+mais EOF, SIGINT e SIGTERM: 24 cenários. Não usa sleeps para sincronização.
+
+Cada criação bem-sucedida registra tipo, ID e PID em um manifest privado.
+`resource_inspect` consulta esses IDs via IPC_STAT, verifica a ausência depois do
+encerramento e permite cleanup de reserva restrito a eles. O teste também confere
+que o PID do filho já não existe e conserva três recursos externos (fila,
+segmento e conjunto) durante toda a matriz, verificando que continuam existentes.
+Nunca executa remoção global com ipcrm. Prazos de subprocessos e grupos próprios
+limitam falhas sem atingir outras execuções.
+
+`test_diagnostics.py` cobre falhas parciais de inicialização, várias falhas de
+rollback e liberação, propagação pelo pipe do worker e terminal/NO_COLOR. Os
+adaptadores não são ligados ao executável distribuído. Python 3 é necessário
+somente para essas suítes de integração; o programa continua sendo C23.
+
+O estresse de dados MSG da #58 já está em `test_msg_stress`: mensagens com identidade
+única, concorrência, saturação, metadados, ausência de perda/duplicação, repetição
+de criação/destruição e alarmes. A cobertura de ACK/shutdown é complementar, nas
+suítes de ACK e na matriz acima. Os testes C mantêm `alarm()` com tratadores e
+máscaras adequados ao macOS; não foi realizada execução nativa em macOS nesta revisão.

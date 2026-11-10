@@ -18,6 +18,7 @@
 /** @brief Número de tentativas de criação neste processo. */
 static unsigned creates;
 static bool fail_create(void);
+static void record_wait(const char *kind, int id);
 static void record_resource(const char *kind, int id);
 
 /** @brief Intercepta semget(), conservando sua assinatura e seu resultado real. */
@@ -49,6 +50,13 @@ int mpmc_probe_semop(int id, struct sembuf *operations, size_t count) {
     if (getenv("MPMC_PROBE_FAIL_RELEASE") != nullptr && count == 2 && operations[0].sem_op > 0) {
         errno = EIO;
         return -1;
+    }
+    for (size_t index = 0; index < count; ++index) {
+        if (operations[index].sem_op < 0 && !(operations[index].sem_flg & IPC_NOWAIT)
+            && semctl(id, operations[index].sem_num, GETVAL) < -operations[index].sem_op) {
+            record_wait("sem", id);
+            break;
+        }
     }
     return semop(id, operations, count);
 }
@@ -96,4 +104,34 @@ static void record_resource(const char *kind, int id) {
         }
     }
     errno = saved_errno;
+}
+
+/** @brief Publica readiness ao teste antes de uma espera comprovadamente sem recurso disponível. */
+static void record_wait(const char *kind, int id) {
+    int saved_errno = errno;
+    const char *descriptor = getenv("MPMC_PROBE_WAIT_FD");
+    if (descriptor != nullptr) {
+        int fd = (int)strtol(descriptor, nullptr, 10);
+        char text[128];
+        int size = snprintf(text, sizeof text, "%s %ld %d\n", kind, (long)getpid(), id);
+        if (size > 0 && (size_t)size < sizeof text) (void)write(fd, text, (size_t)size);
+    }
+    errno = saved_errno;
+}
+
+/** @brief Observa uma recepção bloqueante sem itens, sem alterar a chamada real. */
+ssize_t mpmc_probe_msgrcv(int id, void *message, size_t size, long type, int flags) {
+    struct msqid_ds info;
+    if (!(flags & IPC_NOWAIT) && msgctl(id, IPC_STAT, &info) == 0 && info.msg_qnum == 0)
+        record_wait("receive", id);
+    return msgrcv(id, message, size, type, flags);
+}
+
+/** @brief Observa saturação de uma fila de mensagens de tamanho uniforme. */
+int mpmc_probe_msgsnd(int id, const void *message, size_t size, int flags) {
+    struct msqid_ds info;
+    if (!(flags & IPC_NOWAIT) && size != 0 && msgctl(id, IPC_STAT, &info) == 0
+        && info.msg_qnum + 1 > info.msg_qbytes / size)
+        record_wait("send", id);
+    return msgsnd(id, message, size, flags);
 }
